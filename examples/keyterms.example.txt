@@ -1,0 +1,5 @@
+# Copy this file to keyterms.txt beside package.json. One name per line: the places, people, gods and homebrew
+# words of your campaign, so the transcriber spells them right. Angel's own name is always added. Keep it short:
+# a few dozen names is plenty. Anything after # is ignored.
+Brightwater
+Mirefen

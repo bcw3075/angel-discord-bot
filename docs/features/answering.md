@@ -1,0 +1,34 @@
+---
+feature: answering
+files: [src/answer.mjs, src/claude.mjs, src/aon.mjs]
+functions: []
+dependsOn: []
+since: 0.1.0
+---
+Answering: Claude with the conversation, the house rules and Archives of Nethys lookups, finishing with what to say and the pages used.
+
+## Decisions
+- **Rules come from Archives of Nethys**, through the public search index its own site uses, not Claude's web search: exact, fast, free, and the owner's standing rule is AoN for every rules lookup. Remaster entries win; an old name is mentioned once. (Angel's choice, 2026-11-12.)
+- **House rules now** (the owner, 2026-11-12, d-4; the other choices were rules only, or house rules and the party's sheets): `house-rules.md`, player-safe, wins over AoN. The party's sheets and campaign facts are phase 2.
+- **Spoken in full, typed with links** (d-1): the `answer` tool gives `say` (written for the ear) and `sources`; the typed copy adds who asked and the links.
+- Angel's voice in the prompt: warm, quick, a little sassy, tells someone kindly when they have a rule wrong, never overrules the GM, says when something is the GM's call, never invents a rule. Everything she says is heard by players, so only rules, house rules and the table's own words are used.
+
+## How it works
+- `answerQuestion`: up to six rounds of tool use (`aon_search`, `aon_get`), then `tool_choice` forces `answer`. A plain-text reply is taken as the answer. A failed lookup is told to Claude as the tool result. Only `https://2e.aonprd.com/` links are kept as sources; with none given, the pages read with `aon_get` are listed. The system prompt is cached (`cache_control` on the system block, which also covers the tools).
+- `search` (in `aon.mjs`): `match_phrase` and fuzzy `match` on `name`, `match` on `text`, reprints hidden with `exclude_from_search`, a category filter; then entries with `remaster_id` are swapped for their Remaster version (one `ids` query), with `oldName` only when the category is the same. `get` takes an id (`ids` query) or a page link (`term` on `url`). Results are cached in memory and in `data/aon-cache.json` for 7 days; a named User-Agent is sent.
+- `create` (in `claude.mjs`): plain fetch to the Messages API; retries 429, 529, 5xx and network failures (twice, honouring `retry-after`); `cost(model, usage)` from the price table (fresh input, 5-minute cache write, cache read, output).
+- `typedAnswer` keeps the message under 2,000 characters and wraps links in `<…>` so Discord shows no previews.
+
+## Checks
+- (an-1) {live} `npm run ask` with ten real rules questions the owner picks: the right rule, Remaster names, working AoN links, "the GM's call" for judgment calls; the time and cost of each noted.
+- (an-2) {live} in a session, describing a situation and then asking "Angel, what's the ruling on this?" gets an answer about that situation.
+- (an-3) {live} a rule written in `house-rules.md` wins over AoN in an answer about it.
+- (an-4) {unit} the tool loop, forced answer, sources, a failed lookup, the prompt, the typed copy and the Claude client (`test/answer.test.mjs`, `test/aon.test.mjs`).
+- (an-5) {live} `npm run test:aon` passes against the real Archives of Nethys (runs from the cloud workspace too).
+
+## Traps
+- The AoN index answers `_mapping` with a permissions error for anonymous users; field types were found by probing: `url` and `category` are keywords (`term` works), the `id` field is not (use an `ids` query on `_id`).
+- A legacy entry's `remaster_id` can point to a different kind of entry (an old class feature now inside its class page): hence `oldName` only for the same category.
+
+## Open items
+- Phase 2 (design doc): the party's sheets through the bridge, player-safe campaign facts, answers only the GM sees.

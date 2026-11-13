@@ -1,0 +1,48 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mentionsAngel, isStopRequest, parseGate, gate, gateUser } from "../src/wake.mjs";
+import { Claude } from "../src/claude.mjs";
+import { scriptedFetch } from "./helpers.mjs";
+
+test("her name and the transcriber's usual misspellings count; other words don't", () => {
+  for (const t of ["Angel, what does off-guard do?", "hey angela can I", "Angie?", "at an angle", "Angel's right", "so... ANGEL"]) assert.ok(mentionsAngel(t), t);
+  for (const t of ["angelic heritage", "the angels sing", "evangelist", "danger", "change"]) assert.ok(!mentionsAngel(t), t);
+});
+
+test('"Angel, stop" and friends are caught without the model', () => {
+  for (const t of ["Angel, stop", "angel stop", "Angel please stop", "Angel, that's enough", "Angela, be quiet", "Angel never mind"]) assert.ok(isStopRequest(t), t);
+  for (const t of ["stop", "Angel, what stops a grab?", "the angel statue", "Angel, can I stop moving halfway?"]) assert.ok(!isStopRequest(t), t);
+});
+
+test("the model's answer is read, even inside a code fence", () => {
+  assert.deepEqual(parseGate('{"to_angel": true, "complete": true, "stop": false, "question": "What is off-guard?"}'),
+    { toAngel: true, complete: true, stop: false, question: "What is off-guard?", fallback: false });
+  assert.equal(parseGate('```json\n{"to_angel": false, "complete": true, "stop": false, "question": ""}\n```').toAngel, false);
+  assert.equal(parseGate('{"to_angel": true, "complete": false, "stop": false, "question": ""}').complete, false);
+});
+
+test("an unreadable answer falls back to the plain rule: her name first, then a request", () => {
+  assert.equal(parseGate("garbled", "Angel, can I grab him?").toAngel, true);
+  assert.equal(parseGate("garbled", "Hey Angel how does flanking work").toAngel, true);
+  assert.equal(parseGate("garbled", "the angel statue glows").toAngel, false);
+  assert.equal(parseGate("", "Angel?").toAngel, false, "just the name is not yet a request");
+});
+
+test("the check calls the gate model once and counts its own cost", async () => {
+  const fetchImpl = scriptedFetch([{ body: { content: [{ type: "text", text: '{"to_angel": true, "complete": true, "stop": false, "question": "Can I Grapple?"}' }], usage: { input_tokens: 1000, output_tokens: 20 } } }]);
+  const claude = new Claude({ apiKey: "k", prices: { h: [0.1, 0.125, 0.01, 0.5] }, fetchImpl });
+  const d = await gate({ claude, model: "h", contextText: "[19:00:00] Dana (GM): It grabs you.", lastText: "Mira: Angel, can I grapple it back?" });
+  assert.equal(d.toAngel, true);
+  assert.ok(Math.abs(d.dollars - (1000 * 0.1 + 20 * 0.5) / 1e6) < 1e-12);
+  const body = JSON.parse(fetchImpl.calls[0].body);
+  assert.equal(body.model, "h");
+  assert.match(body.messages[0].content, /LAST line:\nMira: Angel, can I grapple it back\?/);
+});
+
+test("when the gate model can't be reached the fallback still decides", async () => {
+  const claude = new Claude({ apiKey: "k", prices: {}, fetchImpl: scriptedFetch([{ status: 400, body: { error: { message: "bad" } } }]) });
+  const d = await gate({ claude, model: "h", contextText: "", lastText: "Angel, what's a DC?" });
+  assert.equal(d.fallback, true);
+  assert.match(d.error, /400/);
+  assert.equal(gateUser("", "x").includes("(none)"), true);
+});

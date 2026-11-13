@@ -1,0 +1,9 @@
+--save-exact
+--plan
+eslint@9
+globals@15
+globals.node
+no-undef
+no-unused-vars
+_mapping
+VoiceReceiver.onUdpMessage
