@@ -84,6 +84,15 @@ test("/angel join from a voice channel starts a session and tells the table she'
   assert.match(again.replies[0].content, /already listening/);
 });
 
+test("with saveTranscript off, no transcript folder is written (the conversation is still kept in memory)", async () => {
+  const w = world(), { bot, dir } = makeBot({ saveTranscript: false });
+  await bot.onInteraction(interaction(w, "join"));
+  assert.ok(bot.sessions.has("g1"));
+  assert.equal(fs.existsSync(path.join(dir, "sessions")), false);
+  bot.sessions.get("g1").session.transcript.add({ speaker: "Mira", text: "still remembered" });
+  assert.equal(bot.sessions.get("g1").session.transcript.lines.length, 1);
+});
+
 test("/angel join without being in voice, or when the voice join fails, says why", async () => {
   const w = world(), { bot } = makeBot();
   const i = interaction(w, "join", { inVoice: false });

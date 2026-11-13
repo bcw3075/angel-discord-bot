@@ -101,7 +101,10 @@ export class Session {
   textQuestion({ userId, asker, role = "player", text, reply = null }) {
     const line = this.transcript.add({ at: this.now(), userId, speaker: asker, role, text, kind: "text" });
     if (!line) return Promise.resolve();
-    if (this.overCap()) return Promise.resolve();
+    if (this.overCap()) {
+      /* a deferred /angel ask must still get an answer, or Discord shows "thinking…" for 15 minutes */
+      return (reply ?? this.post).send(`This session has reached its spending cap ($${this.cfg.maxSessionDollars}), so I can't look that up. \`/angel leave\` and \`/angel join\` start a fresh session.`).catch(() => {});
+    }
     return this.ask({ question: text, asker, role, via: "text", reply });
   }
 

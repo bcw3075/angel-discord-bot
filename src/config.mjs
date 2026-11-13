@@ -32,6 +32,8 @@ export const DEFAULTS = Object.freeze({
   ackPhrase: "One sec, let me check.",
   /* how much of the conversation Angel is given with a question */
   memoryMinutes: 15,
+  /* write each session's transcript to data/sessions/ (Angel keeps the conversation in memory either way) */
+  saveTranscript: true,
   /* a pause this long ends a piece of speech */
   silenceMs: 900,
   /* a long monologue is cut into pieces this long so the transcript keeps up */

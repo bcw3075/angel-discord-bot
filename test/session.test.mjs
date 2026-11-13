@@ -134,6 +134,15 @@ test("at the spending cap she stops, says so once, and pays for nothing more", a
   assert.equal(gates.length, 0);
 });
 
+test("a typed question past the cap still gets a reply saying so", async () => {
+  const { s } = setup({ cfg: { maxSessionDollars: 0 } });
+  await s.start();
+  const replies = [];
+  await s.textQuestion({ userId: "p1", asker: "Mira", text: "flanking?", reply: { send: async t => { replies.push(t); return {}; } } });
+  assert.equal(replies.length, 1);
+  assert.match(replies[0], /spending cap \(\$0\)/);
+});
+
 test("a typed question is answered without the check and goes to where it was asked", async () => {
   const { s, gates, asked } = setup();
   await s.start();

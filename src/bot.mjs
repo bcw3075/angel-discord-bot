@@ -124,7 +124,8 @@ export class AngelBot {
     const voice = new this.VoiceLinkClass({
       channel, log,
       silenceMs: cfg.silenceMs, maxUtteranceSeconds: cfg.maxUtteranceSeconds, echoGuardMs: cfg.echoGuardMs,
-      shouldListen: id => !this.optout.has(id) && !channel.guild.members.cache.get(id)?.user.bot,
+      /* other bots (Archivist, music bots) are never transcribed; a member not cached yet is checked by the user cache */
+      shouldListen: id => !this.optout.has(id) && !(channel.guild.members.cache.get(id)?.user.bot ?? this.client?.users?.cache?.get(id)?.bot ?? false),
     });
     try { await voice.join(); }
     catch (e) { voice.leave(); return i.editReply(e.message); }
@@ -137,7 +138,7 @@ export class AngelBot {
       answer: q => this.services.answer({ ...q, gmName: this.gmName(channel.guild) }),
       speakerOf: id => this.speakerOf(channel.guild, id),
       keytermCount: this.services.keytermCount,
-      transcript: new Transcript({ dir: path.join(this.dataDir, "sessions", folderName(startedAt)), startedAt, title: channel.guild.name }),
+      transcript: new Transcript({ dir: cfg.saveTranscript ? path.join(this.dataDir, "sessions", folderName(startedAt)) : null, startedAt, title: channel.guild.name }),
     });
     voice.on("lost", () => { textChannel.send("I lost the voice connection. `/angel join` brings me back.").catch(() => {}); this.end(i.guildId, "voice connection lost"); });
     this.sessions.set(i.guildId, { session, voiceChannelId: channel.id, textChannel, emptyTimer: null });

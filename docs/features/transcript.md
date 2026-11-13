@@ -9,6 +9,7 @@ The session's transcript: every line with its time and speaker, kept in order, w
 
 ## Decisions
 - Text only, never audio, kept on the owner's PC (in the design; the join notice says so).
+- The file can be turned off with `saveTranscript` (Angel's addition, 2026-11-13, after Rhea said Archivist already transcribes her games; whether hers stays on is q-1 in the plan). The transcript in memory is kept either way: it is what Angel answers from.
 - Angel's own answers go into the transcript too, so a later question can build on an earlier answer and a later recap has them.
 
 ## How it works
@@ -18,7 +19,7 @@ The session's transcript: every line with its time and speaker, kept in order, w
 
 ## Checks
 - (tr-1) {live} after a real session, `data\sessions\<date>\transcript.md` reads in order with names and times, Angel's answers included.
-- (tr-2) {unit} ordering, the window, `before`, and the files (`test/transcript.test.mjs`).
+- (tr-2) {unit} ordering, the window, `before`, and the files (`test/transcript.test.mjs`); no folder with `saveTranscript` off (`test/bot.test.mjs`).
 
 ## Traps
 

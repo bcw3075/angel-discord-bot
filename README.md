@@ -63,6 +63,8 @@ Change them with Notepad, then restart Angel. The most useful:
 - `maxSessionDollars`: she stops listening and answering for the rest of a session past this (default 5).
 - `answerModel`: `claude-sonnet-5-5` by default; `claude-opus-5-5` is slower and costs about twice as much.
 - `memoryMinutes`: how much of the conversation she's given with a question (default 15).
+- `saveTranscript`: `false` stops her writing the transcript file (she still remembers the conversation while the
+  session runs). Handy if another bot, such as Archivist, already keeps your session record.
 
 ## Updating
 Unzip the new version over the folder, keeping `config.json`, `data\`, `house-rules.md`, `keyterms.txt` and
