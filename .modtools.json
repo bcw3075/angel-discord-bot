@@ -1,0 +1,37 @@
+{
+  "scripts": ["src"],
+  "functionOwned": [],
+  "features": "docs/features",
+  "changes": "docs/changes",
+  "developing": "docs/DEVELOPING.md",
+  "manifest": "package.json",
+  "zip": {"path": "dist/angel-discord-bot.zip", "include": ["package.json", "package-lock.json", "src", "README.md", "Start Angel.cmd", "examples"]},
+  "tests": "npm test",
+  "mainBranch": "main",
+  "reviewPaths": ["src"],
+  "extraDocs": ["README.md"],
+  "unverified": "docs/unverified.md",
+  "unverifiedLimit": 8,
+  "closeOutAtLeast": 3,
+  "protocol2From": "0.1.0",
+  "lessonScopeFrom": "0.1.0",
+  "planDoc": "claude/angel-bot-design.md",
+  "pageChecks": [],
+  "handoff": {
+    "load": "Load foundry-module-dev (the build protocol) and the angel-discord-bot skill.",
+    "loadByPhase": {
+      "design": "Load only the angel-discord-bot skill; read the plan and claude/angel-bot-design.md. No Foundry skills, no `guide start`.",
+      "build": "Load foundry-module-dev and the angel-discord-bot skill; `guide start`. No Foundry skills: the bot doesn't touch Foundry.",
+      "live": "Load foundry-module-dev and the angel-discord-bot skill. The live test is in Rhea's Discord on her PC: she runs the commands; Angel watches the text channel through computer use or her screenshots."
+    },
+    "where": ["claude/angel-bot-design.md (design, Rhea's decisions, status)", "the repo's docs/changes/ (what each release did and checked)"]
+  },
+  "finishList": [
+    "claude/angel-bot-design.md: decisions and the Status line",
+    "claude/mod-roadmap.md: the bot's row",
+    "claude/docs-index.md rows and Last checked (through the private repo's mirror)",
+    "the angel-discord-bot skill card, if a rule for the whole bot changed",
+    "memory areas/angel-discord-bot.md (a signpost: what it is, Rhea's decisions, where the status is)",
+    "the private repo's angel-bot/ copies of house-rules.md and keyterms.txt, if they changed"
+  ]
+}

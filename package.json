@@ -1,0 +1,25 @@
+{
+  "name": "angel-discord-bot",
+  "version": "0.0.0",
+  "description": "Angel: a Discord bot that listens to a Pathfinder 2e table's voice channel and answers rules questions when asked.",
+  "type": "module",
+  "private": true,
+  "main": "src/main.mjs",
+  "scripts": {
+    "start": "node src/main.mjs",
+    "setup": "node src/setup.mjs",
+    "check": "node src/check.mjs",
+    "voices": "node src/check.mjs --voices",
+    "ask": "node src/check.mjs --ask",
+    "test": "node --test \"test/*.test.mjs\"",
+    "test:aon": "node test/live/aon-live.mjs"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "dependencies": {
+    "@discordjs/voice": "0.19.2",
+    "discord.js": "14.28.1",
+    "opusscript": "0.1.1"
+  }
+}

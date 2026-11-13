@@ -1,0 +1,8 @@
+node_modules/
+config.json
+data/
+house-rules.md
+keyterms.txt
+speakers.json
+.private-words
+.modtools-stamp.json
