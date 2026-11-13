@@ -19,11 +19,16 @@ async function run() {
   let muted = false;
   /* the classic readline lets us silence its echo for secret answers (the bridge's setup does the same) */
   rl._writeToOutput = str => { if (!muted) stdout.write(str); };
-  const question = q => new Promise(resolve => rl.question(q, resolve));
+  /* lines are queued as they come, so a paste of several lines at once (or piped input) loses none */
+  const queued = [];
+  let waiting = null, closed = false;
+  rl.on("line", line => { if (waiting) { const w = waiting; waiting = null; w(line); } else queued.push(line); });
+  rl.on("close", () => { closed = true; if (waiting) { const w = waiting; waiting = null; w(""); } });
+  const nextLine = () => (queued.length ? Promise.resolve(queued.shift()) : closed ? Promise.resolve("") : new Promise(r => { waiting = r; }));
   const askHidden = async (q, have) => {
     stdout.write(`${q}${have ? " (saved; press Enter to keep it)" : ""}: `);
     muted = true;
-    try { return (await question("")).trim(); } finally { muted = false; stdout.write("\n"); }
+    try { return (await nextLine()).trim(); } finally { muted = false; stdout.write("\n"); }
   };
 
   const cfg = loadConfig();

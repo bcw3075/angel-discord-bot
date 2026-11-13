@@ -69,7 +69,7 @@ Unzip the new version over the folder, keeping `config.json`, `data\`, `house-ru
 `speakers.json`. Run `npm install`, then restart Angel.
 
 ## Costs
-About $2 for a four-hour session: listening is about $0.30 an hour of talk, each answer about 2 to 3 cents on
+About $2 for a four-hour session: listening is about 35 cents an hour of talk, each answer about 2 to 3 cents on
 Sonnet, and her spoken answers a cent or two each. `/angel status` shows the running total.
 
 ## Privacy

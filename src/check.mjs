@@ -116,6 +116,7 @@ async function voices(cfg) {
    Discord, to judge Angel's answers and what they cost. */
 async function ask(cfg, question) {
   if (!question) { console.log('Put the question after it: npm run ask -- "what does off-guard do?"'); return; }
+  if (!cfg.anthropicApiKey) { console.log("Save the Claude key first: npm run setup"); failures++; return; }
   const services = buildServices(cfg);
   const started = Date.now();
   const r = await services.answer({ conversation: "", question, asker: "The GM", via: "text", gmName: "" });

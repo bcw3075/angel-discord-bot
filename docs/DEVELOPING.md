@@ -28,7 +28,8 @@ code, comments, tests, fixtures or docs (the privacy scan checks against a priva
 
 ## Running and testing here
 - `npm install`, `npm test` (all stand-in tests), `npm run test:aon` (live AoN; works from the cloud workspace).
-- No Discord voice from the cloud workspace (it needs UDP), and no keys there: the live checks run on the owner's PC.
+- The cloud workspace reaches Discord's API, the Claude API, Deepgram and the AoN index over HTTPS (checked
+  2026-11-13), but not Discord voice (UDP), and it has no keys: the voice and keyed checks run on the owner's PC.
 - A one-off lint for undefined names (not a dependency): install `eslint@9` and `globals@15` in a scratch folder and
   run `<scratch>/node_modules/.bin/eslint --no-config-lookup -c <scratch>/eslint.config.mjs "src/*.mjs" "test/*.mjs"`
   from this repo, with a flat config that sets `globals.node` and turns on `no-undef` and `no-unused-vars`. The
