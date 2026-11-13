@@ -246,7 +246,78 @@ test("the daily cap: typed questions outside a session are refused past it, and 
 
 test("Discord's refusal of the Message Content intent is recognised by its real error", async () => {
   const { isIntentRefusal } = await import("../src/bot.mjs");
+  /* client.login rejects with the error @discordjs/ws emits for close code 4014 (read in @discordjs/ws 2.x) */
+  assert.equal(isIntentRefusal(new Error("Used disallowed intents")), true);
   const { DiscordjsError, DiscordjsErrorCodes } = await import("discord.js");
-  assert.equal(isIntentRefusal(new DiscordjsError(DiscordjsErrorCodes.DisallowedIntents)), true);
+  assert.equal(isIntentRefusal(new DiscordjsError(DiscordjsErrorCodes.DisallowedIntents)), true, "discord.js's own code, should a version use it");
   assert.equal(isIntentRefusal(new Error("An invalid token was provided.")), false);
+  assert.equal(isIntentRefusal(new Error("Used invalid intents")), false, "a bad intents number is a real fault");
+});
+
+test('"@Angel stop" stops her like "Angel, stop", and is not answered', async () => {
+  const w = world(), { bot, answers } = makeBot();
+  await bot.onInteraction(interaction(w, "join"));
+  await bot.onMessage({ author: { id: "p1", bot: false }, guild: w.guild, channelId: "tc1", content: "<@angel1> stop", reply: async () => {} });
+  assert.equal(FakeVoiceLink.made.at(-1).stopped, true);
+  assert.equal(answers.length, 0);
+});
+
+test("a session's running cost is written every minute and still counts for the day after a crash", async () => {
+  const w = world(), { bot, dir } = makeBot();
+  await bot.onInteraction(interaction(w, "join"));
+  const session = bot.sessions.get("g1").session;
+  session.costs.claude += 0.03;
+  bot.bookLive();
+  assert.ok(Math.abs(JSON.parse(fs.readFileSync(bot.spendFile, "utf8")).live.g1 - session.spent()) < 1e-9);
+  clearInterval(bot.bookTimer);
+  /* the window closes here; the next start reads the same folder */
+  const next = new AngelBot({ cfg: { ...DEFAULTS, ackPhrase: "" }, log: quiet, services: bot.services, dataDir: dir, speakersFile: bot.speakersFile, VoiceLinkClass: FakeVoiceLink });
+  clearInterval(next.bookTimer);
+  assert.ok(Math.abs(next.spentToday() - session.spent()) < 1e-9);
+  assert.equal(JSON.parse(fs.readFileSync(next.spendFile, "utf8")).live, undefined, "booked once, not again at the next start");
+});
+
+test("what an answer still running at the end costs is booked when it finishes", async () => {
+  const w = world(), { bot } = makeBot();
+  await bot.onInteraction(interaction(w, "join"));
+  const session = bot.sessions.get("g1").session;
+  let release;
+  session.answering = new Promise(r => { release = r; });
+  await bot.end("g1", "test");
+  const booked = bot.spentToday();
+  session.costs.claude += 0.04;
+  release(); await sleep(5);
+  assert.ok(Math.abs(bot.spentToday() - booked - 0.04) < 1e-9);
+});
+
+test("guildId matches written as text or as a number, and one that matches no server is warned about", async () => {
+  const { bot } = makeBot({ guildId: 123 });
+  assert.equal(bot.serves("123"), true);
+  assert.equal(bot.serves("1234"), false);
+  const warnings = [], registered = [];
+  bot.log = { ...quiet, warn: m => warnings.push(m) };
+  const g = (id, name) => [id, { id, name, commands: { set: async () => registered.push(name) } }];
+  await bot.onReady({ user: { tag: "Angel#0001" }, guilds: { cache: new Map([g("999", "Elsewhere")]) } });
+  assert.equal(registered.length, 0);
+  assert.ok(warnings.some(m => /none of the servers/.test(m)));
+  await bot.onReady({ user: { tag: "Angel#0001" }, guilds: { cache: new Map([g("123", "Home"), g("999", "Elsewhere")]) } });
+  assert.deepEqual(registered, ["Home"]);
+});
+
+test("a Discord nickname can't label a player as the GM either", () => {
+  const w = world(), { bot } = makeBot();
+  w.guild.members.cache.get("p1").displayName = "Sam (GM)";
+  assert.deepEqual(bot.speakerOf(w.guild, "p1"), { name: "Sam GM", role: "player" });
+});
+
+test("when she can't post in the channel, she doesn't join voice at all", async () => {
+  const w = world(), { bot } = makeBot();
+  const i = interaction(w, "join");
+  i.channel = null;
+  i.client = { channels: { fetch: async () => null } };
+  const before = FakeVoiceLink.made.length;
+  await bot.onInteraction(i);
+  assert.equal(FakeVoiceLink.made.length, before, "no voice connection was opened");
+  assert.match(i.edits[0], /can't post in this channel/);
+  assert.equal(bot.joining.has("g1"), false);
 });

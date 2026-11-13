@@ -22,6 +22,14 @@ code, comments, tests, fixtures or docs (the privacy scan checks against a priva
 - **Every paid call reports its own cost** (the usage of that call), never as a change in a running total.
 - **Nothing the session does may crash the process**: stream errors are listened for, async handlers end in
   `.catch`, and a failed answer is an apology in the channel.
+- **No slow regex on text from the table**: the whole bot waits while one runs (a stop pattern once took 1.3 s on a
+  60-word line). Anchor patterns, avoid two unbounded parts that can match the same characters, count words in plain
+  code, and add each new pattern to the timing test in `test/wake.test.mjs`.
+- **Library behaviour is checked where it happens**: before writing that a library throws or emits something, read
+  the code that does it (the throw site, the state changes), not a message table or a type comment, and build the
+  test from that real output. The intent error and the reconnect path were both "verified" from the wrong place once.
+- **A new test is checked by breaking its fix**: undo the fix, see the test fail, put it back. Two tests passed with
+  their fix removed (a later guard caught the case; a stand-in never answered) until this was done.
 - Plain fetch, no SDKs: fewer moving parts on the owner's PC.
 - Pinned versions (`--save-exact`). `@discordjs/voice` and `@snazzah/davey` follow Discord's voice encryption: before
   updating them, read their changelogs for receive and DAVE changes, then run the live voice checks.

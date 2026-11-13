@@ -8,9 +8,10 @@ import * as discordVoice from "@discordjs/voice";
 import { gather } from "./capture.mjs";
 
 export class VoiceLink extends EventEmitter {
-  constructor({ channel, silenceMs = 900, maxUtteranceSeconds = 30, echoGuardMs = 2500, shouldListen = () => true, log, lib = discordVoice, now = Date.now }) {
+  constructor({ channel, silenceMs = 900, maxUtteranceSeconds = 30, echoGuardMs = 2500, shouldListen = () => true, log, lib = discordVoice, now = Date.now, reconnectMs = 30000 }) {
     super();
-    Object.assign(this, { channel, silenceMs, maxUtteranceSeconds, echoGuardMs, shouldListen, log, lib, now });
+    Object.assign(this, { channel, silenceMs, maxUtteranceSeconds, echoGuardMs, shouldListen, log, lib, now, reconnectMs });
+    this.watchdog = null;
     this.closed = false;
     this.speakingNow = false;
     this.speakingSince = 0;
@@ -38,6 +39,9 @@ export class VoiceLink extends EventEmitter {
     }
     this.connection.on(lib.VoiceConnectionStatus.Disconnected, () => this.onDisconnected());
     this.connection.on(lib.VoiceConnectionStatus.Destroyed, () => { if (!this.closed) { this.log.warn("voice connection destroyed"); this.emit("lost"); } });
+    /* any time the connection leaves Ready it must get back within reconnectMs, or Angel would sit there deaf. The
+       library reconnects most drops by going straight to Signalling, never Disconnected, so this watches every change. */
+    this.connection.on("stateChange", (_old, state) => this.watch(state.status));
     this.player = lib.createAudioPlayer({ behaviors: { noSubscriber: lib.NoSubscriberBehavior.Pause } });
     this.player.on("error", e => this.log.warn(`voice playback error: ${e.message}`));
     this.connection.subscribe(this.player);
@@ -68,6 +72,20 @@ export class VoiceLink extends EventEmitter {
     this.listeners.delete(userId);
   }
 
+  watch(status) {
+    const { VoiceConnectionStatus: S } = this.lib;
+    if (this.closed || status === S.Destroyed) return;
+    if (status === S.Ready) { clearTimeout(this.watchdog); this.watchdog = null; return; }
+    if (this.watchdog) return;
+    this.watchdog = setTimeout(() => {
+      this.watchdog = null;
+      if (!this.closed && this.connection?.state?.status !== S.Ready) { this.log.warn("the voice connection didn't come back"); this.emit("lost"); }
+    }, this.reconnectMs);
+    this.watchdog.unref?.();
+  }
+
+  /* Disconnected (kicked, moved, or Discord closed the call): a reconnect starts within 5 s, or it never will. An
+     "error" event during the wait rejects it too: that is left to the watchdog, which knows whether it came back. */
   async onDisconnected() {
     const { lib } = this;
     try {
@@ -75,10 +93,9 @@ export class VoiceLink extends EventEmitter {
         lib.entersState(this.connection, lib.VoiceConnectionStatus.Signalling, 5000),
         lib.entersState(this.connection, lib.VoiceConnectionStatus.Connecting, 5000),
       ]);
-      /* reconnecting: it must get back to Ready, or Angel sits there deaf */
-      await lib.entersState(this.connection, lib.VoiceConnectionStatus.Ready, 20000);
-    } catch {
-      if (!this.closed) { this.log.warn("voice connection lost"); this.emit("lost"); }
+    } catch (e) {
+      const timedOut = e?.name === "AbortError" || e?.code === "ABORT_ERR";
+      if (timedOut && !this.closed) { this.log.warn("voice connection lost"); this.emit("lost"); }
     }
   }
 
@@ -142,6 +159,7 @@ export class VoiceLink extends EventEmitter {
   leave() {
     if (this.closed) return;
     this.closed = true;
+    clearTimeout(this.watchdog);
     this.playToken++;
     for (const g of this.listeners.values()) g.stop();
     this.listeners.clear();

@@ -11,7 +11,7 @@ export function createDecoder() {
 }
 
 /* Decode packets into one interleaved stereo Int16 buffer. A packet the decoder rejects becomes 20 ms of silence, so
-   timing holds. Discord sends 20 ms frames, but any Opus frame length (up to 120 ms) decodes. */
+   timing holds. Discord sends 20 ms frames, but longer frames (opusscript decodes up to 60 ms) come out whole. */
 export function decodePackets(decoder, packets) {
   const parts = [];
   let total = 0, bad = 0;

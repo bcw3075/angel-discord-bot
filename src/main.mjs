@@ -28,10 +28,15 @@ async function main() {
     const limit = new Promise(r => setTimeout(r, 5000).unref());
     try { await Promise.race([bot.stop(), limit]); } finally { services.aon.flush(); process.exit(0); }
   };
-  process.on("SIGINT", () => shutdown("SIGINT"));
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  /* Ctrl+C, closing the window (SIGHUP on Windows, about 10 s before the process is killed) and Ctrl+Break */
+  for (const sig of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"]) process.on(sig, () => shutdown(sig));
   process.on("unhandledRejection", e => log.error("unhandled:", e));
-  process.on("uncaughtException", e => { log.error("crashed:", e); process.exit(1); });
+  process.on("uncaughtException", e => {
+    log.error("crashed:", e);
+    /* keep the day's spending before the restart */
+    try { bot.bookLive(); services.aon.flush(); } catch { /* exiting anyway */ }
+    process.exit(1);
+  });
   try { await bot.start(); }
   catch (e) {
     const tokenProblem = /token/i.test(e.message);

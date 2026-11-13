@@ -52,6 +52,7 @@ port or tunnel is needed.
 - `config.json`: your keys and settings (written by setup). Never share it.
 - data\sessions\<date>\transcript.md: each session's transcript, text only. No audio is ever saved.
 - data\angel.log: what Angel did, with the keys blanked out.
+- data\spend.json: what today has cost so far, so the daily cap holds across restarts and crashes.
 - `speakers.json`: character names from `/angel iam`, and who is the GM. You can edit it by hand. Without an entry,
   whoever can manage the Discord server counts as the GM.
 

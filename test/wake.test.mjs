@@ -59,3 +59,22 @@ test("when the check can't be reached, the fallback reads what was said, not the
   assert.equal(d.toAngel, true);
   assert.match(d.error, /529/);
 });
+
+test("no text, however odd, makes the readers slow (a slow regex would freeze every session)", async () => {
+  const { typedQuestion } = await import("../src/commands.mjs");
+  const { speakable } = await import("../src/speech.mjs");
+  /* 4000 characters: Discord's longest message; each shape once tripped a regex like ours somewhere */
+  const n = 4000;
+  const odd = [" ".repeat(n), ",".repeat(n), "angel ".repeat(n / 6), "angel,".repeat(n / 6), "hey ".repeat(n / 4), "hey angel ".repeat(n / 10),
+    "{".repeat(n), "[".repeat(n), "[a](".repeat(n / 4), "\n".repeat(n), " \n".repeat(n / 2), "-".repeat(n), "+".repeat(n),
+    "angel " + "please ".repeat(n / 7), "Angel," + " ".repeat(n) + "x", "!".repeat(n) + "angel"];
+  const readers = { isStopRequest, mentionsAngel, parseGate: t => parseGate(t, t), typedQuestion: t => typedQuestion(t, "123"), speakable };
+  for (const [name, read] of Object.entries(readers)) {
+    for (const [i, text] of odd.entries()) {
+      const t0 = performance.now();
+      read(text);
+      const ms = performance.now() - t0;
+      assert.ok(ms < 50, `${name} took ${ms.toFixed(0)} ms on odd text #${i}`);
+    }
+  }
+});

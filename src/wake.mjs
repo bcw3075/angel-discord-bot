@@ -8,8 +8,11 @@ const LEAD = String.raw`^\W*(?:(?:hey|ok(?:ay)?|so|um+|uh+|oh)[\s,]+)?`;
 const STOP_WORDS = String.raw`(?:stop|quiet|hush|shush|enough|that'?s enough|be quiet|shut up|cancel|never ?mind|that'?s fine|thanks,? that'?s all)`;
 /* her name first, a stop word, and at most three more words: "Angel, stop please", "okay Angel, that's enough, thanks".
    A question after it ("Angel, never mind that, how does flanking work?") or the story ("the angel, quiet as death")
-   is not a stop; such a line still goes through the model check, which can say stop. */
-const STOP_RE = new RegExp(String.raw`${LEAD}${NAME}(?![a-z'])[\s,.!?-]*(?:please[\s,]+)?${STOP_WORDS}\b[\s\W]*(?:[a-z']+[\s\W]*){0,3}$`, "i");
+   is not a stop; such a line still goes through the model check, which can say stop. The pattern stops at the stop
+   word and the words after it are counted in code: a pattern that also matched the tail backtracked exponentially
+   on a typed run of apostrophes and froze the bot (second review, 2026-11-13). */
+const STOP_HEAD = new RegExp(String.raw`${LEAD}${NAME}(?![a-z'])[\s,.!?-]*(?:please[\s,]+)?${STOP_WORDS}\b`, "i");
+const STOP_MAX_CHARS = 120;
 
 export function mentionsAngel(text) {
   return NAME_RE.test(String(text));
@@ -17,7 +20,11 @@ export function mentionsAngel(text) {
 
 /* "Angel, stop" and friends: acted on at once, without the model check. */
 export function isStopRequest(text) {
-  return STOP_RE.test(String(text).trim());
+  const t = String(text).trim();
+  if (t.length > STOP_MAX_CHARS) return false;
+  const m = STOP_HEAD.exec(t);
+  if (!m) return false;
+  return (t.slice(m[0].length).match(/[a-z0-9']+/gi) ?? []).length <= 3;
 }
 
 export const GATE_SYSTEM = `You watch the transcript of a tabletop game played over voice chat. The table has an AI assistant called Angel who answers rules questions. The transcriber sometimes writes her name as Angela, Angie or angle.
@@ -34,6 +41,7 @@ export function gateUser(contextLines, last) {
 
 /* The model's reply → a decision. When it can't be read, fall back to the plain rule: her name first, then a request. */
 export function parseGate(text, lastLineText = "") {
+  lastLineText = String(lastLineText).slice(0, 300); /* the plain rule only needs the start of the line */
   const m = String(text).match(/\{[\s\S]*\}/);
   if (m) {
     try {

@@ -43,7 +43,7 @@ export class Aon {
     /* full texts are cut before caching: some rules pages are long, and the cache file is rewritten as it grows */
     const data = (json?.hits?.hits ?? []).map(h => {
       const d = { _id: h._id, ...h._source };
-      if (typeof d.text === "string" && d.text.length > this.maxTextChars + 200) d.text = d.text.slice(0, this.maxTextChars + 200);
+      if (typeof d.text === "string" && d.text.length > this.maxTextChars + 200) { d.text = d.text.slice(0, this.maxTextChars + 200); d._cut = true; }
       return d;
     });
     this.cache.set(key, { at: this.now(), data });
@@ -121,7 +121,7 @@ export class Aon {
     if (!docs.length) return null;
     const [doc] = await this.preferRemaster(docs, fields);
     let text = String(doc.text ?? "").replace(/\s+/g, " ").trim();
-    const truncated = text.length > this.maxTextChars;
+    const truncated = text.length > this.maxTextChars || doc._cut === true;
     if (truncated) text = text.slice(0, this.maxTextChars) + " …";
     return { ...brief(doc), text, truncated };
   }

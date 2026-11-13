@@ -20,7 +20,7 @@ export class Session {
     this.counts = { pieces: 0, skipped: 0, questions: 0, gateChecks: 0 };
     this.capped = false;
     this.ended = false;
-    this.stops = 0;             /* bumped by every stop: answers asked before it are dropped or not spoken */
+    this.lastStopAt = -Infinity; /* when the last "stop" was said: a question said before it is dropped or not spoken */
     this.answering = Promise.resolve();
     this.ackClips = null;
   }
@@ -78,8 +78,11 @@ export class Session {
     if (line) await this.onLine(line);
   }
 
+  /* a stop said after the question was said cancels it, wherever it is: transcribing, being checked, queued or looked up */
+  stoppedSince(at) { return this.lastStopAt > at; }
+
   async onLine(line) {
-    if (isStopRequest(line.text)) { this.stop(); return; }
+    if (isStopRequest(line.text)) { this.stop(line.at); return; }
     const uid = line.userId;
     const named = mentionsAngel(line.text);
     /* the check on this speaker's last line is still running: keep the line, it may be the rest of the question */
@@ -105,24 +108,24 @@ export class Session {
     finally { if (this.checking.get(uid) === later) this.checking.delete(uid); }
     if (typeof decision.dollars === "number") this.costs.claude += decision.dollars;
     if (decision.error) this.log.warn(`the "was that for me?" check failed (${decision.error}); the plain rule decided`);
-    if (!decision.toAngel || this.ended) return;
+    if (!decision.toAngel || this.ended || this.stoppedSince(line.at)) return;
+    let at = line.at;
     if (decision.stop) {
-      this.stop();
-      /* "Angel, stop. What does stunned do?": stop, then answer the question */
+      this.stop(line.at);
+      /* "Angel, stop. What does stunned do?": stop, then answer the question (asked just after the stop) */
       if (!(decision.complete && decision.question && /\?/.test(text))) return;
+      at = line.at + 1;
     }
+    /* what they said while the check ran is the rest of the question, finished or not */
+    const rest = later.length ? ` ${later.join(" ")}` : "";
     if (!decision.complete) {
-      if (later.length) {
-        /* the rest of the question arrived while the check ran */
-        this.ask({ question: `${text} ${later.join(" ")}`, asker: line.speaker, role: line.role, via: "voice" });
-        return;
-      }
+      if (rest) { this.ask({ question: `${text}${rest}`, asker: line.speaker, role: line.role, via: "voice", at }); return; }
       const timer = setTimeout(() => this.pending.delete(uid), this.cfg.followUpMs);
       timer.unref?.();
       this.pending.set(uid, { text, at: this.now(), timer });
       return;
     }
-    this.ask({ question: decision.question || text, asker: line.speaker, role: line.role, via: "voice" });
+    this.ask({ question: `${decision.question || text}${rest}`, asker: line.speaker, role: line.role, via: "voice", at });
   }
 
   /* A typed question (@Angel, "Angel, …" in chat, or /angel ask): no check needed, they meant her. */
@@ -133,21 +136,25 @@ export class Session {
       /* a deferred /angel ask must still get an answer, or Discord shows "thinking…" for 15 minutes */
       return (reply ?? this.post).send(this.capMessage()).catch(() => {});
     }
-    return this.ask({ question: text, asker, role, via: "text", reply });
+    return this.ask({ question: text, asker, role, via: "text", reply, at: line.at });
   }
 
   ask(q) {
     this.counts.questions++;
-    const asked = { ...q, stops: this.stops };
+    const asked = { at: this.now(), ...q };
     this.answering = this.answering.then(() => this.runAsk(asked)).catch(e => this.log.error(`answering failed: ${e.message}`));
     return this.answering;
   }
 
-  async runAsk({ question, asker, via, reply, stops }) {
-    if (this.ended) return;
+  async runAsk({ question, asker, via, reply, at }) {
     const target = reply ?? this.post;
+    if (this.ended) {
+      /* a deferred /angel ask must still hear back */
+      if (reply) await reply.send(`The session ended before I got to "${shortQuestion(question)}".`).catch(() => {});
+      return;
+    }
     /* stopped before its turn came: dropped (a typed one is told so) */
-    if (stops !== this.stops) {
+    if (this.stoppedSince(at)) {
       if (reply) await reply.send(`Okay, I've dropped "${shortQuestion(question)}".`).catch(() => {});
       return;
     }
@@ -176,18 +183,19 @@ export class Session {
     catch (e) { this.log.warn(`couldn't post the answer: ${e.message}`); }
     this.transcript.add({ at: this.now(), speaker: "Angel", role: "angel", text: result.say, kind: "angel" });
     /* told to stop while she was looking it up: the answer stays typed, but she doesn't say it */
-    if (!this.cfg.speak || this.ended || stops !== this.stops || this.overCap()) return;
+    if (!this.cfg.speak || this.ended || this.stoppedSince(at) || this.overCap()) return;
     const spoken = speakable(result.say);
     try {
       const clips = await this.tts(spoken);
       this.costs.tts += this.ttsCost(spoken);
-      if (!this.ended && stops === this.stops) this.voice.speak(clips);
+      if (!this.ended && !this.stoppedSince(at)) this.voice.speak(clips);
     } catch (e) { this.log.warn(`couldn't speak the answer: ${e.message}`); }
   }
 
-  /* "Angel, stop": cut her off, drop questions still waiting, and don't speak an answer still being looked up. */
-  stop() {
-    this.stops++;
+  /* "Angel, stop": cut her off, drop questions still waiting, and don't speak an answer still being looked up.
+     `at` is when the stop was said (a typed or /angel stop: now). */
+  stop(at = this.now()) {
+    this.lastStopAt = Math.max(this.lastStopAt, at);
     for (const p of this.pending.values()) clearTimeout(p.timer);
     this.pending.clear();
     this.voice.stopSpeaking();

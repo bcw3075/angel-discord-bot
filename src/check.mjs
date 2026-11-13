@@ -17,6 +17,7 @@ import { synthesize, oggPackets } from "./tts.mjs";
 import { createDecoder, decodePackets } from "./audio.mjs";
 import { inviteUrl } from "./setup.mjs";
 import { buildServices } from "./services.mjs";
+import { isIntentRefusal } from "./bot.mjs";
 
 export const VOICES = ["aura-2-thalia-en", "aura-2-andromeda-en", "aura-2-helena-en", "aura-2-luna-en", "aura-2-athena-en", "aura-2-cora-en", "aura-2-electra-en", "aura-2-asteria-en"];
 const SAMPLE = "Hi, I'm Angel. Grab your dice: the rules say you're off-guard, so that's a minus two to your armor class.";
@@ -80,7 +81,7 @@ async function check(cfg) {
     try {
       try { await client.login(cfg.discordToken); }
       catch (e) {
-        if (!/disallowed intents/i.test(e.message)) throw e;
+        if (!isIntentRefusal(e)) throw e;
         content = false;
         client.destroy();
         client = new Client({ intents: [GatewayIntentBits.Guilds] });

@@ -76,3 +76,12 @@ test("cached entries keep a trimmed text, and the cache file is written once, a 
   const again = new Aon({ userAgent: "t", fetchImpl: scriptedFetch([]), cacheFile: file });
   assert.equal((await again.search("off-guard"))[0].name, "Off-Guard", "a restart reads the saved cache");
 });
+
+test("an entry cut before caching is still called cut, even when its spaces shrink it under the limit", async () => {
+  /* raw AoN text is mostly runs of spaces and line breaks; cut first, collapsed after, it can look whole */
+  const spacey = { ...remaster, text: "Off-Guard" + " \n".repeat(400) + "the end" };
+  const aon = new Aon({ userAgent: "t", fetchImpl: scriptedFetch([hits([spacey])]), maxTextChars: 100 });
+  const a = await aon.get("condition-58");
+  assert.ok(a.text.length < 100);
+  assert.equal(a.truncated, true);
+});

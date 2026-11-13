@@ -241,3 +241,56 @@ test("the bot's daily cap stops a session too", async () => {
   assert.equal(gates.length, 0);
   assert.match(posted[0].text, /today's spending cap/);
 });
+
+test('"Angel, stop" said while the check on a question runs: the question is dropped', async () => {
+  let open;
+  const { s, voice, asked } = setup({ heard: ["Angel, what's grabbed?", "Angel, stop"] });
+  s.gate = () => new Promise(r => { open = () => r({ toAngel: true, complete: true, stop: false, question: "What's grabbed?", dollars: 0 }); });
+  await s.start();
+  speech(voice, "p1", 1, Date.now()); await settle();
+  speech(voice, "p2", 1, Date.now() + 5); await settle();
+  assert.equal(voice.stops, 1);
+  open(); await settle(); await s.answering;
+  assert.equal(asked.length, 0, "the stop came after the question, so it covers it");
+});
+
+test("what the speaker adds while the check runs is kept even when the check called the question finished", async () => {
+  let open;
+  const { s, voice, asked } = setup({ heard: ["Angel, what does off-guard do?", "and does it stack?"] });
+  s.gate = () => new Promise(r => { open = () => r({ toAngel: true, complete: true, stop: false, question: "What does off-guard do?", dollars: 0 }); });
+  await s.start();
+  speech(voice, "p1"); await settle();
+  speech(voice, "p1"); await settle();
+  open(); await settle(); await s.answering;
+  assert.equal(asked[0].question, "What does off-guard do? and does it stack?");
+});
+
+test("a typed question still waiting when the session ends is told so, not left hanging", async () => {
+  let release;
+  const { s, voice } = setup({ heard: ["Angel, what's grabbed?"] });
+  s.answer = q => new Promise(r => { release = () => r({ say: `Answer to: ${q.question}`, sources: [], dollars: 0.01 }); });
+  await s.start();
+  speech(voice, "p1"); await settle();
+  const replies = [];
+  const reply = { send: async t => { replies.push(t); return { edit: async () => {} }; } };
+  s.textQuestion({ userId: "p2", asker: "Tobin", text: "and restrained?", reply });
+  s.end();
+  release(); await settle(); await s.answering;
+  assert.match(replies.at(-1), /The session ended before I got to "and restrained\?"/);
+});
+
+test('"Angel, stop" during the check on an unfinished question: what they say next is not taken as the rest of it', async () => {
+  let open;
+  const { s, voice, asked } = setup({ heard: ["Angel, quick one", "Angel, stop", "anyway, back to the door"] });
+  let calls = 0;
+  /* the first check waits; any later one answers at once that it's a whole question */
+  s.gate = () => (calls++ ? Promise.resolve({ toAngel: true, complete: true, stop: false, question: "", dollars: 0 })
+    : new Promise(r => { open = () => r({ toAngel: true, complete: false, stop: false, question: "", dollars: 0 }); }));
+  await s.start();
+  speech(voice, "p1", 1, Date.now()); await settle();
+  speech(voice, "p2", 1, Date.now() + 5); await settle();
+  open(); await settle();
+  speech(voice, "p1", 1, Date.now() + 10); await settle(); await s.answering;
+  assert.equal(asked.length, 0);
+  assert.equal(calls, 1, "the next line wasn't treated as the rest of a question");
+});

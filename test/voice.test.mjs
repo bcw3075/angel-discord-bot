@@ -114,19 +114,32 @@ test("the real library reads an Ogg Opus clip into Opus packets for Discord (no 
   assert.ok(packets.every(p => Buffer.isBuffer(p) && p.length > 0 && p.length < 1500));
 });
 
-test("a reconnect that never gets back to Ready, or a destroyed connection, tells the session it's lost", async () => {
+test("a connection that leaves Ready and doesn't come back, or is destroyed, tells the session it's lost", async () => {
   const lib = fakeLib();
-  let readyCalls = 0;
-  lib.entersState = async (c, status) => { if (status === "ready") { readyCalls++; if (readyCalls > 1) throw new Error("timeout"); } return c; };
-  const v = new VoiceLink({ channel, lib, log: quiet });
+  lib.connection.state = { status: "ready" };
+  const v = new VoiceLink({ channel, lib, log: quiet, reconnectMs: 20 });
   await v.join();
   let lost = 0;
   v.on("lost", () => lost++);
+  const change = status => { lib.connection.state = { status }; lib.connection.emit("stateChange", {}, { status }); };
+  change("signalling"); change("connecting"); change("ready");
+  await sleep(40);
+  assert.equal(lost, 0, "a reconnect that got back in time is fine");
+  change("signalling");
+  await sleep(40);
+  assert.equal(lost, 1, "stuck before Ready");
+  const timeout = Object.assign(new Error("The operation was aborted"), { name: "AbortError" });
+  lib.entersState = async () => { throw timeout; };
   await v.onDisconnected();
-  assert.equal(lost, 1, "signalled again but never Ready");
+  assert.equal(lost, 2, "disconnected and no reconnect started");
+  lib.entersState = async () => { throw new Error("socket hiccup"); };
+  await v.onDisconnected();
+  assert.equal(lost, 2, "an error event during the wait is left to the watchdog");
   lib.connection.emit("destroyed");
-  assert.equal(lost, 2);
+  assert.equal(lost, 3);
   v.leave();
   lib.connection.emit("destroyed");
-  assert.equal(lost, 2, "our own leave is not a loss");
+  change("signalling");
+  await sleep(40);
+  assert.equal(lost, 3, "nothing after our own leave");
 });

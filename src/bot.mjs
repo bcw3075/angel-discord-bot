@@ -15,8 +15,9 @@ import { readSpeakers, writeSpeakers, DATA_DIR, LOCAL_FILES } from "./config.mjs
 const EPHEMERAL = { flags: MessageFlags.Ephemeral };
 const NO_PINGS = { allowedMentions: { parse: [], repliedUser: false } };
 
-/* Discord refuses a privileged intent that isn't switched on in the Developer Portal with close code 4014;
-   discord.js reports it as code "DisallowedIntents" ("Privileged intent provided is not enabled or whitelisted.") */
+/* Discord refuses a privileged intent that isn't switched on in the Developer Portal with close code 4014, and
+   client.login rejects with @discordjs/ws's Error("Used disallowed intents"). discord.js also has a
+   "DisallowedIntents" error code, kept here in case a later version reports it that way. */
 export function isIntentRefusal(e) {
   return e?.code === "DisallowedIntents" || e?.code === 4014 || /disallowed intents|privileged intent/i.test(String(e?.message ?? ""));
 }
@@ -32,6 +33,24 @@ export class AngelBot {
     this.optout = new Set(readJson(this.optoutFile, []));
     this.spendFile = path.join(dataDir, "spend.json");
     this.ledger = readJson(this.spendFile, {});
+    /* live sessions' totals are written every minute; a process that died with sessions running left them there:
+       they count for the day they were written */
+    if (this.ledger.live && typeof this.ledger.live === "object") {
+      if (this.ledger.day === today()) this.ledger.dollars = (this.ledger.dollars ?? 0) + Object.values(this.ledger.live).reduce((a, b) => a + (Number(b) || 0), 0);
+      delete this.ledger.live;
+      writeJson(this.spendFile, this.ledger);
+    }
+    this.bookTimer = setInterval(() => this.bookLive(), 60000);
+    this.bookTimer.unref?.();
+  }
+
+  /* write the live sessions' running totals, so a crash or a closed window can't reset the day's cap */
+  bookLive() {
+    const live = {};
+    for (const [id, s] of this.sessions) live[id] = s.session.spent();
+    this.ledgerToday();
+    if (Object.keys(live).length) this.ledger.live = live; else delete this.ledger.live;
+    writeJson(this.spendFile, this.ledger);
   }
 
   async start() {
@@ -62,18 +81,22 @@ export class AngelBot {
   async onReady(client) {
     const guilds = [...client.guilds.cache.values()];
     this.log.info(`Logged in as ${client.user.tag} in ${guilds.length} server${guilds.length === 1 ? "" : "s"}: ${guilds.map(g => g.name).join(", ") || "none yet"}`);
-    for (const g of guilds.filter(g => this.serves(g.id))) {
+    const mine = guilds.filter(g => this.serves(g.id));
+    if (this.cfg.guildId && !mine.length) this.log.warn(`guildId in config.json (${this.cfg.guildId}) is none of the servers I'm in, so /angel is registered nowhere. Fix it or leave it empty ("").`);
+    for (const g of mine) {
       try { await g.commands.set([angelCommand()]); this.log.info(`/angel is ready in ${g.name}`); }
       catch (e) { this.log.warn(`couldn't register /angel in ${g.name}: ${e.message}`); }
     }
   }
 
-  /* with guildId set, Angel answers only there (every answer costs money) */
-  serves(guildId) { return !this.cfg.guildId || guildId === this.cfg.guildId; }
+  /* with guildId set, Angel answers only there (every answer costs money); compared as text, since an id is too
+     long to survive being written as a JSON number */
+  serves(guildId) { return !this.cfg.guildId || String(guildId) === String(this.cfg.guildId); }
 
   /* ---- spending: a cap per session (in Session) and one per day for everything ---- */
   ledgerToday() {
     if (this.ledger.day !== today()) this.ledger = { day: today(), dollars: 0 };
+    this.ledger.dollars = Number(this.ledger.dollars) || 0;
     return this.ledger;
   }
   addSpend(dollars) {
@@ -99,7 +122,8 @@ export class AngelBot {
     const member = guild.members.cache.get(userId);
     const manages = member?.permissions?.has?.(PermissionFlagsBits.ManageGuild) ?? false;
     const role = known?.role ? (known.role === "GM" ? "GM" : "player") : (manages ? "GM" : "player");
-    return { name: known?.name || member?.displayName || "Someone", role };
+    /* a nickname like "Bob (GM)" would read as a GM line in the transcript Angel is given */
+    return { name: cleanName(known?.name || member?.displayName) || "Someone", role };
   }
 
   gmName(guild) {
@@ -147,7 +171,7 @@ export class AngelBot {
     }
     if (sub === "iam") {
       /* brackets and parentheses are dropped, so nobody can make their line read "(GM)" */
-      const name = i.options.getString("name", true).replace(/[()[\]{}<>]/g, "").replace(/\s+/g, " ").trim().slice(0, 40);
+      const name = cleanName(i.options.getString("name", true)).slice(0, 40);
       if (!name) return i.reply({ content: "That name came out empty. Try plain letters?", ...EPHEMERAL });
       let speakers;
       try { speakers = readSpeakers(this.speakersFile, { strict: true }); }
@@ -177,6 +201,9 @@ export class AngelBot {
     try {
       await i.deferReply();
       const { log, cfg } = this;
+      /* the text channel first: if it can't be had, no voice connection is left open */
+      const textChannel = i.channel ?? await i.client.channels.fetch(i.channelId).catch(() => null);
+      if (!textChannel?.send) return i.editReply("I can't post in this channel. Check that I may View Channel and Send Messages here.");
       const voice = new this.VoiceLinkClass({
         channel, log,
         silenceMs: cfg.silenceMs, maxUtteranceSeconds: cfg.maxUtteranceSeconds, echoGuardMs: cfg.echoGuardMs,
@@ -187,7 +214,6 @@ export class AngelBot {
       catch (e) { voice.leave(); return i.editReply(e.message); }
       await this.knowOwner(channel.guild);
       const startedAt = Date.now();
-      const textChannel = i.channel ?? await i.client.channels.fetch(i.channelId);
       const post = { send: text => textChannel.send({ content: text, ...NO_PINGS }) };
       const session = new Session({
         cfg, voice, post, log,
@@ -217,6 +243,9 @@ export class AngelBot {
     clearTimeout(live.emptyTimer);
     const s = live.session.end();
     this.addSpend(s.dollars);
+    this.bookLive();
+    /* a check or an answer still running when it ended can add a few cents afterwards: book those too */
+    live.session.answering.finally(() => this.addSpend(live.session.spent() - s.dollars));
     this.log.info(`session ended (${why}): ${JSON.stringify(s)}`);
     try { await live.textChannel.send(summaryText(s)); } catch { /* channel gone */ }
   }
@@ -228,8 +257,9 @@ export class AngelBot {
   async onMessage(m) {
     if (m.author.bot || !m.guild || !this.serves(m.guild.id)) return;
     const live = this.sessions.get(m.guild.id);
-    /* a typed "Angel, stop" stops her; it isn't a question */
-    if (isStopRequest(m.content)) { live?.session.stop(); return; }
+    /* a typed "Angel, stop" or "@Angel stop" stops her; it isn't a question */
+    const asText = String(m.content ?? "").replace(new RegExp(`<@!?${this.client.user.id}>`, "g"), "Angel");
+    if (isStopRequest(asText)) { live?.session.stop(); return; }
     const q = typedQuestion(m.content, this.client.user.id);
     const who = this.speakerOf(m.guild, m.author.id);
     if (!q.asked) {
@@ -279,9 +309,15 @@ export class AngelBot {
   }
 
   async stop() {
+    clearInterval(this.bookTimer);
     await this.endAll("Angel is shutting down");
     this.client?.destroy();
   }
+}
+
+/* brackets and parentheses dropped, spaces tidied */
+export function cleanName(name) {
+  return String(name ?? "").replace(/[()[\]{}<>]/g, "").replace(/\s+/g, " ").trim();
 }
 
 function readJson(file, fallback) {
