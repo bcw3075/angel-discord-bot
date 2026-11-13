@@ -35,7 +35,7 @@ test("Angel looks the rule up, then answers through the answer tool", async () =
   assert.equal(last.messages.length, 5, "question, then two rounds of tool use and results");
   assert.equal(last.messages[2].content[0].type, "tool_result");
   assert.equal(last.messages[2].content[0].tool_use_id, "t1");
-  assert.equal(last.system[0].cache_control.type, "ephemeral", "the system prompt is cached");
+  assert.deepEqual(last.system[0].cache_control, { type: "ephemeral" }, "the system prompt is cached, 5 minutes unless asked");
   assert.equal(last.tool_choice, undefined, "not forced before the last round");
   assert.match(claude.requests[0].messages[0].content, /Mira said to you: "What does grabbed do\?"/);
   assert.match(claude.requests[0].messages[0].content, /The ogre grabs you/);
@@ -92,11 +92,14 @@ test("the typed copy names who asked, links the pages and stays under 2,000 char
 
 test("the Claude client retries overload, reports other errors plainly, and prices calls", async () => {
   const sleeps = [];
-  const f = scriptedFetch([{ status: 529, body: { error: { message: "Overloaded" } } }, { body: { content: [], usage: { input_tokens: 1e6, output_tokens: 1e5, cache_read_input_tokens: 1e6, cache_creation_input_tokens: 1e6 } } }, { status: 400, body: { error: { message: "max_tokens too big" } } }]);
+  const usage = { input_tokens: 1e6, output_tokens: 1e5, cache_read_input_tokens: 1e6, cache_creation_input_tokens: 2e6, cache_creation: { ephemeral_5m_input_tokens: 1e6, ephemeral_1h_input_tokens: 1e6 } };
+  const f = scriptedFetch([{ status: 529, body: { error: { message: "Overloaded" } } }, { body: { content: [], usage } }, { status: 400, body: { error: { message: "max_tokens too big" } } }]);
   const c = new Claude({ apiKey: "sk", prices: { m: [2, 2.5, 0.1, 10] }, fetchImpl: f, sleep: async ms => sleeps.push(ms) });
   await c.create({ model: "m" });
   assert.equal(sleeps.length, 1);
-  assert.ok(Math.abs(c.spent - (2 + 2.5 + 0.1 + 1)) < 1e-9);
+  assert.ok(Math.abs(c.spent - (2 + 2.5 + 4 + 0.1 + 1)) < 1e-9, "a 1-hour write is twice the input price, a 5-minute one 1.25 times");
+  assert.ok(Math.abs(c.cost("m", { cache_creation_input_tokens: 1e6 }) - 4) < 1e-9, "writes of unknown kind count at the dearer rate");
+  assert.ok(Math.abs(new Claude({ prices: { m: [2, 2.5, 0.1, 10, 3] } }).cost("m", { cache_creation: { ephemeral_1h_input_tokens: 1e6 } }) - 3) < 1e-9, "a fifth price wins");
   assert.equal(f.calls[0].init.headers["x-api-key"], "sk");
   await assert.rejects(c.create({ model: "m" }), /Claude answered 400: max_tokens too big/);
   assert.equal(c.cost("unknown", { input_tokens: 5 }), 0);
@@ -112,4 +115,31 @@ test("a timed-out Claude call is not sent again; a failed answer still reports w
   const err = await answerQuestion({ claude, aon: fakeAon, model: "m", system: "S", conversation: "", question: "q", asker: "A" }).catch(e => e);
   assert.match(err.message, /no more replies/);
   assert.ok(Math.abs(err.dollars - 0.01) < 1e-9, "the round that ran is counted");
+});
+
+test("with the 1-hour setting every round asks Claude to keep the prompt for an hour", async () => {
+  const claude = fakeClaude([
+    { content: [{ type: "tool_use", id: "t1", name: "aon_search", input: { query: "grabbed" } }], usage: { cache_creation_input_tokens: 6000 } },
+    { content: [{ type: "tool_use", id: "t2", name: "answer", input: { say: "Held in place.", sources: [] } }], usage: { cache_read_input_tokens: 6000 } },
+  ]);
+  const r = await answerQuestion({ claude, aon: fakeAon, model: "m", system: "SYS", conversation: "", question: "Grabbed?", asker: "Mira", cacheTtl: "1h" });
+  for (const q of claude.requests) assert.deepEqual(q.system[0].cache_control, { type: "ephemeral", ttl: "1h" });
+  assert.deepEqual(r.cache, { written: 6000, read: 6000 }, "what npm run ask reports");
+});
+
+test("the bot passes its cache setting through to the answering calls (1 hour by default)", async () => {
+  const { buildServices } = await import("../src/services.mjs");
+  const { DEFAULTS } = await import("../src/config.mjs");
+  assert.equal(DEFAULTS.answerCacheTtl, "1h");
+  const os = await import("node:os"), fs = await import("node:fs"), path = await import("node:path");
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "angel-svc-"));
+  const sent = [];
+  const fetchImpl = async (url, init) => {
+    sent.push(JSON.parse(init.body));
+    const body = { content: [{ type: "tool_use", id: "t", name: "answer", input: { say: "Yes.", sources: [] } }], usage: {} };
+    return { ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify(body), json: async () => body };
+  };
+  const services = buildServices({ ...DEFAULTS, anthropicApiKey: "k", deepgramApiKey: "d" }, { fetchImpl, dataDir });
+  await services.answer({ conversation: "", question: "Grabbed?", asker: "Mira", via: "text", gmName: "Dana" });
+  assert.deepEqual(sent[0].system[0].cache_control, { type: "ephemeral", ttl: "1h" });
 });

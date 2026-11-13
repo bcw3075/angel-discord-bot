@@ -87,10 +87,12 @@ async function runTool(aon, use) {
   }
 }
 
-export async function answerQuestion({ claude, aon, model, maxTokens = 1500, system, conversation, question, asker, via = "voice", maxRounds = 6 }) {
+export async function answerQuestion({ claude, aon, model, maxTokens = 1500, system, conversation, question, asker, via = "voice", maxRounds = 6, cacheTtl = "5m" }) {
+  const cacheControl = cacheTtl === "1h" ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" };
   const messages = [{ role: "user", content: userMessage({ conversation, question, asker, via }) }];
   const fetched = [];
   let lookups = 0, dollars = 0;
+  const cache = { written: 0, read: 0 };
   const done = (input, rounds) => {
     const say = String(input?.say ?? "").trim() || "Sorry, I lost my train of thought there. Could you ask me again?";
     let sources = (Array.isArray(input?.sources) ? input.sources : [])
@@ -98,7 +100,7 @@ export async function answerQuestion({ claude, aon, model, maxTokens = 1500, sys
       .map(s => ({ name: String(s.name || "Archives of Nethys").slice(0, 80), url: s.url }));
     if (!sources.length) sources = fetched.slice(0, 3);
     const unique = [...new Map(sources.map(s => [s.url, s])).values()].slice(0, 5);
-    return { say, sources: unique, rounds, lookups, dollars };
+    return { say, sources: unique, rounds, lookups, dollars, cache };
   };
   try {
     return await rounds();
@@ -114,12 +116,14 @@ export async function answerQuestion({ claude, aon, model, maxTokens = 1500, sys
       const res = await claude.create({
         model,
         max_tokens: maxTokens,
-        system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
+        system: [{ type: "text", text: system, cache_control: cacheControl }],
         tools: TOOLS,
         ...(force ? { tool_choice: { type: "tool", name: "answer" } } : {}),
         messages,
       });
       dollars += claude.cost(model, res.usage);
+      cache.written += res.usage?.cache_creation_input_tokens ?? 0;
+      cache.read += res.usage?.cache_read_input_tokens ?? 0;
       const content = res.content ?? [];
       const uses = content.filter(b => b.type === "tool_use");
       const final = uses.find(u => u.name === "answer");

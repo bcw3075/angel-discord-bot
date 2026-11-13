@@ -7,3 +7,4 @@ no-undef
 no-unused-vars
 _mapping
 VoiceReceiver.onUdpMessage
+npm.ps1

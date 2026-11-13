@@ -1,7 +1,7 @@
 /* Angel's voice: Deepgram text to speech. Asked for Opus in an Ogg file, which @discordjs/voice plays as it is
    (StreamType.OggOpus: no FFmpeg and no re-encoding). Deepgram takes at most 2,000 characters a request, so a long
    answer is sent in sentence-sized pieces that play one after another. */
-import { DEEPGRAM } from "./stt.mjs";
+import { DEEPGRAM, deepgramError } from "./stt.mjs";
 
 export const TTS_MAX_CHARS = 1800;
 
@@ -17,7 +17,7 @@ export async function synthesize(text, { apiKey, voice, format = "ogg", fetchImp
     body: JSON.stringify({ text }),
     signal: AbortSignal.timeout(timeoutMs),
   });
-  if (!res.ok) throw new Error(`Deepgram speak answered ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  if (!res.ok) throw await deepgramError("speak", res);
   return Buffer.from(await res.arrayBuffer());
 }
 

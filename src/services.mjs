@@ -25,7 +25,7 @@ export function buildServices(cfg, { fetchImpl = fetch, dataDir = DATA_DIR } = {
     gate: ({ contextText, lastText, bareText }) => gate({ claude, model: cfg.gateModel, contextText, lastText, bareText }),
     /* house rules are read for each question, so an edit to house-rules.md counts at once */
     answer: ({ conversation, question, asker, via, gmName }) => answerQuestion({
-      claude, aon, model: cfg.answerModel, maxTokens: cfg.maxAnswerTokens,
+      claude, aon, model: cfg.answerModel, maxTokens: cfg.maxAnswerTokens, cacheTtl: cfg.answerCacheTtl,
       system: systemPrompt({ houseRules: readHouseRules(), gmName }),
       conversation, question, asker, via,
     }),

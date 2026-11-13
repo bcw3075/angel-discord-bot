@@ -9,13 +9,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Client, GatewayIntentBits, Events } from "discord.js";
-import { loadConfig, ensureDataDir, DATA_DIR } from "./config.mjs";
+import { loadConfig, ensureDataDir, tableFilesReport, fixFor, DATA_DIR } from "./config.mjs";
 import { Claude } from "./claude.mjs";
 import { Aon } from "./aon.mjs";
 import { transcribe } from "./stt.mjs";
 import { synthesize, oggPackets } from "./tts.mjs";
 import { createDecoder, decodePackets } from "./audio.mjs";
-import { inviteUrl } from "./setup.mjs";
+import { inviteUrl, within } from "./setup.mjs";
 import { buildServices } from "./services.mjs";
 import { isIntentRefusal } from "./bot.mjs";
 
@@ -23,7 +23,14 @@ export const VOICES = ["aura-2-thalia-en", "aura-2-andromeda-en", "aura-2-helena
 const SAMPLE = "Hi, I'm Angel. Grab your dice: the rules say you're off-guard, so that's a minus two to your armor class.";
 
 const ok = (what, more = "") => console.log(`  OK    ${what}${more ? ": " + more : ""}`);
-const bad = (what, why) => { console.log(`  FAIL  ${what}: ${why}`); failures++; };
+const note = (what, more) => console.log(`  NOTE  ${what}: ${more}`);
+/* a FAIL line, and on the next line what to do about it when the reason is a known one */
+const bad = (what, why) => {
+  console.log(`  FAIL  ${what}: ${why}`);
+  const fix = fixFor(what.split(" ")[0], why);
+  if (fix) console.log(`        → ${fix}`);
+  failures++;
+};
 let failures = 0;
 
 async function check(cfg) {
@@ -32,6 +39,7 @@ async function check(cfg) {
   const [major, minor] = process.versions.node.split(".").map(Number);
   if (major > 22 || (major === 22 && minor >= 12)) ok("Node.js", process.versions.node);
   else bad("Node.js", `${process.versions.node} is too old; install the current LTS from nodejs.org (22.12 or newer)`);
+  for (const line of tableFilesReport()) (line.level === "ok" ? ok : line.level === "fail" ? bad : note)(line.what, line.text);
 
   if (!cfg.anthropicApiKey) bad("Claude", "no key saved (npm run setup)");
   else {
@@ -78,16 +86,19 @@ async function check(cfg) {
   else {
     let client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
     let content = true;
+    const loginReady = c => {
+      const ready = new Promise(r => c.once(Events.ClientReady, r));
+      return within(30000, c.login(cfg.discordToken).then(() => ready), "Discord didn't answer within 30 seconds (a VPN or firewall can block it)");
+    };
     try {
-      try { await client.login(cfg.discordToken); }
+      try { await loginReady(client); }
       catch (e) {
         if (!isIntentRefusal(e)) throw e;
         content = false;
         client.destroy();
         client = new Client({ intents: [GatewayIntentBits.Guilds] });
-        await client.login(cfg.discordToken);
+        await loginReady(client);
       }
-      await new Promise(r => (client.isReady() ? r() : client.once(Events.ClientReady, r)));
       const guilds = [...client.guilds.cache.values()];
       ok("Discord", `logged in as ${client.user.tag}; in ${guilds.map(g => g.name).join(", ") || "no server yet"}`);
       if (!guilds.length) bad("Discord server", `invite the bot: ${inviteUrl(client.user.id)}`);
@@ -124,9 +135,13 @@ async function ask(cfg, question) {
   console.log(`\n${r.say}\n`);
   for (const s of r.sources) console.log(`  ${s.name}: ${s.url}`);
   console.log(`\n${((Date.now() - started) / 1000).toFixed(1)} s, ${r.lookups} lookup${r.lookups === 1 ? "" : "s"}, about $${r.dollars.toFixed(3)} (${cfg.answerModel}).`);
+  /* a second question within the hour should read the prompt from the cache rather than write it again */
+  console.log(`Prompt cache (${cfg.answerCacheTtl}): ${r.cache.written} tokens written, ${r.cache.read} read.`);
 }
 
-const cfg = loadConfig();
+let cfg;
+try { cfg = loadConfig(); }
+catch (e) { console.log(e.message); process.exit(1); }
 const askAt = process.argv.indexOf("--ask");
 const job = askAt >= 0 ? ask(cfg, process.argv.slice(askAt + 1).join(" ").trim()) : process.argv.includes("--voices") ? voices(cfg) : check(cfg);
 job.catch(e => { console.log(`Failed: ${e.message}`); failures++; }).then(() => process.exit(failures ? 1 : 0));

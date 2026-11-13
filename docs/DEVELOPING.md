@@ -30,6 +30,13 @@ code, comments, tests, fixtures or docs (the privacy scan checks against a priva
   test from that real output. The intent error and the reconnect path were both "verified" from the wrong place once.
 - **A new test is checked by breaking its fix**: undo the fix, see the test fail, put it back. Two tests passed with
   their fix removed (a later guard caught the case; a stand-in never answered) until this was done.
+- **A test waits for what it checks, not for a fixed time**, when the step runs through `setImmediate` or I/O: on a
+  busy machine a short timer can fire first. The voice test for listening again after a close failed 37 times in 60
+  runs four at a time until it waited for the new listen. A wait for a timer the code itself sets is fine (timers
+  fire in order). Before trusting a fix to a test like this, run it many times in parallel.
+- **One review goes to the install path**: setup, `npm run check`, `Start Angel.cmd` and the README, read as the
+  owner meets them on Windows (Command Prompt, Notepad, File Explorer with extensions hidden). The code reviews read
+  the logic and missed all 18 things this found (2026-11-13).
 - Plain fetch, no SDKs: fewer moving parts on the owner's PC.
 - Pinned versions (`--save-exact`). `@discordjs/voice` and `@snazzah/davey` follow Discord's voice encryption: before
   updating them, read their changelogs for receive and DAVE changes, then run the live voice checks.

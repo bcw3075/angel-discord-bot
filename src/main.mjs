@@ -21,12 +21,15 @@ async function main() {
   const services = buildServices(cfg);
   const bot = new AngelBot({ cfg, log, services });
   let stopping = false;
+  /* 3 = stopped on purpose: Start Angel.cmd ends instead of restarting her */
   const shutdown = async sig => {
-    if (stopping) process.exit(0); /* a second Ctrl+C quits at once */
+    /* the day's spending first: closing the window gives only a few seconds before Windows ends the process */
+    try { bot.bookLive(); } catch { /* still stopping */ }
+    if (stopping) { services.aon.flush(); process.exit(3); } /* a second Ctrl+C quits at once */
     stopping = true;
     log.info(`${sig}: ending sessions and logging out (Ctrl+C again to quit at once)`);
-    const limit = new Promise(r => setTimeout(r, 5000).unref());
-    try { await Promise.race([bot.stop(), limit]); } finally { services.aon.flush(); process.exit(0); }
+    const limit = new Promise(r => setTimeout(r, 4000).unref());
+    try { await Promise.race([bot.stop(), limit]); } finally { services.aon.flush(); process.exit(3); }
   };
   /* Ctrl+C, closing the window (SIGHUP on Windows, about 10 s before the process is killed) and Ctrl+Break */
   for (const sig of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"]) process.on(sig, () => shutdown(sig));

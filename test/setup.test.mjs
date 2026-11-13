@@ -4,9 +4,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { angelCommand, typedQuestion, SUBCOMMANDS } from "../src/commands.mjs";
-import { loadConfig, saveConfig, missingSettings, readKeyterms, readSpeakers, writeSpeakers, readHouseRules, DEFAULTS } from "../src/config.mjs";
+import { loadConfig, saveConfig, missingSettings, readKeyterms, readSpeakers, writeSpeakers, readHouseRules, DEFAULTS, tableFilesReport, fixFor, keyLooksWrong } from "../src/config.mjs";
 import { initLog, redact } from "../src/log.mjs";
-import { inviteUrl, INVITE_PERMISSIONS } from "../src/setup.mjs";
+import { inviteUrl, INVITE_PERMISSIONS, within, tokenRefused } from "../src/setup.mjs";
+import { transcribe } from "../src/stt.mjs";
+import { scriptedFetch } from "./helpers.mjs";
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "angel-c-"));
 
@@ -40,7 +42,7 @@ test("config: defaults fill the gaps, prices merge, broken JSON is reported plai
   assert.ok(c.prices["claude-haiku-5-5"], "other prices kept");
   assert.deepEqual(missingSettings(c), ["the Claude API key", "the Deepgram API key"]);
   fs.writeFileSync(f, "{ nope");
-  assert.throws(() => loadConfig(f), /config\.json is not valid JSON/);
+  assert.throws(() => loadConfig(f), /config\.json can't be read: .*Open it in Notepad/);
   fs.writeFileSync(f, "\uFEFF{\"speak\": false}");
   assert.equal(loadConfig(f).speak, false, "a Windows byte-order mark is fine");
 });
@@ -89,4 +91,78 @@ test("a broken speakers.json is reported, not silently treated as empty when abo
   assert.throws(() => readSpeakers(s, { strict: true }), /speakers\.json/);
   fs.writeFileSync(s, "[1,2]");
   assert.throws(() => readSpeakers(s, { strict: true }), /isn't a/);
+});
+
+test("setup saves the settings she can change, but not models and prices, so a new release's reach her", () => {
+  const dir = tmp(), f = path.join(dir, "config.json");
+  saveConfig({ ...DEFAULTS, discordToken: "t", ttsVoice: "aura-2-luna-en" }, f);
+  const saved = JSON.parse(fs.readFileSync(f, "utf8"));
+  for (const k of ["answerModel", "gateModel", "sttModel", "prices", "deepgramPrices", "aonUserAgent"]) assert.equal(k in saved, false, k);
+  assert.equal(saved.discordToken, "t");
+  assert.equal(saved.ttsVoice, "aura-2-luna-en");
+  assert.equal(saved.speak, true, "everyday settings are in the file to edit");
+  saveConfig({ ...DEFAULTS, answerModel: "claude-opus-5-5", prices: { ...DEFAULTS.prices, "claude-opus-5-5": [1, 1, 1, 1] } }, f);
+  const again = JSON.parse(fs.readFileSync(f, "utf8"));
+  assert.equal(again.answerModel, "claude-opus-5-5", "her own choice is kept");
+  assert.deepEqual(Object.keys(again.prices), ["claude-opus-5-5"], "only the price she changed");
+  assert.deepEqual(loadConfig(f).prices["claude-sonnet-5-5"], DEFAULTS.prices["claude-sonnet-5-5"]);
+});
+
+test('settings typed with quote marks keep their kind: "false" is false, "5" is 5', () => {
+  const dir = tmp(), f = path.join(dir, "config.json");
+  fs.writeFileSync(f, JSON.stringify({ speak: "false", saveTranscript: "No", maxSessionDollars: "7.5", ackPhrase: "1" }));
+  const c = loadConfig(f);
+  assert.equal(c.speak, false);
+  assert.equal(c.saveTranscript, false);
+  assert.equal(c.maxSessionDollars, 7.5);
+  assert.equal(c.ackPhrase, "1", "a text setting stays text");
+});
+
+test('files Notepad saved as "Unicode" (UTF-16) read the same as UTF-8 ones', () => {
+  const dir = tmp();
+  const utf16 = (name, text) => { const f = path.join(dir, name); fs.writeFileSync(f, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")])); return f; };
+  assert.equal(loadConfig(utf16("config.json", '{"speak": false}')).speak, false);
+  assert.deepEqual(readKeyterms(utf16("keyterms.txt", "Brightwater\r\nMirefen\r\n")), ["Angel", "Brightwater", "Mirefen"]);
+  assert.equal(readHouseRules(utf16("house-rules.md", "Hero points: 1 a session.")), "Hero points: 1 a session.");
+  assert.equal(readSpeakers(utf16("speakers.json", '{"u1": {"name": "Mira"}}')).u1.name, "Mira");
+});
+
+test("check reports the table files: found, missing, misnamed .txt, broken speakers", () => {
+  const dir = tmp();
+  const files = { houseRules: path.join(dir, "house-rules.md"), keyterms: path.join(dir, "keyterms.txt"), speakers: path.join(dir, "speakers.json") };
+  assert.deepEqual(tableFilesReport(files).map(l => l.level), ["note", "note"], "nothing there: notes, not failures");
+  fs.writeFileSync(files.houseRules + ".txt", "rules");
+  fs.writeFileSync(files.keyterms + ".txt", "Mirefen");
+  fs.writeFileSync(files.speakers, "{ broken");
+  const misnamed = tableFilesReport(files);
+  assert.deepEqual(misnamed.map(l => l.level), ["fail", "fail", "fail"]);
+  assert.match(misnamed[0].text, /house-rules\.md\.txt: rename it/);
+  fs.renameSync(files.houseRules + ".txt", files.houseRules);
+  fs.renameSync(files.keyterms + ".txt", files.keyterms);
+  writeSpeakers({ u1: { name: "Mira" } }, files.speakers);
+  assert.deepEqual(tableFilesReport(files).map(l => [l.level, l.text]), [["ok", "house-rules.md, 5 characters"], ["ok", "keyterms.txt, 1 name"], ["ok", "speakers.json, 1 name"]]);
+});
+
+test("a FAIL in check says what to do for the usual reasons", async () => {
+  assert.match(fixFor("Discord", "An invalid token was provided."), /paste a fresh one/);
+  assert.match(fixFor("Claude", "Claude answered 401: invalid x-api-key"), /Claude key was refused: run npm run setup/);
+  assert.match(fixFor("Deepgram", "Deepgram speak answered 403: Insufficient permissions"), /Deepgram key was refused/);
+  assert.match(fixFor("Claude", "fetch failed"), /internet connection/);
+  assert.equal(fixFor("Archives", "unexpected first result Grab"), "");
+  const f = scriptedFetch([{ status: 401, body: { err_code: "INVALID_AUTH", err_msg: "Invalid credentials." } }]);
+  await assert.rejects(transcribe(Buffer.alloc(10), { apiKey: "k", fetchImpl: f }), /^Error: Deepgram listen answered 401: Invalid credentials\.$/);
+});
+
+test("setup warns about a key that doesn't look like one, and only blames the token when Discord refused it", async () => {
+  assert.equal(keyLooksWrong("anthropicApiKey", "sk-ant-api03-abc"), "");
+  assert.match(keyLooksWrong("anthropicApiKey", "sk-ant-api03-abcsk-ant-api03-abc"), /start with sk-ant- \(once\)/);
+  assert.match(keyLooksWrong("anthropicApiKey", "dg-123"), /sk-ant-/);
+  assert.equal(keyLooksWrong("discordToken", "MTIz.Gabc.def-ghi_jk"), "");
+  assert.match(keyLooksWrong("discordToken", "MTIz.Gabc"), /three parts/);
+  assert.match(keyLooksWrong("deepgramApiKey", "a".repeat(81)), /pasted twice/);
+  assert.match(keyLooksWrong("deepgramApiKey", "abc def"), /space or line break/);
+  assert.equal(tokenRefused(Object.assign(new Error("An invalid token was provided."), { code: "TokenInvalid" })), true);
+  assert.equal(tokenRefused(new Error("getaddrinfo ENOTFOUND discord.com")), false);
+  await assert.rejects(within(10, new Promise(() => {}), "Discord didn't answer"), /Discord didn't answer/);
+  assert.equal(await within(1000, Promise.resolve(5), "no"), 5);
 });

@@ -13,10 +13,17 @@ export class Claude {
     this.calls = 0;
   }
 
+  /* usage.cache_creation splits cache writes into 5-minute and 1-hour ones, which cost different amounts; without
+     the split, every write is priced at the dearer rate, so the spending caps never undercount */
   cost(model, usage = {}) {
     const p = this.prices[model];
     if (!p) return 0;
-    return ((usage.input_tokens ?? 0) * p[0] + (usage.cache_creation_input_tokens ?? 0) * p[1]
+    const hourWrite = p[4] ?? p[0] * 2;
+    const split = usage.cache_creation;
+    const writes = split && typeof split === "object"
+      ? (split.ephemeral_5m_input_tokens ?? 0) * p[1] + (split.ephemeral_1h_input_tokens ?? 0) * hourWrite
+      : (usage.cache_creation_input_tokens ?? 0) * Math.max(p[1], hourWrite);
+    return ((usage.input_tokens ?? 0) * p[0] + writes
       + (usage.cache_read_input_tokens ?? 0) * p[2] + (usage.output_tokens ?? 0) * p[3]) / 1e6;
   }
 

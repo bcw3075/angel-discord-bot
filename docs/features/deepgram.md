@@ -10,7 +10,8 @@ Deepgram: turning each piece of speech into text, and Angel's voice; making answ
 ## Decisions
 - **Deepgram for both listening and Angel's voice** (the owner, 2026-11-12, d-2; the other choices were a free program on her PC using the graphics card, or OpenAI). One account and key; new accounts get $200 of credit; billed per second.
 - Listening: Nova-3 pre-recorded, one request per piece of speech, with the campaign's names as key terms (`keyterms.txt`).
-- Voice: an Aura-2 voice (default `aura-2-thalia-en`; the owner picks from `npm run voices`), asked for as Ogg Opus.
+- Voice: an Aura-2 voice (default `aura-2-thalia-en`; the owner picks from `npm run voices`), asked for as Ogg Opus. The eight voices `npm run voices` plays are all on Deepgram's own catalogue as feminine American Aura-2 English voices (checked 2026-11-13).
+- **Aura-2 on `/v1/speak`, not Flux TTS** (checked 2026-11-13). Deepgram now calls Aura-2 its previous generation and recommends Flux TTS (`/v2/speak`) for new builds, but Aura-2 has no retirement date and `/v1/speak` is unchanged. Flux is built for streaming voice agents (speaking while the text is still being written); Angel speaks a finished answer, so it gains little, and it costs 50% more ($0.045 against $0.030 per 1,000 characters). Revisit if Aura-2 gets a retirement date, or if the owner prefers a Flux voice.
 - **She speaks the whole answer** (the owner, 2026-11-12, d-1: "explain the answer in full in voice as well"), so the spoken copy is the full text minus links and symbols.
 
 ## How it works
@@ -19,6 +20,7 @@ Deepgram: turning each piece of speech into text, and Angel's voice; making answ
 - `chunkText` splits at sentence ends, then commas, then spaces, at most `TTS_MAX_CHARS` (1,800) a piece; the pieces play one after another.
 - `speakable` drops markdown and links and says "2d6" as "2 d 6", "+2" as "plus 2", "-1" as "minus 1", "e.g." as "for example".
 - `oggPackets` reads the packets out of an Ogg file (used by the check and tests).
+- `deepgramError` turns a refusal into a plain line: Deepgram explains it in JSON (`{"err_msg": "Invalid credentials."}`), and the words are kept without the braces, so `npm run check` can say what to do about it.
 
 ## Checks
 - (dg-1) {live} in a real session, ten of the names in `keyterms.txt` said aloud come out spelled right in the transcript.

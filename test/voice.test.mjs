@@ -64,7 +64,9 @@ test("someone who starts again as the old stream closes is listened to again", a
   lib.receiver.speaking.emit("start", "u1");
   lib.receiver.speaking.users.set("u1", Date.now());
   lib.receiver.subscriptions.get("u1").end();
-  await sleep(5);
+  /* the new listen comes a few event-loop turns after the close (setImmediate): wait for it, not for a fixed time,
+     which a busy machine can let run out first */
+  for (let i = 0; i < 100 && lib.receiver.subscribed.length < 2; i++) await sleep(5);
   assert.equal(lib.receiver.subscribed.length, 2);
 });
 

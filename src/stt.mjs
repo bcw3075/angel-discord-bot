@@ -3,6 +3,14 @@
 
 export const DEEPGRAM = "https://api.deepgram.com";
 
+/* Deepgram explains a refusal in JSON ({"err_msg": ...}): keep the words, not the braces */
+export async function deepgramError(what, res) {
+  const body = await res.text();
+  let why = body;
+  try { const j = JSON.parse(body); why = j.err_msg || j.message || j.reason || body; } catch { /* plain text */ }
+  return new Error(`Deepgram ${what} answered ${res.status}: ${String(why).slice(0, 300)}`);
+}
+
 export async function transcribe(wav, { apiKey, model = "nova-3", keyterms = [], fetchImpl = fetch, timeoutMs = 20000 }) {
   const params = new URLSearchParams({ model, language: "en", smart_format: "true", punctuate: "true" });
   for (const term of keyterms) params.append("keyterm", term);
@@ -12,7 +20,7 @@ export async function transcribe(wav, { apiKey, model = "nova-3", keyterms = [],
     body: wav,
     signal: AbortSignal.timeout(timeoutMs),
   });
-  if (!res.ok) throw new Error(`Deepgram listen answered ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  if (!res.ok) throw await deepgramError("listen", res);
   const json = await res.json();
   const alt = json?.results?.channels?.[0]?.alternatives?.[0];
   return {

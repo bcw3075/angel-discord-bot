@@ -15,26 +15,36 @@ port or tunnel is needed.
   listening (speech to text) and Angel's voice.
 
 ## Install
-1. Unzip this folder somewhere permanent, for example C:\AngelBot.
-2. Open a command window in that folder: in File Explorer click the address bar, type `cmd` and press Enter.
+1. Unzip this folder somewhere permanent that OneDrive doesn't sync, for example C:\AngelBot. (Not in Desktop or
+   Documents if OneDrive backs them up: `config.json` will hold your keys.) To avoid Windows asking "Do you want to
+   run this file?" later, first right-click the zip → Properties → tick **Unblock** → OK; if it asks anyway, choose
+   Run.
+2. Open a command window in that folder: in File Explorer click the address bar, type `cmd` and press Enter. Use this
+   Command Prompt for every step below, not PowerShell or "Open in Terminal": PowerShell often refuses to run `npm`
+   ("running scripts is disabled on this system").
 3. Run `npm install`.
 4. **Discord:** https://discord.com/developers/applications → **New Application**, name it **Angel**.
    - **Bot** tab → **Reset Token** → copy the token (you'll paste it in step 5; it's a password, so keep it private).
    - Same tab, under **Privileged Gateway Intents**, switch on **Message Content Intent** and save. (It lets Angel
      see typed "Angel, ..." messages.)
-5. Run `npm run setup` and paste the Discord token, the Claude key and the Deepgram key when asked. Nothing you paste
-   shows on screen. Setup checks the token and prints an **invite link**: open it, pick your server and approve.
-6. Put your table's files beside `package.json` (examples are in `examples/`):
+5. Run `npm run setup` and paste the Discord token, the Claude key and the Deepgram key when asked (right-click
+   pastes in Command Prompt). Nothing you paste shows on screen. Setup checks the token and prints an **invite link**:
+   open it, pick your server and approve. Then run `npm run setup` once more, pressing Enter at each question to keep
+   the keys: now that Angel is in your server, it saves it, so she answers only there.
+6. Put your table's files beside `package.json` (examples are in `examples/`). Check the names: with file extensions
+   hidden, a renamed text file is easily `house-rules.md.txt` (`npm run check` tells you if so):
    - `house-rules.md`: your house rules, in plain words. Angel reads them with every question. Players hear
      everything she says, so keep GM secrets out of it.
    - `keyterms.txt`: your campaign's names, one per line, so the transcriber spells them right.
-7. Run `npm run check`. Every line should say OK. It also saves a sample of Angel's voice as
-   data\check\angel-voice.wav.
+7. Run `npm run check`. Every line should say OK (a NOTE is only for your information); a FAIL says what to do on
+   the line under it. It also saves a sample of Angel's voice as data\check\angel-voice.wav.
 8. Optional: `npm run voices` saves samples of eight voices in the data\voices folder. Put the one you like as `"ttsVoice"`
    in `config.json`.
 9. Optional: `npm run ask -- "can I grapple with a shield in my hand?"` asks one question without Discord, so you can
    judge her answers and see what each costs.
-10. Start Angel: double-click **Start Angel.cmd** (it restarts her if she ever stops). To start her when you log in:
+10. Start Angel: double-click **Start Angel.cmd** (it restarts her if she ever crashes). To stop her, close the window,
+    or press Ctrl+C once: she ends the session, posts the summary and the window closes (answer Y if Windows asks
+    "Terminate batch job?"). To start her when you log in:
     Task Scheduler → Create Basic Task → "Angel" → **When I log on** → Start a program →
     "C:\AngelBot\Start Angel.cmd" (with the quotes), start in C:\AngelBot.
 
@@ -49,7 +59,8 @@ port or tunnel is needed.
   short summary with the cost.
 
 ## Where things are kept
-- `config.json`: your keys and settings (written by setup). Never share it.
+- `config.json`: your keys and settings (written by setup). Never share it. If other people have their own accounts on
+  this PC, keep the folder inside your user folder (for example C:\Users\<you>\AngelBot) so they can't read it.
 - data\sessions\<date>\transcript.md: each session's transcript, text only. No audio is ever saved.
 - data\angel.log: what Angel did, with the keys blanked out.
 - data\spend.json: what today has cost so far, so the daily cap holds across restarts and crashes.
@@ -57,21 +68,26 @@ port or tunnel is needed.
   whoever can manage the Discord server counts as the GM.
 
 ## Settings in config.json
-Change them with Notepad, then restart Angel. The most useful:
+Change them with Notepad, then restart Angel. `true`, `false` and numbers go without quote marks. The most useful:
 - `ttsVoice`: Angel's voice (`npm run voices` to hear them).
 - `speak`: `false` makes her type only.
 - `ackPhrase`: what she says at once while looking something up (`""` for nothing).
 - `maxSessionDollars`: she stops listening and answering for the rest of a session past this (default 5).
 - `maxDailyDollars`: the same for the whole day, everything included (default 10).
-- `guildId`: set by setup when she's in one server; she answers only there.
-- `answerModel`: `claude-sonnet-5-5` by default; `claude-opus-5-5` is slower and costs about twice as much.
+- `guildId`: the server she answers in, saved by setup when she's in exactly one (step 5). Empty means every server
+  she's in.
+- `answerModel`: `claude-sonnet-5-5` by default; `claude-opus-5-5` is slower and costs about twice as much. This one
+  isn't in the file until you add it: a new line such as `"answerModel": "claude-opus-5-5",` after the first `{`.
 - `memoryMinutes`: how much of the conversation she's given with a question (default 15).
+- `answerCacheTtl`: how long Claude keeps her instructions and your house rules ready between questions: `"1h"`
+  (default, cheapest when questions come more than 5 minutes apart) or `"5m"`.
 - `saveTranscript`: `false` stops her writing the transcript file (she still remembers the conversation while the
   session runs). Handy if another bot, such as Archivist, already keeps your session record.
 
 ## Updating
 Unzip the new version over the folder, keeping `config.json`, `data\`, `house-rules.md`, `keyterms.txt` and
-`speakers.json`. Run `npm install`, then restart Angel.
+`speakers.json` (the zip holds none of them, so nothing of yours is overwritten). Run `npm install`, then restart
+Angel. The models and prices come with each version, unless you've put your own in `config.json`.
 
 ## Costs
 About $2 for a four-hour session: listening is about 35 cents an hour of talk, each answer about 2 to 3 cents on
