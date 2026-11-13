@@ -24,7 +24,7 @@ function fakeLib() {
   });
   Object.assign(lib, {
     receiver, connection, player,
-    VoiceConnectionStatus: { Ready: "ready", Disconnected: "disconnected", Signalling: "signalling", Connecting: "connecting" },
+    VoiceConnectionStatus: { Ready: "ready", Disconnected: "disconnected", Signalling: "signalling", Connecting: "connecting", Destroyed: "destroyed" },
     EndBehaviorType: { AfterSilence: 1 },
     NoSubscriberBehavior: { Pause: "pause" },
     StreamType: { OggOpus: "ogg/opus" },
@@ -112,4 +112,21 @@ test("the real library reads an Ogg Opus clip into Opus packets for Discord (no 
   for await (const p of res.playStream) packets.push(p);
   assert.ok(packets.length > 90, `audio packets come out (${packets.length})`);
   assert.ok(packets.every(p => Buffer.isBuffer(p) && p.length > 0 && p.length < 1500));
+});
+
+test("a reconnect that never gets back to Ready, or a destroyed connection, tells the session it's lost", async () => {
+  const lib = fakeLib();
+  let readyCalls = 0;
+  lib.entersState = async (c, status) => { if (status === "ready") { readyCalls++; if (readyCalls > 1) throw new Error("timeout"); } return c; };
+  const v = new VoiceLink({ channel, lib, log: quiet });
+  await v.join();
+  let lost = 0;
+  v.on("lost", () => lost++);
+  await v.onDisconnected();
+  assert.equal(lost, 1, "signalled again but never Ready");
+  lib.connection.emit("destroyed");
+  assert.equal(lost, 2);
+  v.leave();
+  lib.connection.emit("destroyed");
+  assert.equal(lost, 2, "our own leave is not a loss");
 });

@@ -48,6 +48,17 @@ export class Transcript {
     return this.lines.slice(Math.max(0, (i < 0 ? this.lines.length : i + 1) - n), i < 0 ? undefined : i + 1);
   }
 
+  /* At the end of the session, write transcript.md again in the order things were said (it is appended in the
+     order the text arrived, which can be a few seconds out). */
+  close() {
+    if (!this.dir || this.closedFile) return;
+    this.closedFile = true;
+    try {
+      const head = fs.readFileSync(this.md, "utf8").split("\n").find(l => l.startsWith("# ")) ?? "# Session transcript";
+      fs.writeFileSync(this.md, `${head}\n\n${this.lines.map(l => `[${clock(l.at)}] ${label(l)}: ${l.text}`).join("\n")}\n`);
+    } catch { /* the transcript file is a convenience */ }
+  }
+
   static format(lines) {
     return lines.map(l => `[${clock(l.at)}] ${label(l)}${l.kind === "text" ? " (typed)" : ""}: ${l.text}`).join("\n");
   }

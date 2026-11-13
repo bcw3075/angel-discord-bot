@@ -41,7 +41,7 @@ test("config: defaults fill the gaps, prices merge, broken JSON is reported plai
   assert.deepEqual(missingSettings(c), ["the Claude API key", "the Deepgram API key"]);
   fs.writeFileSync(f, "{ nope");
   assert.throws(() => loadConfig(f), /config\.json is not valid JSON/);
-  fs.writeFileSync(f, "﻿{\"speak\": false}");
+  fs.writeFileSync(f, "\uFEFF{\"speak\": false}");
   assert.equal(loadConfig(f).speak, false, "a Windows byte-order mark is fine");
 });
 
@@ -70,4 +70,23 @@ test("the invite link asks for the bot and slash commands with just the permissi
   assert.equal(u.searchParams.get("scope"), "bot applications.commands");
   assert.equal(u.searchParams.get("permissions"), String(INVITE_PERMISSIONS));
   assert.equal(INVITE_PERMISSIONS, 36785216n);
+});
+
+test('typed "Angel" needs a comma, colon or question mark after it (or "hey Angel")', () => {
+  assert.equal(typedQuestion("Angel wings sprout from her back", "1").asked, false);
+  assert.equal(typedQuestion("angel statue in the hall", "1").asked, false);
+  assert.equal(typedQuestion("hey angel what's flanking", "1").question, "what's flanking");
+  assert.equal(typedQuestion("Angel: grapple rules?", "1").question, "grapple rules?");
+  assert.equal(typedQuestion("Angel? quick one", "1").asked, true);
+});
+
+test("a broken speakers.json is reported, not silently treated as empty when about to be written", () => {
+  const dir = tmp(), s = path.join(dir, "speakers.json");
+  fs.writeFileSync(s, '{ "1": { "name": "GM" }, oops }');
+  const errors = [];
+  assert.deepEqual(readSpeakers(s, { onError: e => errors.push(e.message) }), {});
+  assert.equal(errors.length, 1);
+  assert.throws(() => readSpeakers(s, { strict: true }), /speakers\.json/);
+  fs.writeFileSync(s, "[1,2]");
+  assert.throws(() => readSpeakers(s, { strict: true }), /isn't a/);
 });

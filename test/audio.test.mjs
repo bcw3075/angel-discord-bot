@@ -54,3 +54,15 @@ test("WAV encoding clips out-of-range samples and writes the header sizes", () =
   assert.equal(wav.readInt16LE(46), -32768);
   assert.equal(levelDb(new Float32Array(10)), -Infinity);
 });
+
+test("an Opus frame longer than 20 ms decodes whole instead of losing the piece", async () => {
+  const fs = await import("node:fs");
+  const { oggPackets } = await import("../src/tts.mjs");
+  /* half a second at 40 ms a frame, made with ffmpeg's libopus (-frame_duration 40) */
+  const forty = oggPackets(fs.readFileSync(new URL("./fixtures/tone-40ms.ogg", import.meta.url))).slice(2);
+  const d = createDecoder();
+  const { pcm, bad } = decodePackets(d, [...forty, ...tonePackets(0.04)]);
+  d.delete();
+  assert.equal(bad, 0);
+  assert.equal(pcm.length, (forty.length * 1920 + 2 * 960) * 2, "each 40 ms frame and the two 20 ms frames, whole");
+});

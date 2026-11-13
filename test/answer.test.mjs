@@ -101,3 +101,15 @@ test("the Claude client retries overload, reports other errors plainly, and pric
   await assert.rejects(c.create({ model: "m" }), /Claude answered 400: max_tokens too big/);
   assert.equal(c.cost("unknown", { input_tokens: 5 }), 0);
 });
+
+test("a timed-out Claude call is not sent again; a failed answer still reports what its rounds cost", async () => {
+  let calls = 0;
+  const slow = async () => { calls++; const e = new Error("The operation was aborted due to timeout"); e.name = "TimeoutError"; throw e; };
+  const c = new Claude({ apiKey: "k", prices: { m: [1, 1, 1, 1] }, fetchImpl: slow, sleep: async () => {} });
+  await assert.rejects(c.create({ model: "m" }), /took longer than 45 s/);
+  assert.equal(calls, 1);
+  const claude = fakeClaude([{ content: [{ type: "tool_use", id: "s", name: "aon_search", input: { query: "q" } }], usage: {} }]);
+  const err = await answerQuestion({ claude, aon: fakeAon, model: "m", system: "S", conversation: "", question: "q", asker: "A" }).catch(e => e);
+  assert.match(err.message, /no more replies/);
+  assert.ok(Math.abs(err.dollars - 0.01) < 1e-9, "the round that ran is counted");
+});

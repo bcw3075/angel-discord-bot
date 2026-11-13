@@ -47,6 +47,8 @@ export const DEFAULTS = Object.freeze({
   followUpMs: 12000,
   /* Angel stops listening and answering for the rest of the session past this */
   maxSessionDollars: 5,
+  /* and for the rest of the day past this, counting everything (sessions and typed questions outside one) */
+  maxDailyDollars: 10,
   leaveWhenEmptySeconds: 60,
   /* dollars per million tokens: [fresh input, 5-minute cache write, cache read, output] (Claude pricing, checked 2026-11-12) */
   prices: {
@@ -62,7 +64,7 @@ export const DEFAULTS = Object.freeze({
 export function loadConfig(file = CONFIG_PATH) {
   let saved = {};
   if (fs.existsSync(file)) {
-    const text = fs.readFileSync(file, "utf8").replace(/^﻿/, "");
+    const text = fs.readFileSync(file, "utf8").replace(/^\uFEFF/, "");
     try { saved = JSON.parse(text); }
     catch (e) { throw new Error(`${path.basename(file)} is not valid JSON (${e.message}). Fix it or run npm run setup again.`); }
   }
@@ -84,13 +86,13 @@ export function missingSettings(cfg) {
 
 /* house-rules.md: player-safe rules text, given to Angel with every question. */
 export function readHouseRules(file = LOCAL_FILES.houseRules) {
-  return fs.existsSync(file) ? fs.readFileSync(file, "utf8").replace(/^﻿/, "").trim() : "";
+  return fs.existsSync(file) ? fs.readFileSync(file, "utf8").replace(/^\uFEFF/, "").trim() : "";
 }
 
 /* keyterms.txt: one name per line (places, people, homebrew words) so the transcriber spells them right. # starts a comment. */
 export function readKeyterms(file = LOCAL_FILES.keyterms) {
   const terms = fs.existsSync(file)
-    ? fs.readFileSync(file, "utf8").replace(/^﻿/, "").split(/\r?\n/).map(l => l.replace(/#.*/, "").trim()).filter(Boolean)
+    ? fs.readFileSync(file, "utf8").replace(/^\uFEFF/, "").split(/\r?\n/).map(l => l.replace(/#.*/, "").trim()).filter(Boolean)
     : [];
   /* Angel's own name first; Deepgram allows a limited number of terms, so keep the list short */
   return [...new Set(["Angel", ...terms])].slice(0, 100);
@@ -98,10 +100,18 @@ export function readKeyterms(file = LOCAL_FILES.keyterms) {
 
 /* speakers.json: { "<discord user id>": { "name": "Mira", "role": "player" | "GM" } }.
    `/angel iam` writes a player's own entry; the GM can edit the file by hand. */
-export function readSpeakers(file = LOCAL_FILES.speakers) {
+export function readSpeakers(file = LOCAL_FILES.speakers, { strict = false, onError = null } = {}) {
   if (!fs.existsSync(file)) return {};
-  try { return JSON.parse(fs.readFileSync(file, "utf8").replace(/^﻿/, "")); }
-  catch { return {}; }
+  try {
+    const v = JSON.parse(fs.readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
+    if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error("it isn't a { ... } of names");
+    return v;
+  } catch (e) {
+    /* strict: the caller is about to write the file and must not wipe a hand-edited one with a typo in it */
+    if (strict) throw new Error(`speakers.json: ${e.message}`);
+    onError?.(e);
+    return {};
+  }
 }
 
 export function writeSpeakers(speakers, file = LOCAL_FILES.speakers) {

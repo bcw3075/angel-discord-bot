@@ -19,12 +19,13 @@ export function angelCommand() {
     .toJSON();
 }
 
-/* "Angel, …" or "hey Angel …" at the start of a typed message: the rest is the question. */
+/* "Angel, …" (her name, then a comma, colon or question mark) or "hey Angel …" at the start of a typed message:
+   the rest is the question. Plain "Angel wings sprout from her back" is table chat, not a question. */
 export function typedQuestion(content, botId) {
   let text = String(content ?? "");
   const mentioned = botId ? new RegExp(`<@!?${botId}>`).test(text) : false;
   if (botId) text = text.replace(new RegExp(`<@!?${botId}>`, "g"), " ").trim();
-  const prefix = /^\W*(?:hey|hi|ok(?:ay)?|so)?[\s,]*angel(?![a-z'])[\s,:;!?.-]*/i;
+  const prefix = /^\W*(?:(?:hey|hi|ok(?:ay)?|so)[\s,]+angel(?![a-z'])[\s,:;!?.-]*|angel(?![a-z'])\s*[,:;!?]+\s*)/i;
   const named = prefix.test(text);
   if (named) text = text.replace(prefix, "");
   text = text.trim();

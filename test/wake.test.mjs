@@ -46,3 +46,16 @@ test("when the gate model can't be reached the fallback still decides", async ()
   assert.match(d.error, /400/);
   assert.equal(gateUser("", "x").includes("(none)"), true);
 });
+
+test("a stop is her name first and little after it; a question or the story after a stop word is not", () => {
+  for (const t of ["Angel, never mind that, how does flanking work?", "Angel, enough damage to drop it?", "Angel stop. What does stunned do?", "the angel, quiet as death, raises its sword"]) assert.equal(isStopRequest(t), false, t);
+  for (const t of ["okay Angel, stop", "Angel, that's enough, thank you", "Angel stop please", "Angel, stop!"]) assert.equal(isStopRequest(t), true, t);
+});
+
+test("when the check can't be reached, the fallback reads what was said, not the speaker's name before it", async () => {
+  const claude = new Claude({ apiKey: "k", prices: {}, fetchImpl: scriptedFetch([{ status: 529, body: "busy" }, { status: 529, body: "busy" }, { status: 529, body: "busy" }]), sleep: async () => {} });
+  const d = await gate({ claude, model: "h", contextText: "", lastText: "Mira: Angel, what does grabbed do?", bareText: "Angel, what does grabbed do?" });
+  assert.equal(d.fallback, true);
+  assert.equal(d.toAngel, true);
+  assert.match(d.error, /529/);
+});

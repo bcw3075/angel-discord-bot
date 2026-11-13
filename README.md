@@ -36,12 +36,12 @@ port or tunnel is needed.
    judge her answers and see what each costs.
 10. Start Angel: double-click **Start Angel.cmd** (it restarts her if she ever stops). To start her when you log in:
     Task Scheduler → Create Basic Task → "Angel" → **When I log on** → Start a program →
-    C:\AngelBot\Start Angel.cmd, start in C:\AngelBot.
+    "C:\AngelBot\Start Angel.cmd" (with the quotes), start in C:\AngelBot.
 
 ## At the table
 - Join your voice channel, then type `/angel join` in the text channel where answers should go. Angel joins, tells
   everyone she's transcribing, and starts listening.
-- Ask her by name: **"Angel, ..."**. Or type `@Angel ...`, `Angel, ...` or `/angel ask`.
+- Ask her by name: **"Angel, ..."**. Or type `@Angel ...`, `Angel, ...` (with the comma) or `/angel ask`.
 - She answers in voice and in the text channel. **"Angel, stop"** or `/angel stop` cuts her off.
 - `/angel iam` sets the character name the transcript uses for you. `/angel optout` stops her transcribing your
   voice (run it again to undo). `/angel status` shows what this session has cost so far.
@@ -61,6 +61,8 @@ Change them with Notepad, then restart Angel. The most useful:
 - `speak`: `false` makes her type only.
 - `ackPhrase`: what she says at once while looking something up (`""` for nothing).
 - `maxSessionDollars`: she stops listening and answering for the rest of a session past this (default 5).
+- `maxDailyDollars`: the same for the whole day, everything included (default 10).
+- `guildId`: set by setup when she's in one server; she answers only there.
 - `answerModel`: `claude-sonnet-5-5` by default; `claude-opus-5-5` is slower and costs about twice as much.
 - `memoryMinutes`: how much of the conversation she's given with a question (default 15).
 - `saveTranscript`: `false` stops her writing the transcript file (she still remembers the conversation while the

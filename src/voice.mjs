@@ -37,6 +37,7 @@ export class VoiceLink extends EventEmitter {
       throw new Error("Couldn't connect to the voice channel within 30 seconds. Check that Angel may Connect and Speak there.");
     }
     this.connection.on(lib.VoiceConnectionStatus.Disconnected, () => this.onDisconnected());
+    this.connection.on(lib.VoiceConnectionStatus.Destroyed, () => { if (!this.closed) { this.log.warn("voice connection destroyed"); this.emit("lost"); } });
     this.player = lib.createAudioPlayer({ behaviors: { noSubscriber: lib.NoSubscriberBehavior.Pause } });
     this.player.on("error", e => this.log.warn(`voice playback error: ${e.message}`));
     this.connection.subscribe(this.player);
@@ -74,6 +75,8 @@ export class VoiceLink extends EventEmitter {
         lib.entersState(this.connection, lib.VoiceConnectionStatus.Signalling, 5000),
         lib.entersState(this.connection, lib.VoiceConnectionStatus.Connecting, 5000),
       ]);
+      /* reconnecting: it must get back to Ready, or Angel sits there deaf */
+      await lib.entersState(this.connection, lib.VoiceConnectionStatus.Ready, 20000);
     } catch {
       if (!this.closed) { this.log.warn("voice connection lost"); this.emit("lost"); }
     }

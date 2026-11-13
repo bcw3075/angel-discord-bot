@@ -47,7 +47,7 @@ function interaction(w, sub, { user = "p1", strings = {}, inVoice = true } = {})
     user: { id: user }, member: { voice: { channel: inVoice ? w.vc : null } },
     reply: async r => { i.replies.push(r); },
     deferReply: async () => { i.deferred = true; },
-    editReply: async t => { i.edits.push(t); },
+    editReply: async t => { i.edits.push(typeof t === "string" ? t : t.content); if (typeof t === "object") i.lastEditOptions = t; },
   };
   return i;
 }
@@ -112,6 +112,7 @@ test("/angel ask is answered in the reply, with or without a session; the GM is 
   assert.equal(answers[0].question, "what's flanking?");
   assert.equal(answers[0].gmName, "Dana", "the server owner is the GM when speakers.json names none");
   assert.match(i.edits.at(-1), /^\*\*Dana asked:\*\* what's flanking\?\nAnswer: what's flanking\?/);
+  assert.deepEqual(i.lastEditOptions.allowedMentions, { parse: [], repliedUser: false }, "an echoed question can't ping anyone");
   await bot.onInteraction(interaction(w, "join"));
   const j = interaction(w, "ask", { strings: { question: "and off-guard?" } });
   await bot.onInteraction(j);
@@ -183,4 +184,69 @@ test("she leaves on her own when the voice channel empties, and comes back to no
   bot.onVoiceState({}, { guild: w.guild, id: "angel1", channelId: null });
   await sleep(5);
   assert.equal(bot.sessions.has("g1"), false, "Angel disconnected by someone ends the session");
+});
+
+test('a typed "Angel, stop" stops her and is not answered', async () => {
+  const w = world(), { bot, answers } = makeBot();
+  await bot.onInteraction(interaction(w, "join"));
+  const replies = [];
+  await bot.onMessage({ author: { id: "p1", bot: false }, guild: w.guild, channelId: "tc1", content: "Angel, stop", reply: async r => replies.push(r) });
+  assert.equal(FakeVoiceLink.made.at(-1).stopped, true);
+  assert.equal(answers.length, 0);
+  assert.equal(replies.length, 0);
+});
+
+test("with guildId set, other servers get nothing (every answer costs money)", async () => {
+  const w = world(), { bot, answers } = makeBot({ guildId: "home" });
+  const i = interaction(w, "ask", { strings: { question: "q" } });
+  await bot.onInteraction(i);
+  assert.match(i.replies[0].content, /only work in my home server/);
+  await bot.onMessage({ author: { id: "p1", bot: false }, guild: w.guild, channelId: "tc1", content: "Angel, flanking?", reply: async () => {} });
+  assert.equal(answers.length, 0);
+});
+
+test("two /angel join at once make one session", async () => {
+  const w = world(), { bot } = makeBot();
+  const a = interaction(w, "join"), b = interaction(w, "join");
+  const before = FakeVoiceLink.made.length;
+  await Promise.all([bot.onInteraction(a), bot.onInteraction(b)]);
+  assert.equal(FakeVoiceLink.made.length - before, 1);
+  assert.match(b.replies[0].content, /already on my way in/);
+});
+
+test("a broken speakers.json is never written over by /angel iam", async () => {
+  const w = world(), { bot } = makeBot();
+  fs.writeFileSync(bot.speakersFile, '{ "gm": { "name": "Dana", "role": "GM" }, typo');
+  const i = interaction(w, "iam", { strings: { name: "Mira" } });
+  await bot.onInteraction(i);
+  assert.match(i.replies[0].content, /has a mistake in it/);
+  assert.match(fs.readFileSync(bot.speakersFile, "utf8"), /typo/, "left as it was");
+  const named = interaction(w, "iam", { user: "p1", strings: { name: "Mira (GM)" } });
+  fs.unlinkSync(bot.speakersFile);
+  await bot.onInteraction(named);
+  assert.equal(bot.speakerOf(w.guild, "p1").name, "Mira GM", "brackets are dropped, so nobody can label themselves GM");
+});
+
+test("the daily cap: typed questions outside a session are refused past it, and what they cost is kept for the day", async () => {
+  const w = world(), { bot, answers } = makeBot({ maxDailyDollars: 0.015 });
+  const ask = q => { const i = interaction(w, "ask", { strings: { question: q } }); return bot.onInteraction(i).then(() => i); };
+  await ask("one");
+  const second = await ask("two");
+  assert.equal(answers.length, 2, "the first two fit (0.01 each, the cap is checked before)");
+  const third = await ask("three");
+  assert.equal(answers.length, 2);
+  assert.match(third.edits.at(-1), /today's spending cap/);
+  assert.ok(Math.abs(bot.spentToday() - 0.02) < 1e-9);
+  assert.equal(JSON.parse(fs.readFileSync(bot.spendFile, "utf8")).dollars.toFixed(2), "0.02", "kept across restarts");
+  const join = interaction(w, "join");
+  await bot.onInteraction(join);
+  assert.match(join.replies[0].content, /today's spending cap/);
+  void second;
+});
+
+test("Discord's refusal of the Message Content intent is recognised by its real error", async () => {
+  const { isIntentRefusal } = await import("../src/bot.mjs");
+  const { DiscordjsError, DiscordjsErrorCodes } = await import("discord.js");
+  assert.equal(isIntentRefusal(new DiscordjsError(DiscordjsErrorCodes.DisallowedIntents)), true);
+  assert.equal(isIntentRefusal(new Error("An invalid token was provided.")), false);
 });

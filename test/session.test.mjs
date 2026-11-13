@@ -180,3 +180,64 @@ test("with speaking turned off she only types", async () => {
   assert.equal(voice.spoken.length, 0);
   assert.equal(posted[0].edits.length, 1);
 });
+
+test('"Angel, stop" while she looks something up: the answer is typed but not spoken, and the next queued question is dropped', async () => {
+  let release;
+  const { s, voice, posted } = setup({ heard: ["Angel, what's grabbed?", "Angel, and restrained?", "Angel, never mind"], gate: ({ bareText }) => ({ toAngel: true, complete: true, stop: false, question: bareText }) });
+  s.answer = q => new Promise(r => { release = () => r({ say: `Answer to: ${q.question}`, sources: [], dollars: 0.01 }); });
+  await s.start();
+  speech(voice, "p1"); await settle();
+  speech(voice, "p1"); await settle();
+  assert.equal(posted.length, 1, "the second waits its turn");
+  speech(voice, "p1"); await settle();
+  assert.equal(voice.stops, 1);
+  release(); await settle(); await s.answering;
+  assert.match(posted[0].edits[0], /Answer to: Angel, what's grabbed\?/, "the first answer is still typed");
+  assert.deepEqual(voice.spoken.map(String), ["clip:One sec, let me check."], "but not spoken");
+  assert.equal(posted.length, 1, "the queued question was dropped, not answered");
+});
+
+test("what the speaker says while the check runs is kept as the rest of the question", async () => {
+  let open;
+  const { s, voice, asked } = setup({ heard: ["Hey Angel, quick one", "what does off-guard do?"] });
+  s.gate = () => new Promise(r => { open = () => r({ toAngel: true, complete: false, stop: false, question: "", dollars: 0 }); });
+  await s.start();
+  speech(voice, "p1"); await settle();
+  speech(voice, "p1"); await settle();
+  open(); await settle(); await s.answering;
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].question, "Hey Angel, quick one what does off-guard do?");
+});
+
+test("the check is given the bare words for its fallback, and a failed check is logged", async () => {
+  const warnings = [];
+  const { s, voice, gates } = setup({ heard: ["Angel, what's a DC?"], gate: () => ({ toAngel: false, complete: true, stop: false, question: "", error: "Claude answered 529" }) });
+  s.log = { ...s.log, warn: m => warnings.push(m) };
+  await s.start();
+  speech(voice, "p1"); await settle();
+  assert.equal(gates[0].bareText, "Angel, what's a DC?");
+  assert.equal(gates[0].lastText, "Mira: Angel, what's a DC?");
+  assert.ok(warnings.some(w => /check failed \(Claude answered 529\)/.test(w)));
+});
+
+test("what a failed answer's rounds cost is counted; the cap is checked again before each answer", async () => {
+  const { s, voice, posted } = setup({ heard: ["Angel, one?", "Angel, two?"], cfg: { maxSessionDollars: 0.5 } });
+  s.answer = async () => { const e = new Error("boom"); e.dollars = 0.6; throw e; };
+  await s.start();
+  speech(voice, "p1"); await settle();
+  speech(voice, "p1"); await settle(); await s.answering;
+  assert.ok(s.costs.claude >= 0.6, "the failed rounds count");
+  assert.equal(s.status().capped, true);
+  assert.equal(posted.filter(p => /Looking it up/.test(p.text)).length, 1, "the second question isn't looked up past the cap");
+});
+
+test("the bot's daily cap stops a session too", async () => {
+  let over = false;
+  const { s, voice, gates, posted } = setup({ heard: ["Angel, one?"] });
+  s.dailyOver = () => over;
+  await s.start();
+  over = true;
+  speech(voice, "p1"); await settle();
+  assert.equal(gates.length, 0);
+  assert.match(posted[0].text, /today's spending cap/);
+});

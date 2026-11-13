@@ -10,19 +10,24 @@ export function createDecoder() {
   return new OpusScript(RATE_IN, 2, OpusScript.Application.AUDIO);
 }
 
-/* Decode packets into one interleaved stereo Int16 buffer. A packet the decoder rejects becomes 20 ms of silence, so timing holds. */
+/* Decode packets into one interleaved stereo Int16 buffer. A packet the decoder rejects becomes 20 ms of silence, so
+   timing holds. Discord sends 20 ms frames, but any Opus frame length (up to 120 ms) decodes. */
 export function decodePackets(decoder, packets) {
-  const out = new Int16Array(packets.length * FRAME * 2);
-  let at = 0, bad = 0;
+  const parts = [];
+  let total = 0, bad = 0;
   for (const p of packets) {
     let pcm = null;
     try { pcm = decoder.decode(p); } catch { pcm = null; }
-    if (!pcm || pcm.length === 0) { bad++; at += FRAME * 2; continue; }
-    const s = new Int16Array(pcm.buffer, pcm.byteOffset, pcm.length >> 1);
-    out.set(s.subarray(0, Math.min(s.length, out.length - at)), at);
-    at += s.length;
+    const s = pcm && pcm.length ? new Int16Array(pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.length)) : null;
+    if (!s) bad++;
+    const part = s ?? new Int16Array(FRAME * 2);
+    parts.push(part);
+    total += part.length;
   }
-  return { pcm: out.subarray(0, Math.min(at, out.length)), bad };
+  const out = new Int16Array(total);
+  let at = 0;
+  for (const part of parts) { out.set(part, at); at += part.length; }
+  return { pcm: out, bad };
 }
 
 export function stereoToMono(int16) {

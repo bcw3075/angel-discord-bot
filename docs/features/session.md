@@ -9,22 +9,24 @@ One game session from join to leave: speech to transcript, the wake check, answe
 
 ## Decisions
 - A short phrase is spoken at once while she looks something up (`ackPhrase`, default "One sec, let me check."; made once at the start of the session), and a "Looking it up…" placeholder is posted and later replaced with the answer, so the table knows she heard. (Angel's choice.)
-- A spending cap per session (`maxSessionDollars`, default $5): past it she says so once and pays for nothing more until a new session. (Angel's choice, a guard on top of the Console workspace's monthly cap.)
+- A spending cap per session (`maxSessionDollars`, default $5) and one per day for everything the bot does (`maxDailyDollars`, default $10, kept in `data/spend.json`): past either she says so once, and the cap is checked again before every paid step (listening, the check, each answer, its voice), so nothing more is paid for; a typed question is told so. (Angel's choice, a guard on top of the Console workspace's monthly cap.)
+- **Stop means stop** (review M2, 2026-11-13): "Angel, stop" cuts her off, drops questions still waiting their turn (a typed one is told), and an answer still being looked up is typed but not spoken.
 - Questions are answered one at a time, in the order asked; the next answer is worked out while the previous one is still being spoken.
 
 ## How it works
 - All outside parts come in as functions (`voice`, `post`, `stt`, `tts`, `gate`, `answer`, `speakerOf`), so `test/session.test.mjs` runs the whole flow with stand-ins and real Opus packets.
 - `onSpeech`: decoder per speaker → `packetsToWav` (skips short or quiet) → `stt` → `transcript.add` → `onLine`.
-- `onLine`: a stop phrase stops her; a line without her name is only transcript (unless that speaker has a question pending); speech that began in the echo window is ignored; then the gate. "Not complete" keeps the line pending for `followUpMs`.
-- `runAsk`: placeholder → acknowledgement phrase → `answer` with the last `memoryMinutes` of transcript → the placeholder edited to the typed answer → Angel's line in the transcript → the spoken copy queued. A failure gives a short apology instead of silence.
-- Costs: Claude by each call's own usage; listening by billed seconds × (Nova-3 rate + key-term rate when names are given); voice by characters. `status()` and `summaryText()` report them.
+- `onLine`: a stop phrase stops her; a line without her name is only transcript (unless that speaker has a question pending, or a check on their last line is still running, in which case it is kept as the rest of the question); speech that began in the echo window is ignored; then the gate. "Not complete" keeps the line pending for `followUpMs`. A gate that says stop and also found a question (a "?" in the line) stops her and then answers it.
+- `ask` stamps each question with the stop count; `runAsk` drops it if a stop came since, and checks the cap; then placeholder → acknowledgement phrase → `answer` with the last `memoryMinutes` of transcript → the placeholder edited to the typed answer → Angel's line in the transcript → the spoken copy queued. A failure gives a short apology instead of silence, and what its rounds cost is still counted (`answerQuestion` attaches `dollars` to the error).
+- Costs: Claude by each call's own usage; listening by billed seconds × (Nova-3 rate + key-term rate, since "Angel" is always sent as a key term); voice by characters. `status()` and `summaryText()` report them.
 
 ## Checks
 - (se-1) {live} a real session of 30 minutes or more: the phrase, then the full answer spoken; the typed copy replaces the placeholder; `/angel status`'s cost is within about 20% of what the Console and Deepgram show for that time.
-- (se-2) {live} with `maxSessionDollars` set very low, she says so once and stops answering.
-- (se-3) {unit} the whole flow with stand-ins: a spoken question, story talk, two-part questions, stop, the echo window, skipped noise, the cap, typed questions, failures, ending, typing only (`test/session.test.mjs`).
+- (se-2) {live} with `maxSessionDollars` set very low, she says so once and stops answering; `/angel status` shows today's total.
+- (se-3) {unit} the whole flow with stand-ins: a spoken question, story talk, two-part questions (also when the rest comes while the check runs), stop (also while she looks something up), the echo window, skipped noise, the session and daily caps, a failed answer's cost, typed questions, failures, ending, typing only (`test/session.test.mjs`).
 
 ## Traps
+- A line said while the check on the speaker's previous line was still running had neither her name nor a pending entry, so it was dropped and the question expired (review M6): hence `checking`.
 - A cost worked out as the change in a running total is wrong while two calls overlap (a gate check during an answer); each call returns its own cost instead.
 
 ## Open items

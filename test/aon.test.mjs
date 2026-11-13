@@ -60,3 +60,19 @@ test("AoN errors are reported, and an empty query asks nothing", async () => {
   await assert.rejects(aon.search("grapple"), /503/);
   assert.equal(await new Aon({ userAgent: "t", fetchImpl: scriptedFetch([hits([])]) }).get("nothing-1"), null);
 });
+
+test("cached entries keep a trimmed text, and the cache file is written once, a moment after the lookups", async () => {
+  const fsMod = await import("node:fs"), os = await import("node:os"), pathMod = await import("node:path");
+  const file = pathMod.join(fsMod.mkdtempSync(pathMod.join(os.tmpdir(), "angel-a-")), "aon-cache.json");
+  const long = { ...remaster, text: "x".repeat(50000) };
+  const aon = new Aon({ userAgent: "t", fetchImpl: scriptedFetch([hits([long]), hits([remaster])]), cacheFile: file, maxTextChars: 100, saveDelayMs: 20 });
+  await aon.get("condition-58");
+  await aon.search("off-guard");
+  assert.equal(fsMod.existsSync(file), false, "not written at each lookup");
+  await new Promise(r => setTimeout(r, 60));
+  const saved = JSON.parse(fsMod.readFileSync(file, "utf8"));
+  assert.equal(Object.keys(saved).length, 2);
+  assert.ok(Object.values(saved).every(v => v.data.every(d => !d.text || d.text.length <= 300)), "long texts are cut before caching");
+  const again = new Aon({ userAgent: "t", fetchImpl: scriptedFetch([]), cacheFile: file });
+  assert.equal((await again.search("off-guard"))[0].name, "Off-Guard", "a restart reads the saved cache");
+});

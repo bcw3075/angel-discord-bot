@@ -100,43 +100,59 @@ export async function answerQuestion({ claude, aon, model, maxTokens = 1500, sys
     const unique = [...new Map(sources.map(s => [s.url, s])).values()].slice(0, 5);
     return { say, sources: unique, rounds, lookups, dollars };
   };
-  for (let round = 1; round <= maxRounds; round++) {
-    const force = round === maxRounds;
-    const res = await claude.create({
-      model,
-      max_tokens: maxTokens,
-      system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
-      tools: TOOLS,
-      ...(force ? { tool_choice: { type: "tool", name: "answer" } } : {}),
-      messages,
-    });
-    dollars += claude.cost(model, res.usage);
-    const content = res.content ?? [];
-    const uses = content.filter(b => b.type === "tool_use");
-    const final = uses.find(u => u.name === "answer");
-    if (final) return done(final.input, round);
-    if (!uses.length) {
-      const text = content.filter(b => b.type === "text").map(b => b.text).join(" ").trim();
-      return done({ say: text }, round);
-    }
-    messages.push({ role: "assistant", content });
-    const results = [];
-    for (const use of uses) {
-      lookups++;
-      const out = await runTool(aon, use);
-      if (use.name === "aon_get") {
-        try { const d = JSON.parse(out); if (d?.url) fetched.push({ name: d.name, url: d.url }); } catch { /* not a page */ }
-      }
-      results.push({ type: "tool_result", tool_use_id: use.id, content: out });
-    }
-    messages.push({ role: "user", content: results });
+  try {
+    return await rounds();
+  } catch (e) {
+    /* the rounds that ran before the failure were paid for: the caller counts them */
+    e.dollars = dollars;
+    throw e;
   }
-  return done({}, maxRounds);
+
+  async function rounds() {
+    for (let round = 1; round <= maxRounds; round++) {
+      const force = round === maxRounds;
+      const res = await claude.create({
+        model,
+        max_tokens: maxTokens,
+        system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
+        tools: TOOLS,
+        ...(force ? { tool_choice: { type: "tool", name: "answer" } } : {}),
+        messages,
+      });
+      dollars += claude.cost(model, res.usage);
+      const content = res.content ?? [];
+      const uses = content.filter(b => b.type === "tool_use");
+      const final = uses.find(u => u.name === "answer");
+      if (final) return done(final.input, round);
+      if (!uses.length) {
+        const text = content.filter(b => b.type === "text").map(b => b.text).join(" ").trim();
+        return done({ say: text }, round);
+      }
+      messages.push({ role: "assistant", content });
+      const results = [];
+      for (const use of uses) {
+        lookups++;
+        const out = await runTool(aon, use);
+        if (use.name === "aon_get") {
+          try { const d = JSON.parse(out); if (d?.url) fetched.push({ name: d.name, url: d.url }); } catch { /* not a page */ }
+        }
+        results.push({ type: "tool_result", tool_use_id: use.id, content: out });
+      }
+      messages.push({ role: "user", content: results });
+    }
+    return done({}, maxRounds);
+  }
+}
+
+/* A question as shown in the channel: at most 200 characters (a typed one can be 4,000). */
+export function shortQuestion(q) {
+  const t = String(q ?? "").replace(/\s+/g, " ").trim();
+  return t.length > 200 ? t.slice(0, 197) + "…" : t;
 }
 
 /* The typed copy in the text channel: who asked, the answer, the pages. Kept under Discord's 2,000 characters. */
 export function typedAnswer({ asker, question, say, sources = [] }) {
-  const head = asker && question ? `**${asker} asked:** ${question.length > 200 ? question.slice(0, 197) + "…" : question}\n` : "";
+  const head = asker && question ? `**${asker} asked:** ${shortQuestion(question)}\n` : "";
   const links = sources.length ? `\n-# ${sources.map(s => `[${s.name.replace(/[[\]]/g, "")}](<${s.url}>)`).join(" · ")}` : "";
   const room = 1990 - head.length - links.length;
   const body = say.length > room ? say.slice(0, room - 1) + "…" : say;

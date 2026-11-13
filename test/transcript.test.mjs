@@ -39,3 +39,16 @@ test("the transcript is written to its folder as it goes, typed lines marked", (
   assert.equal(jl[1].kind, "text");
   assert.match(Transcript.format([t.lines[1]]), /Tobin \(typed\): typed thing/);
 });
+
+test("at the end, transcript.md is written again in the order things were said", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "angel-t-"));
+  const t = new Transcript({ dir, startedAt: T0, title: "Order" });
+  t.add({ at: T0 + 5000, speaker: "B", text: "second" });
+  t.add({ at: T0 + 1000, speaker: "A", text: "first" });
+  t.close();
+  const md = fs.readFileSync(path.join(dir, "transcript.md"), "utf8");
+  assert.ok(md.startsWith("# Order transcript"));
+  assert.ok(md.indexOf("first") < md.indexOf("second"));
+  t.close();
+  assert.equal(fs.readFileSync(path.join(dir, "transcript.md"), "utf8"), md, "closing twice changes nothing");
+});

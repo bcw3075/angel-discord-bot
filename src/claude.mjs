@@ -20,7 +20,7 @@ export class Claude {
       + (usage.cache_read_input_tokens ?? 0) * p[2] + (usage.output_tokens ?? 0) * p[3]) / 1e6;
   }
 
-  async create(body, { timeoutMs = 90000, retries = 2 } = {}) {
+  async create(body, { timeoutMs = 45000, retries = 2 } = {}) {
     for (let attempt = 0; ; attempt++) {
       let res, text;
       try {
@@ -32,6 +32,8 @@ export class Claude {
         });
         text = await res.text();
       } catch (e) {
+        /* a timed-out call is not sent again: it may still have run (and been billed), and the table is waiting */
+        if (e?.name === "TimeoutError") throw new Error(`Claude took longer than ${Math.round(timeoutMs / 1000)} s`);
         if (attempt < retries) { await this.sleep(1500 * (attempt + 1)); continue; }
         throw new Error(`Claude could not be reached: ${e.message}`);
       }

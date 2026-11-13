@@ -17,7 +17,8 @@ Settings, keys and the owner's own files; the setup and check scripts; the logge
 ## How it works
 - `config.mjs`: `DEFAULTS` merged under `config.json` (prices merge per model). `readKeyterms` always puts "Angel" first and caps the list at 100. A byte-order mark from Notepad is stripped everywhere.
 - `services.mjs` builds the shared wiring once (Claude, AoN with its cache file, Deepgram listening and voice, the gate, the answering); `main.mjs` and `check.mjs` both use it. House rules are read for each question, so an edit counts without a restart.
-- `main.mjs` exits 2 for "needs setup" (missing keys, a refused token) so `Start Angel.cmd` stops with a message instead of restarting every 10 seconds; other failures exit 1 and restart.
+- `main.mjs` exits 2 for "needs setup" (missing keys, a refused token, a `config.json` that isn't valid JSON) so `Start Angel.cmd` stops with a message instead of restarting every 10 seconds; other failures exit 1 and restart. Ctrl+C ends sessions within 5 seconds (a second Ctrl+C quits at once) and saves the AoN cache.
+- `Start Angel.cmd` waits with `ping`, not `timeout`, which fails at once without a console window (Task Scheduler's "run whether logged on or not") and would make a fast restart loop (review L13).
 - `check.mjs` runs on the owner's PC: both Claude models, Deepgram voice (WAV saved to hear, Ogg Opus read back packet by packet and decoded), Deepgram listening of that same WAV, AoN, Discord and the Message Content intent. `--voices` saves samples; `--ask` runs one real answer without Discord.
 - `setup.mjs` exports `inviteUrl` and `INVITE_PERMISSIONS` (View Channel, Send Messages, Embed Links, Read Message History, Add Reactions, Connect, Speak, Use Voice Activity); it only runs its prompts when started as `src/setup.mjs`.
 

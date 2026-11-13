@@ -9,7 +9,7 @@ export const AON_SITE = "https://2e.aonprd.com";
 const SOURCE_FIELDS = ["name", "category", "level", "url", "summary", "primary_source", "remaster_id", "legacy_id", "type", "rarity", "trait"];
 
 export class Aon {
-  constructor({ userAgent, fetchImpl = fetch, cacheFile = null, ttlMs = 7 * 86400000, maxEntries = 400, now = Date.now, maxTextChars = 8000 } = {}) {
+  constructor({ userAgent, fetchImpl = fetch, cacheFile = null, ttlMs = 7 * 86400000, maxEntries = 200, now = Date.now, maxTextChars = 8000, saveDelayMs = 3000 } = {}) {
     this.userAgent = userAgent;
     this.fetch = fetchImpl;
     this.cacheFile = cacheFile;
@@ -17,6 +17,8 @@ export class Aon {
     this.maxEntries = maxEntries;
     this.now = now;
     this.maxTextChars = maxTextChars;
+    this.saveDelayMs = saveDelayMs;
+    this.saveTimer = null;
     this.cache = new Map();
     this.requests = 0;
     if (cacheFile && fs.existsSync(cacheFile)) {
@@ -38,14 +40,28 @@ export class Aon {
     });
     if (!res.ok) throw new Error(`Archives of Nethys answered ${res.status}`);
     const json = await res.json();
-    const data = (json?.hits?.hits ?? []).map(h => ({ _id: h._id, ...h._source }));
+    /* full texts are cut before caching: some rules pages are long, and the cache file is rewritten as it grows */
+    const data = (json?.hits?.hits ?? []).map(h => {
+      const d = { _id: h._id, ...h._source };
+      if (typeof d.text === "string" && d.text.length > this.maxTextChars + 200) d.text = d.text.slice(0, this.maxTextChars + 200);
+      return d;
+    });
     this.cache.set(key, { at: this.now(), data });
     while (this.cache.size > this.maxEntries) this.cache.delete(this.cache.keys().next().value);
     this.save();
     return data;
   }
 
+  /* written a few seconds after the last lookup, not at each one: a big write mid-answer could stutter her voice */
   save() {
+    if (!this.cacheFile || this.saveTimer) return;
+    this.saveTimer = setTimeout(() => this.flush(), this.saveDelayMs);
+    this.saveTimer.unref?.();
+  }
+
+  flush() {
+    clearTimeout(this.saveTimer);
+    this.saveTimer = null;
     if (!this.cacheFile) return;
     try { fs.writeFileSync(this.cacheFile, JSON.stringify(Object.fromEntries(this.cache))); } catch { /* cache only */ }
   }

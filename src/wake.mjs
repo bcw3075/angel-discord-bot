@@ -4,8 +4,12 @@
 
 const NAME = String.raw`(?:angel|angela|angie|angle|anjel|angell|aingel|ainjel)`;
 const NAME_RE = new RegExp(String.raw`(?:^|[^a-z'])${NAME}(?![a-z])`, "i");
+const LEAD = String.raw`^\W*(?:(?:hey|ok(?:ay)?|so|um+|uh+|oh)[\s,]+)?`;
 const STOP_WORDS = String.raw`(?:stop|quiet|hush|shush|enough|that'?s enough|be quiet|shut up|cancel|never ?mind|that'?s fine|thanks,? that'?s all)`;
-const STOP_RE = new RegExp(String.raw`(?:^|[^a-z'])${NAME}(?![a-z'])[\s,.!?-]*(?:please[\s,]+)?${STOP_WORDS}\b`, "i");
+/* her name first, a stop word, and at most three more words: "Angel, stop please", "okay Angel, that's enough, thanks".
+   A question after it ("Angel, never mind that, how does flanking work?") or the story ("the angel, quiet as death")
+   is not a stop; such a line still goes through the model check, which can say stop. */
+const STOP_RE = new RegExp(String.raw`${LEAD}${NAME}(?![a-z'])[\s,.!?-]*(?:please[\s,]+)?${STOP_WORDS}\b[\s\W]*(?:[a-z']+[\s\W]*){0,3}$`, "i");
 
 export function mentionsAngel(text) {
   return NAME_RE.test(String(text));
@@ -13,7 +17,7 @@ export function mentionsAngel(text) {
 
 /* "Angel, stop" and friends: acted on at once, without the model check. */
 export function isStopRequest(text) {
-  return STOP_RE.test(String(text));
+  return STOP_RE.test(String(text).trim());
 }
 
 export const GATE_SYSTEM = `You watch the transcript of a tabletop game played over voice chat. The table has an AI assistant called Angel who answers rules questions. The transcriber sometimes writes her name as Angela, Angie or angle.
@@ -47,8 +51,9 @@ export function parseGate(text, lastLineText = "") {
   return { toAngel: direct, complete: true, stop: isStopRequest(lastLineText), question: direct ? lastLineText : "", fallback: true };
 }
 
-/* Ask the gate model. Returns the decision and what it cost. */
-export async function gate({ claude, model, contextText, lastText }) {
+/* Ask the gate model. Returns the decision and what it cost. `lastText` is the line as the model sees it
+   ("Mira: Angel, ..."); `bareText` is what was said, which the fallback rule reads (it looks for her name first). */
+export async function gate({ claude, model, contextText, lastText, bareText = lastText }) {
   try {
     const json = await claude.create({
       model,
@@ -58,9 +63,9 @@ export async function gate({ claude, model, contextText, lastText }) {
     });
     const text = (json.content ?? []).filter(b => b.type === "text").map(b => b.text).join("");
     /* this call's own cost: a delta of the running total would be wrong while an answer runs at the same time */
-    return { ...parseGate(text, lastText), dollars: claude.cost(model, json.usage) };
+    return { ...parseGate(text, bareText), dollars: claude.cost(model, json.usage) };
   } catch (e) {
-    const decision = parseGate("", lastText);
+    const decision = parseGate("", bareText);
     decision.error = e.message;
     return decision;
   }

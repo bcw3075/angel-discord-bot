@@ -16,9 +16,9 @@ Being in the voice channel: joining with Discord's end-to-end encryption, hearin
 ## How it works
 - `join` joins with `selfDeaf: false`, waits up to 30 s for Ready, subscribes an audio player, and listens on `receiver.speaking` "start".
 - `listen(userId)` subscribes with `EndBehaviorType.AfterSilence` (`silenceMs`, default 900 ms); `gather` collects the packets, cuts a monologue every `maxUtteranceSeconds` and emits "speech" `{ userId, packets, startedAt, final }`. When a stream closes and the speaker is still marked speaking, it listens again at once.
-- `packetsToWav`: decode (a rejected packet becomes 20 ms of silence), stereo to mono, a 63-tap low-pass and every third sample (48 kHz to 16 kHz), loudness check, 16-bit WAV. Pieces under `minUtteranceMs` or below `minLevelDb` are skipped before anything is paid for.
+- `packetsToWav`: decode (a rejected packet becomes 20 ms of silence; frames longer than 20 ms decode whole, review L7), stereo to mono, a 63-tap low-pass and every third sample (48 kHz to 16 kHz), loudness check, 16-bit WAV. Pieces under `minUtteranceMs` or below `minLevelDb` are skipped before anything is paid for.
 - `speak(clips)` queues clips behind what's playing; `stopSpeaking` bumps a token so queued clips are dropped and stops the player. `inEchoWindow(at)` judges by when the speech began, using the start and end of the last clips.
-- Disconnected: waits 5 s for Signalling or Connecting (a move or a network blip), else emits "lost".
+- Disconnected: waits 5 s for Signalling or Connecting (a move or a network blip), then 20 s for Ready, else emits "lost" (a reconnect stuck half-way left her deaf; review L3). A Destroyed connection that wasn't Angel's own leave is "lost" too.
 
 ## Checks
 - (vo-1) {live} in an encrypted call with three or more people talking for five minutes, the transcript has each person's words under their own name, with no stretches missing.

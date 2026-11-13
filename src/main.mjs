@@ -5,7 +5,12 @@ import { buildServices } from "./services.mjs";
 import { AngelBot } from "./bot.mjs";
 
 async function main() {
-  const cfg = loadConfig();
+  let cfg;
+  try { cfg = loadConfig(); }
+  catch (e) {
+    console.error(e.message);
+    process.exit(2); /* needs fixing by hand: Start Angel.cmd stops instead of restarting */
+  }
   ensureDataDir();
   initLog(cfg);
   const missing = missingSettings(cfg);
@@ -13,13 +18,15 @@ async function main() {
     log.error(`Angel can't start yet: missing ${missing.join(", ")}. Run: npm run setup`);
     process.exit(2); /* 2 = needs setup: Start Angel.cmd stops instead of restarting */
   }
-  const bot = new AngelBot({ cfg, log, services: buildServices(cfg) });
+  const services = buildServices(cfg);
+  const bot = new AngelBot({ cfg, log, services });
   let stopping = false;
   const shutdown = async sig => {
-    if (stopping) return;
+    if (stopping) process.exit(0); /* a second Ctrl+C quits at once */
     stopping = true;
-    log.info(`${sig}: ending sessions and logging out`);
-    try { await bot.stop(); } finally { process.exit(0); }
+    log.info(`${sig}: ending sessions and logging out (Ctrl+C again to quit at once)`);
+    const limit = new Promise(r => setTimeout(r, 5000).unref());
+    try { await Promise.race([bot.stop(), limit]); } finally { services.aon.flush(); process.exit(0); }
   };
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
