@@ -8,6 +8,7 @@ since: 0.1.0
 Knowing when someone is talking to Angel: a free text check for her name, then a cheap model decides.
 
 ## Decisions
+- The check also says whether a line is small talk (`chat`), and counts a reply to what she just said as said to her even without her name (2026-11-14, for the back and forth Rhea asked for).
 - Two steps (Angel's design, 2026-11-12): a line is looked at only when it names her or a word the transcriber makes of her name (Angela, Angie, angle and the like); then Haiku 5.5 reads the last few lines and decides. An angel in the story (a creature, "angelic", a statue) or talk about her doesn't set her off.
 - "Angel, stop" (and "be quiet", "that's enough", "never mind" …) acts at once, without the model, but only when her name comes first and at most three words follow the stop word; "Angel, never mind that, how does flanking work?" or "the angel, quiet as death, ..." go through the model check instead (review M3, 2026-11-13).
 - "Angel?" with the question still to come waits up to `followUpMs` (12 s) for the same speaker's next line.

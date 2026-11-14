@@ -12,6 +12,7 @@ class FakeVoice extends EventEmitter {
   speak(clips) { this.spoken.push(...clips); return Promise.resolve(); }
   stopSpeaking() { this.stops++; }
   inEchoWindow() { return this.echo; }
+  lastSpokeEnd(since = 0) { return this.end ?? since; }
   ignore(id) { this.ignored.push(id); }
   leave() { this.left = true; }
 }
@@ -67,6 +68,32 @@ test("the short answer is spoken and the fuller one written (Rhea, 2026-11-14)",
   assert.deepEqual(voice.spoken.map(String).slice(1), ["clip:Only with a free hand."], "only the short answer is spoken");
   assert.match(posted[0].edits[0], /buckler/, "the written answer is the fuller one");
   assert.equal(s.transcript.lines.at(-1).text, "Only with a free hand.", "the transcript has what she said");
+});
+
+test("the person she just answered can reply without her name for a while; banter gets a spoken reply only (Rhea, 2026-11-14)", async () => {
+  const heard = ["Angel, how are you feeling having a voice?", "That's funny. Good. You were listening.", "Pass me the dice.", "Ha, nice."];
+  const { s, voice, posted, gates } = setup({ heard, gate: a => /dice/.test(a.lastText) ? { toAngel: false } : { toAngel: true, complete: true, stop: false, chat: true, question: a.bareText } });
+  await s.start();
+  speech(voice, "p1");
+  await settle(); await s.answering;
+  assert.equal(posted.length, 0, "small talk isn't posted in the channel");
+  assert.deepEqual(voice.spoken.map(String), ["clip:Answer to: Angel, how are you feeling having a voice?"], "no 'let me check' for small talk");
+  // her reply without her name, by the same person, right after she spoke: checked and answered
+  voice.end = Date.now();
+  speech(voice, "p1");
+  await settle(); await s.answering;
+  assert.equal(gates.length, 2, "the reply went to the check");
+  assert.equal(voice.spoken.length, 2, "and she answered it");
+  // someone else without her name: not even checked
+  speech(voice, "p2");
+  await settle(); await s.answering;
+  assert.equal(gates.length, 2, "another player's line isn't checked");
+  // the same person after the window: not checked
+  voice.end = Date.now() - 60000;
+  s.replyTo.at = Date.now() - 60000;
+  speech(voice, "p1");
+  await settle(); await s.answering;
+  assert.equal(gates.length, 2, "too late to count as a reply");
 });
 
 test("talk that only mentions an angel in the story is not answered", async () => {

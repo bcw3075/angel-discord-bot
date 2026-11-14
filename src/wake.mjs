@@ -28,11 +28,12 @@ export function isStopRequest(text) {
 }
 
 export const GATE_SYSTEM = `You watch the transcript of a tabletop game played over voice chat. The table has an AI assistant called Angel who answers rules questions. The transcriber sometimes writes her name as Angela, Angie or angle.
-Decide whether the LAST line was said to Angel herself: someone asking her something or telling her something. It was NOT said to her when "angel" is part of the game (an angel creature, an angelic character or heritage, a statue, a spell), when people talk about her without addressing her ("Angel was right earlier"), or when the word is just "angle" in its normal meaning.
+Decide whether the LAST line was said to Angel herself: someone asking her something or telling her something. A line right after Angel spoke that answers or reacts to what she said ("ha, good one", "thanks", "wait, even with a buckler?") was said to her even without her name. It was NOT said to her when "angel" is part of the game (an angel creature, an angelic character or heritage, a statue, a spell), when people talk about her without addressing her ("Angel was right earlier"), or when the word is just "angle" in its normal meaning.
 Reply with JSON only, no other text:
-{"to_angel": true or false, "complete": true or false, "stop": true or false, "question": "..."}
+{"to_angel": true or false, "complete": true or false, "stop": true or false, "chat": true or false, "question": "..."}
 - complete: false when they called her but haven't said the question yet ("Angel?", "Hey Angel, quick one..."); true otherwise.
 - stop: true when they're telling her to stop talking or that they're done.
+- chat: true when it's banter or small talk that needs no rules lookup ("you were listening", "how are you?"); false for a rules question.
 - question: what they want from her, written to stand on its own using the earlier lines ("" when there's nothing yet).`;
 
 export function gateUser(contextLines, last) {
@@ -50,13 +51,14 @@ export function parseGate(text, lastLineText = "") {
         toAngel: j.to_angel === true,
         complete: j.complete !== false,
         stop: j.stop === true,
+        chat: j.chat === true,
         question: typeof j.question === "string" ? j.question.trim() : "",
         fallback: false,
       };
     } catch { /* fall through */ }
   }
   const direct = new RegExp(String.raw`^\W*(?:hey|ok(?:ay)?|so|um+|uh+)?[\s,]*${NAME}(?![a-z'])[\s,!?:-]+\S`, "i").test(lastLineText);
-  return { toAngel: direct, complete: true, stop: isStopRequest(lastLineText), question: direct ? lastLineText : "", fallback: true };
+  return { toAngel: direct, complete: true, stop: isStopRequest(lastLineText), chat: false, question: direct ? lastLineText : "", fallback: true };
 }
 
 /* Ask the gate model. Returns the decision and what it cost. `lastText` is the line as the model sees it

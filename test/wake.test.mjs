@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mentionsAngel, isStopRequest, parseGate, gate, gateUser } from "../src/wake.mjs";
+import { GATE_SYSTEM, mentionsAngel, isStopRequest, parseGate, gate, gateUser } from "../src/wake.mjs";
 import { Claude } from "../src/claude.mjs";
 import { scriptedFetch } from "./helpers.mjs";
 
@@ -16,7 +16,9 @@ test('"Angel, stop" and friends are caught without the model', () => {
 
 test("the model's answer is read, even inside a code fence", () => {
   assert.deepEqual(parseGate('{"to_angel": true, "complete": true, "stop": false, "question": "What is off-guard?"}'),
-    { toAngel: true, complete: true, stop: false, question: "What is off-guard?", fallback: false });
+    { toAngel: true, complete: true, stop: false, chat: false, question: "What is off-guard?", fallback: false });
+  assert.equal(parseGate('{"to_angel": true, "complete": true, "stop": false, "chat": true, "question": "Thanks!"}').chat, true, "small talk is marked");
+  assert.match(GATE_SYSTEM, /answers or reacts to what she said/, "a reply to her counts without her name");
   assert.equal(parseGate('```json\n{"to_angel": false, "complete": true, "stop": false, "question": ""}\n```').toAngel, false);
   assert.equal(parseGate('{"to_angel": true, "complete": false, "stop": false, "question": ""}').complete, false);
 });

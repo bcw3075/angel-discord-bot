@@ -84,13 +84,16 @@ export class Session {
   async onLine(line) {
     if (isStopRequest(line.text)) { this.stop(line.at); return; }
     const uid = line.userId;
-    const named = mentionsAngel(line.text);
+    /* the person she just answered may reply without her name for a little while after she stops talking (Rhea,
+       2026-11-14: "you replied first but not when I replied to you"); the check still decides it was for her */
+    const replying = this.replyTo?.userId === uid && line.at <= this.voice.lastSpokeEnd(this.replyTo.at) + this.cfg.replyWindowMs;
+    const named = mentionsAngel(line.text) || replying;
     /* the check on this speaker's last line is still running: keep the line, it may be the rest of the question */
     const inFlight = this.checking.get(uid);
     if (inFlight && !named) { inFlight.push(line.text); return; }
     const waiting = this.pending.get(uid);
     if (!waiting && !named) return;
-    if (!waiting && this.voice.inEchoWindow(line.at)) return;
+    if (!waiting && this.voice.inEchoWindow(line.at) && !replying) return;
     if (this.overCap()) return;
     let text = line.text;
     if (waiting) {
@@ -119,13 +122,13 @@ export class Session {
     /* what they said while the check ran is the rest of the question, finished or not */
     const rest = later.length ? ` ${later.join(" ")}` : "";
     if (!decision.complete) {
-      if (rest) { this.ask({ question: `${text}${rest}`, asker: line.speaker, role: line.role, via: "voice", at }); return; }
+      if (rest) { this.ask({ question: `${text}${rest}`, asker: line.speaker, role: line.role, via: "voice", at, userId: uid }); return; }
       const timer = setTimeout(() => this.pending.delete(uid), this.cfg.followUpMs);
       timer.unref?.();
       this.pending.set(uid, { text, at: this.now(), timer });
       return;
     }
-    this.ask({ question: `${decision.question || text}${rest}`, asker: line.speaker, role: line.role, via: "voice", at });
+    this.ask({ question: `${decision.question || text}${rest}`, asker: line.speaker, role: line.role, via: "voice", at, userId: uid, chat: decision.chat === true });
   }
 
   /* A typed question (@Angel, "Angel, …" in chat, or /angel ask): no check needed, they meant her. */
@@ -146,7 +149,7 @@ export class Session {
     return this.answering;
   }
 
-  async runAsk({ question, asker, via, reply, at }) {
+  async runAsk({ question, asker, via, reply, at, userId = null, chat = false }) {
     const target = reply ?? this.post;
     if (this.ended) {
       /* a deferred /angel ask must still hear back */
@@ -162,9 +165,13 @@ export class Session {
       if (reply) await reply.send(this.capMessage()).catch(() => {});
       return;
     }
+    /* small talk spoken to her: no "looking it up", no post in the channel, just her spoken reply */
+    const quiet = chat && via === "voice" && this.cfg.speak;
     let placeholder = null;
-    try { placeholder = await target.send(`**${asker} asked:** ${shortQuestion(question)}\n-# Looking it up…`); } catch (e) { this.log.warn(`couldn't post in the channel: ${e.message}`); }
-    if (this.cfg.speak && this.ackClips) this.voice.speak(this.ackClips);
+    if (!quiet) {
+      try { placeholder = await target.send(`**${asker} asked:** ${shortQuestion(question)}\n-# Looking it up…`); } catch (e) { this.log.warn(`couldn't post in the channel: ${e.message}`); }
+      if (this.cfg.speak && this.ackClips) this.voice.speak(this.ackClips);
+    }
     let result;
     try {
       result = await this.answer({
@@ -178,9 +185,11 @@ export class Session {
       this.log.error(`couldn't answer: ${e.message}`);
       result = { say: "Sorry, I couldn't reach my rules brain just then. Give it a moment and ask me again?", sources: [], failed: true };
     }
-    const typed = typedAnswer({ asker, question, say: result.details ?? result.say, sources: result.sources });
-    try { if (placeholder?.edit) await placeholder.edit(typed); else await target.send(typed); }
-    catch (e) { this.log.warn(`couldn't post the answer: ${e.message}`); }
+    if (!quiet || result.failed) {
+      const typed = typedAnswer({ asker, question, say: result.details ?? result.say, sources: result.sources });
+      try { if (placeholder?.edit) await placeholder.edit(typed); else await target.send(typed); }
+      catch (e) { this.log.warn(`couldn't post the answer: ${e.message}`); }
+    }
     this.transcript.add({ at: this.now(), speaker: "Angel", role: "angel", text: result.say, kind: "angel" });
     /* told to stop while she was looking it up: the answer stays typed, but she doesn't say it */
     if (!this.cfg.speak || this.ended || this.stoppedSince(at) || this.overCap()) return;
@@ -188,7 +197,10 @@ export class Session {
     try {
       const clips = await this.tts(spoken);
       this.costs.tts += this.ttsCost(spoken);
-      if (!this.ended && !this.stoppedSince(at)) this.voice.speak(clips);
+      if (!this.ended && !this.stoppedSince(at)) {
+        this.voice.speak(clips);
+        if (via === "voice" && userId) this.replyTo = { userId, at: this.now() };
+      }
     } catch (e) { this.log.warn(`couldn't speak the answer: ${e.message}`); }
   }
 

@@ -83,6 +83,7 @@ be read. The most useful:
   she's in.
 - `answerModel`: `claude-sonnet-5-5` by default; `claude-opus-5-5` is slower and costs about twice as much. This one
   isn't in the file until you add it: a new line such as `"answerModel": "claude-opus-5-5",` after the first `{`.
+- `replyWindowMs`: how long after she stops talking the person she answered can reply without saying her name (default 20000, 20 seconds).
 - `memoryMinutes`: how much of the conversation she's given with a question (default 15).
 - `answerCacheTtl`: how long Claude keeps her instructions and your house rules ready between questions: `"1h"`
   (default, cheapest when questions come more than 5 minutes apart) or `"5m"`.
