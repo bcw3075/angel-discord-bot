@@ -44,6 +44,7 @@ code, comments, tests, fixtures or docs (the privacy scan checks against a priva
 - Plain fetch, no SDKs: fewer moving parts on the owner's PC.
 - Pinned versions (`--save-exact`). `@discordjs/voice` and `@snazzah/davey` follow Discord's voice encryption: before
   updating them, read their changelogs for receive and DAVE changes, then run the live voice checks.
+- `check.mjs` and `setup.mjs`'s prompts run when started, so no unit test imports `check.mjs`: a test parses every source file (`node --check`), and a change to a script gets one real run (2026-11-14, a syntax error passed `npm test`).
 
 ## Running and testing here
 - `npm install`, `npm test` (all stand-in tests), `npm run test:aon` (live AoN; works from the cloud workspace).

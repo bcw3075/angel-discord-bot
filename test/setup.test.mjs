@@ -275,3 +275,8 @@ test("the voice chooser knows the voices by short name", () => {
   assert.equal(voiceFromName("zeus"), "");
   assert.equal(voiceFromName(""), "");
 });
+
+test("every source file parses, including the scripts no test imports (check.mjs runs on import)", async () => {
+  const { execFileSync } = await import("node:child_process");
+  for (const f of fs.readdirSync("src").filter(f => f.endsWith(".mjs"))) execFileSync(process.execPath, ["--check", path.join("src", f)]);
+});

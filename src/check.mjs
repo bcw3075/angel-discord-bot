@@ -125,13 +125,21 @@ async function voices(cfg) {
   console.log(`\nNow: ${cfg.ttsVoice}. To change it: npm run voices -- --set luna (any name above), then restart Angel.`);
 }
 
-/* `npm run voices -- --set luna`: saves Angel's voice in config.json (keys untouched) */
+/* `npm run voices -- --set luna`, or `--set-env` to read the name from the V variable (Choose Voice.cmd: a typed
+   name never goes through cmd's command line). Only a voice whose sample was saved, so one Deepgram refused can't
+   be chosen. Exit 2 for a name that isn't a voice, so the .cmd asks again. */
 function setVoice(cfg, name) {
+  if (!String(name ?? "").trim()) { console.log(`Kept ${cfg.ttsVoice.split("-")[2]}.`); return; }
   const v = voiceFromName(name);
-  if (!v) { console.log(`"${name}" isn't one of the voices: ${VOICES.map(x => x.split("-")[2]).join(", ")}.`); failures++; return; }
+  const short = v.split("-")[2];
+  if (!v || !fs.existsSync(path.join(DATA_DIR, "voices", `${short}.mp3`))) {
+    console.log(`"${String(name).trim()}" isn't one of the voices in the folder. Type one of: ${VOICES.map(x => x.split("-")[2]).filter(n => fs.existsSync(path.join(DATA_DIR, "voices", `${n}.mp3`))).join(", ")}.`);
+    process.exitCode = 2;
+    return;
+  }
   cfg.ttsVoice = v;
   saveConfig(cfg);
-  console.log(`Angel's voice is now ${v.split("-")[2]}. Restart Angel (close her window, double-click Start Angel.cmd) to hear it.`);
+  console.log(`Angel's voice is now ${short}. Restart Angel (close her window, double-click Start Angel.cmd) to hear it.`);
 }
 
 /* `npm run ask -- "can I grapple with a shield in my hand?"`: one question through the real answering, without
@@ -152,6 +160,7 @@ async function ask(cfg, question) {
 let cfg;
 try { cfg = loadConfig(); }
 catch (e) { console.log(e.message); process.exit(1); }
-const askAt = process.argv.indexOf("--ask"), setAt = process.argv.indexOf("--set");
-const job = setAt >= 0 ? Promise.resolve(setVoice(cfg, process.argv[setAt + 1])) : askAt >= 0 ? ask(cfg, process.argv.slice(askAt + 1).join(" ").trim()) : process.argv.includes("--voices") ? voices(cfg) : check(cfg);
-job.catch(e => { console.log(`Failed: ${e.message}`); failures++; }).then(() => process.exit(failures ? 1 : 0));
+const askAt = process.argv.indexOf("--ask"), setAt = process.argv.indexOf("--set"), setEnv = process.argv.includes("--set-env");
+const setting = askAt < 0 && (setEnv || setAt >= 0);
+const job = setting ? Promise.resolve(setVoice(cfg, setEnv ? process.env.V : process.argv[setAt + 1])) : askAt >= 0 ? ask(cfg, process.argv.slice(askAt + 1).join(" ").trim()) : process.argv.includes("--voices") ? voices(cfg) : check(cfg);
+job.catch(e => { console.log(`Failed: ${e.message}`); failures++; }).then(() => process.exit(failures ? 1 : process.exitCode ?? 0));
