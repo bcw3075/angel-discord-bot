@@ -31,11 +31,22 @@ export class VoiceLink extends EventEmitter {
       selfMute: false,
     });
     this.connection.on("error", e => this.log.warn(`voice connection error: ${e.message}`));
+    /* every step of joining goes in the log, so a join that never gets ready says where it stopped (2026-11-14: the
+       first live join timed out and the log said nothing) */
+    const steps = [];
+    const onStep = (_old, state) => { steps.push(state.status); this.log.info(`voice: ${state.status}`); };
+    this.connection.on("stateChange", onStep);
     try {
       await lib.entersState(this.connection, lib.VoiceConnectionStatus.Ready, 30000);
     } catch (e) {
+      const last = steps.at(-1) ?? "signalling";
+      this.log.warn(`voice join timed out after: ${steps.join(" > ") || "(no change)"}`);
       this.connection.destroy();
-      throw new Error("Couldn't connect to the voice channel within 30 seconds. Check that Angel may Connect and Speak there.");
+      throw new Error(last === lib.VoiceConnectionStatus.Connecting
+        ? "Couldn't connect to the voice channel within 30 seconds: Discord answered but the voice link never opened. On the PC running Angel, allow Node.js through Windows Firewall (Private networks), then try /angel join again."
+        : "Couldn't connect to the voice channel within 30 seconds. Check that Angel may Connect and Speak there.");
+    } finally {
+      this.connection.off("stateChange", onStep);
     }
     this.connection.on(lib.VoiceConnectionStatus.Disconnected, () => this.onDisconnected());
     this.connection.on(lib.VoiceConnectionStatus.Destroyed, () => { if (!this.closed) { this.log.warn("voice connection destroyed"); this.emit("lost"); } });

@@ -8,6 +8,7 @@ since: 0.1.0
 Being in the voice channel: joining with Discord's end-to-end encryption, hearing each speaker in pieces, playing Angel's voice.
 
 ## Decisions
+- **A join that times out says where it stopped** (2026-11-14: the first live `/angel join` on Rhea's PC timed out and the log was empty): every connection step is logged as `voice: <status>` while joining, the timeout logs the steps, and stuck at `connecting` (Discord answered, the UDP voice link never opened) the message names Windows Firewall instead of permissions.
 - Node with `@discordjs/voice` 0.19.2 and `@snazzah/davey` (pinned). Since 2 March 2026 Discord refuses voice connections without DAVE end-to-end encryption, bots included; @discordjs/voice's receive bug with encrypted audio (discord.js issue 11419) was fixed by PR 11449 (13 March 2026) and 0.19.2 (17 March 2026) has it. (Angel's choice, 2026-11-12, in the design.)
 - Opus is decoded with `opusscript` (WebAssembly), so nothing needs compiling on Windows.
 - Angel's voice is played as Ogg Opus straight from Deepgram (`StreamType.OggOpus`): no FFmpeg on the owner's PC.
