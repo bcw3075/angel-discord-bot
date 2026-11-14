@@ -113,13 +113,6 @@ export class VoiceLink extends EventEmitter {
   /* Did speech that began at `at` start while Angel was talking, or just after? Her voice can come back through a
      player's microphone. Judged by when the speech began, not when its text arrived, so a quick follow-up question
      after she finishes still counts. */
-  /* when she last stopped talking, counting from `since` (still talking: now) */
-  lastSpokeEnd(since = 0) {
-    if (this.speakingNow) return this.now();
-    const end = this.periods.at(-1)?.[1] ?? since;
-    return Math.max(end, since);
-  }
-
   inEchoWindow(at = this.now()) {
     if (this.speakingNow && at >= this.speakingSince) return true;
     return this.periods.some(([start, end]) => at >= start && at <= end + this.echoGuardMs);

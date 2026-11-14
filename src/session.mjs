@@ -86,14 +86,16 @@ export class Session {
     const uid = line.userId;
     /* the person she just answered may reply without her name for a little while after she stops talking (Rhea,
        2026-11-14: "you replied first but not when I replied to you"); the check still decides it was for her */
-    const replying = this.replyTo?.userId === uid && line.at <= this.voice.lastSpokeEnd(this.replyTo.at) + this.cfg.replyWindowMs;
-    const named = mentionsAngel(line.text) || replying;
+    const r = this.replyTo;
+    const replying = !!r && r.userId === uid && line.at >= r.from && line.at <= r.from + this.cfg.replyWindowMs;
+    const byName = mentionsAngel(line.text);
+    const named = byName || replying;
     /* the check on this speaker's last line is still running: keep the line, it may be the rest of the question */
     const inFlight = this.checking.get(uid);
-    if (inFlight && !named) { inFlight.push(line.text); return; }
+    if (inFlight && !byName) { inFlight.push(line.text); return; }
     const waiting = this.pending.get(uid);
     if (!waiting && !named) return;
-    if (!waiting && this.voice.inEchoWindow(line.at) && !replying) return;
+    if (!waiting && this.voice.inEchoWindow(line.at)) return;
     if (this.overCap()) return;
     let text = line.text;
     if (waiting) {
@@ -128,7 +130,7 @@ export class Session {
       this.pending.set(uid, { text, at: this.now(), timer });
       return;
     }
-    this.ask({ question: `${decision.question || text}${rest}`, asker: line.speaker, role: line.role, via: "voice", at, userId: uid, chat: decision.chat === true });
+    this.ask({ question: `${decision.question || text}${rest}`, asker: line.speaker, role: line.role, via: "voice", at, userId: uid, chat: decision.chat === true, turn: byName ? 0 : (r?.turn ?? 0) + 1 });
   }
 
   /* A typed question (@Angel, "Angel, …" in chat, or /angel ask): no check needed, they meant her. */
@@ -149,7 +151,7 @@ export class Session {
     return this.answering;
   }
 
-  async runAsk({ question, asker, via, reply, at, userId = null, chat = false }) {
+  async runAsk({ question, asker, via, reply, at, userId = null, chat = false, turn = 0 }) {
     const target = reply ?? this.post;
     if (this.ended) {
       /* a deferred /angel ask must still hear back */
@@ -185,29 +187,46 @@ export class Session {
       this.log.error(`couldn't answer: ${e.message}`);
       result = { say: "Sorry, I couldn't reach my rules brain just then. Give it a moment and ask me again?", sources: [], failed: true };
     }
-    if (!quiet || result.failed) {
+    /* the check may call a rules question small talk: one that looked something up is posted anyway */
+    let posted = false;
+    const post = async () => {
+      if (posted) return;
+      posted = true;
       const typed = typedAnswer({ asker, question, say: result.details ?? result.say, sources: result.sources });
       try { if (placeholder?.edit) await placeholder.edit(typed); else await target.send(typed); }
       catch (e) { this.log.warn(`couldn't post the answer: ${e.message}`); }
-    }
+    };
+    if (!quiet || result.failed || result.lookups > 0 || result.sources?.length) await post();
     this.transcript.add({ at: this.now(), speaker: "Angel", role: "angel", text: result.say, kind: "angel" });
     /* told to stop while she was looking it up: the answer stays typed, but she doesn't say it */
-    if (!this.cfg.speak || this.ended || this.stoppedSince(at) || this.overCap()) return;
+    if (!this.cfg.speak || this.ended || this.stoppedSince(at) || this.overCap()) { if (quiet && !this.stoppedSince(at)) await post(); return; }
     const spoken = speakable(result.say);
     try {
       const clips = await this.tts(spoken);
       this.costs.tts += this.ttsCost(spoken);
       if (!this.ended && !this.stoppedSince(at)) {
-        this.voice.speak(clips);
-        if (via === "voice" && userId) this.replyTo = { userId, at: this.now() };
+        const played = this.voice.speak(clips);
+        /* the person she answered may reply without her name, from when this answer ends; at most three such replies
+           in a row, so small talk can't run on and on at the table's expense */
+        if (via === "voice" && userId && turn >= 3 && this.replyTo?.userId === userId) this.replyTo = null;
+        if (via === "voice" && userId && turn < 3) {
+          Promise.resolve(played).then(() => {
+            if (this.ended || this.stoppedSince(at)) return;
+            this.replyTo = { userId, from: this.now(), turn };
+          }).catch(() => {});
+        }
       }
-    } catch (e) { this.log.warn(`couldn't speak the answer: ${e.message}`); }
+    } catch (e) {
+      this.log.warn(`couldn't speak the answer: ${e.message}`);
+      if (quiet) await post();
+    }
   }
 
   /* "Angel, stop": cut her off, drop questions still waiting, and don't speak an answer still being looked up.
      `at` is when the stop was said (a typed or /angel stop: now). */
   stop(at = this.now()) {
     this.lastStopAt = Math.max(this.lastStopAt, at);
+    this.replyTo = null;
     for (const p of this.pending.values()) clearTimeout(p.timer);
     this.pending.clear();
     this.voice.stopSpeaking();
@@ -221,6 +240,7 @@ export class Session {
   end() {
     if (this.ended) return this.status();
     this.ended = true;
+    this.replyTo = null;
     for (const p of this.pending.values()) clearTimeout(p.timer);
     this.pending.clear();
     this.voice.leave();
