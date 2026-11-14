@@ -8,7 +8,7 @@ since: 0.1.0
 One game session from join to leave: speech to transcript, the wake check, answers one at a time, typed and spoken, costs and the cap.
 
 ## Decisions
-- **Back and forth** (Rhea at the live test, 2026-11-14: "you replied first but not when I replied to you"): for `replyWindowMs` (20 s) from when her spoken answer finishes playing, the person she just answered by voice can reply without her name; the line still goes through the check, which decides it was for her, and the echo guard still applies. At most three unnamed replies in a row; "Angel, stop" and the end of the session close the window. Anyone else still has to name her.
+- **Back and forth** (Rhea at the live test, 2026-11-14: "you replied first but not when I replied to you"): for `replyWindowMs` (a minute; 20 s was too short live: Rhea's "What about a buckler" came 58 s after the answer) from when her spoken answer finishes playing, the person she just answered by voice can reply without her name; the line still goes through the check, which decides it was for her, and the echo guard still applies. At most three unnamed replies in a row; "Angel, stop" and the end of the session close the window. Anyone else still has to name her.
 - **Small talk isn't posted** (Rhea, 2026-11-14: "you don't need to post the questions and replies to non game related questions"): when the check marks a spoken line as small talk (`chat`), there's no "let me check" phrase, no placeholder and no post, only her spoken reply. Posted after all when it failed, couldn't be spoken, or looked something up (the check called a rules question small talk).
 - Only the short spoken answer (`say`) is spoken and goes in the transcript; the channel gets the fuller written one (`details`) (d-1 as changed by Rhea, 2026-11-14).
 - A short phrase is spoken at once while she looks something up (`ackPhrase`, default "One sec, let me check."; made once at the start of the session), and a "Looking it up…" placeholder is posted and later replaced with the answer, so the table knows she heard. (Angel's choice.)
@@ -17,6 +17,7 @@ One game session from join to leave: speech to transcript, the wake check, answe
 - Questions are answered one at a time, in the order asked; the next answer is worked out while the previous one is still being spoken.
 
 ## How it works
+- Each check's verdict is logged (whose line, a reply or named, and the verdict; never the words), and the opening of a reply window.
 - All outside parts come in as functions (`voice`, `post`, `stt`, `tts`, `gate`, `answer`, `speakerOf`), so `test/session.test.mjs` runs the whole flow with stand-ins and real Opus packets.
 - `onSpeech`: decoder per speaker → `packetsToWav` (skips short or quiet) → `stt` → `transcript.add` → `onLine`.
 - `onLine`: a stop phrase stops her; a line without her name is only transcript (unless that speaker has a question pending, or a check on their last line is still running, in which case it is kept as the rest of the question); speech that began in the echo window is ignored; then the gate. Lines the speaker added while the check ran are always added to the question, finished or not. "Not complete" keeps the line pending for `followUpMs`. A gate that says stop and also found a question (a "?" in the line) stops her and then answers it.

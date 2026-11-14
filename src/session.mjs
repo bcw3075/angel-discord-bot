@@ -113,6 +113,8 @@ export class Session {
     finally { if (this.checking.get(uid) === later) this.checking.delete(uid); }
     if (typeof decision.dollars === "number") this.costs.claude += decision.dollars;
     if (decision.error) this.log.warn(`the "was that for me?" check failed (${decision.error}); the plain rule decided`);
+    /* what the check decided goes in the log (no words, just the verdict), so a line she didn't answer can be explained */
+    this.log.info(`check on ${line.speaker}'s line${byName ? "" : " (a reply, no name)"}: ${decision.toAngel ? (decision.chat ? "for Angel, small talk" : decision.complete === false ? "for Angel, waiting for the rest" : "for Angel") : "not for Angel"}`);
     if (!decision.toAngel || this.ended || this.stoppedSince(line.at)) return;
     let at = line.at;
     if (decision.stop) {
@@ -213,6 +215,7 @@ export class Session {
           Promise.resolve(played).then(() => {
             if (this.ended || this.stoppedSince(at)) return;
             this.replyTo = { userId, from: this.now(), turn };
+            this.log.info(`${asker} can reply without her name for ${Math.round(this.cfg.replyWindowMs / 1000)} s`);
           }).catch(() => {});
         }
       }
