@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { angelCommand, typedQuestion, SUBCOMMANDS } from "../src/commands.mjs";
-import { loadConfig, saveConfig, missingSettings, readKeyterms, readSpeakers, writeSpeakers, readHouseRules, DEFAULTS, tableFilesReport, fixFor, keyLooksWrong } from "../src/config.mjs";
+import { loadConfig, saveConfig, missingSettings, readKeyterms, readSpeakers, writeSpeakers, readHouseRules, DEFAULTS, tableFilesReport, fixFor, keyLooksWrong, pasteSummary } from "../src/config.mjs";
 import { initLog, redact } from "../src/log.mjs";
 import { inviteUrl, INVITE_PERMISSIONS, within, tokenRefused } from "../src/setup.mjs";
 import { transcribe } from "../src/stt.mjs";
@@ -211,4 +211,15 @@ test("the time limit leaves no timer behind once the step is done", async () => 
   await within(60000, Promise.resolve("done"), "too slow");
   await within(60000, Promise.reject(new Error("refused")), "too slow").catch(() => {});
   assert.equal(timers(), before);
+});
+
+test("setup's paste summary shows the start, the end and the length, never the whole key", () => {
+  const key = "sk-ant-api03-" + "x".repeat(90) + "AbCd";
+  const s = pasteSummary(key);
+  assert.equal(s, `starts sk-ant-api03, ends ...AbCd, ${key.length} characters`);
+  assert.ok(!s.includes("x".repeat(5)));
+  const dg = "0123456789abcdef0123456789abcdef01234567";
+  assert.equal(pasteSummary(dg), "starts 0123456789, ends ...4567, 40 characters");
+  assert.equal(pasteSummary("short"), "5 characters");
+  assert.equal(pasteSummary(""), "");
 });

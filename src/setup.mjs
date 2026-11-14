@@ -3,7 +3,7 @@
 import readline from "node:readline";
 import { stdin, stdout } from "node:process";
 import { Client, GatewayIntentBits, PermissionsBitField, OAuth2Scopes, Events } from "discord.js";
-import { loadConfig, saveConfig, keyLooksWrong, CONFIG_PATH } from "./config.mjs";
+import { loadConfig, saveConfig, keyLooksWrong, pasteSummary, CONFIG_PATH } from "./config.mjs";
 
 export const INVITE_PERMISSIONS = new PermissionsBitField([
   "ViewChannel", "SendMessages", "EmbedLinks", "ReadMessageHistory", "AddReactions", "Connect", "Speak", "UseVAD",
@@ -48,11 +48,12 @@ async function run() {
     try { return (await nextLine()).trim(); } finally { muted = false; stdout.write("\n"); }
   };
 
-  console.log("Angel setup. Nothing you paste here is shown on screen.\n");
+  console.log("Angel setup. The keys you paste aren't shown on screen; after each one you see its start, end and length.\n");
   const ask = async (key, question) => {
     const given = await askHidden(question, !!cfg[key]);
-    if (!given) return;
+    if (!given) { if (cfg[key]) console.log(`  Kept: ${pasteSummary(cfg[key])}.`); return; }
     cfg[key] = given;
+    console.log(`  Got it: ${pasteSummary(given)}.`);
     const wrong = keyLooksWrong(key, given);
     if (wrong) console.log(`  That doesn't look right: ${wrong}. It's saved anyway; npm run check will test it, or run setup again.`);
   };
@@ -63,7 +64,8 @@ async function run() {
   saveConfig(cfg);
   console.log(`\nSaved ${CONFIG_PATH}.`);
 
-  if (!cfg.discordToken) { console.log("No Discord token yet: run npm run setup again when you have it."); return; }
+  /* a failed or missing Discord check exits 1, so Install Angel.cmd stops there instead of pointing at a link it never got */
+  if (!cfg.discordToken) { console.log("No Discord token yet: run npm run setup again when you have it."); process.exitCode = 1; return; }
   console.log("Checking the Discord token...");
   const client = new Client({ intents: [GatewayIntentBits.Guilds] });
   try {
@@ -84,6 +86,7 @@ async function run() {
     }
     console.log(`\nInvite link (also adds missing permissions if you open it again):\n${inviteUrl(client.user.id)}\n`);
   } catch (e) {
+    process.exitCode = 1;
     if (tokenRefused(e)) console.log(`Discord didn't accept the token: ${e.message}\nRun npm run setup again and paste it fresh (Reset Token gives a new one).`);
     else console.log(`Couldn't check the token with Discord: ${e.message}\nYour keys are saved. Check the internet connection and run npm run setup again.`);
   } finally {

@@ -225,6 +225,15 @@ export function keyLooksWrong(which, key) {
   return "";
 }
 
+/* what setup shows after a paste, so the owner can see it arrived whole without the key on screen (or in a screenshot):
+   the first few characters (a quarter at most, 12 at most), the last 4 and the length */
+export function pasteSummary(key) {
+  if (!key) return "";
+  if (key.length < 16) return `${key.length} characters`;
+  const head = Math.min(12, Math.floor(key.length / 4));
+  return `starts ${key.slice(0, head)}, ends ...${key.slice(-4)}, ${key.length} characters`;
+}
+
 export function ensureDataDir(dir = DATA_DIR) {
   fs.mkdirSync(dir, { recursive: true });
   return dir;

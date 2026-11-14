@@ -22,13 +22,16 @@ port or tunnel is needed.
 2. Open a command window in that folder: in File Explorer click the address bar, type `cmd` and press Enter. Use this
    Command Prompt for every step below, not PowerShell or "Open in Terminal": PowerShell often refuses to run `npm`
    ("running scripts is disabled on this system").
-3. Run `npm install`.
+3. Run `npm install`. (Or skip the typing: double-click **Install Angel.cmd**, which checks Node.js and runs steps 3, 5
+   and 7 for you, telling you when to paste each key and when to open the invite link. Do step 4 when it asks for the
+   Discord token, and put your table's files in first, step 6.)
 4. **Discord:** https://discord.com/developers/applications → **New Application**, name it **Angel**.
    - **Bot** tab → **Reset Token** → copy the token (you'll paste it in step 5; it's a password, so keep it private).
    - Same tab, under **Privileged Gateway Intents**, switch on **Message Content Intent** and save. (It lets Angel
      see typed "Angel, ..." messages.)
 5. Run `npm run setup` and paste the Discord token, the Claude key and the Deepgram key when asked (right-click
-   pastes in Command Prompt). Nothing you paste shows on screen. Setup checks the token and prints an **invite link**:
+   pastes in Command Prompt). Nothing you paste shows on screen; after each paste setup shows its first few and last 4
+   characters and its length, so you can see it arrived whole. Setup checks the token and prints an **invite link**:
    open it, pick your server and approve. Then run `npm run setup` once more, pressing Enter at each question to keep
    the keys: now that Angel is in your server, it saves it, so she answers only there.
 6. Put your table's files beside `package.json` (examples are in `examples/`). Check the names: with file extensions
