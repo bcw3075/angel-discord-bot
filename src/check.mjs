@@ -150,7 +150,7 @@ async function ask(cfg, question) {
   const services = buildServices(cfg);
   const started = Date.now();
   const r = await services.answer({ conversation: "", question, asker: "The GM", via: "text", gmName: "" });
-  console.log(`\n${r.say}\n`);
+  console.log(`\nSpoken: ${r.say}\n\nWritten: ${r.details}\n`);
   for (const s of r.sources) console.log(`  ${s.name}: ${s.url}`);
   console.log(`\n${((Date.now() - started) / 1000).toFixed(1)} s, ${r.lookups} lookup${r.lookups === 1 ? "" : "s"}, about $${r.dollars.toFixed(3)} (${cfg.answerModel}).`);
   /* a second question within the hour should read the prompt from the cache rather than write it again */

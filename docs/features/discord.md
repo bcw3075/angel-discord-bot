@@ -8,6 +8,8 @@ since: 0.1.0
 The Discord side: logging in, the /angel commands, typed questions, a session per server, leaving an empty channel.
 
 ## Decisions
+- The typed copy of an answer is its written part (`details`), the fuller one; only the short `say` is spoken (d-1 as changed 2026-11-14, see answering).
+- Angel needs to see the game's text and voice channels: a private channel hides her, and `/angel join` there timed out (2026-11-14, Rhea gave her access). The join's timeout message names this.
 - **Anyone at the table can ask** (the owner, 2026-11-12, d-3; the other choices were only the GM, or everyone with a switch to turn players off). Any player can use every subcommand.
 - Typed questions count without the wake-word check: `@Angel ...`, a message starting "Angel, ...", or `/angel ask`. Other chat in the session's text channel goes into the transcript as typed lines, so Angel knows what was written as well as said.
 - The GM label: `speakers.json` decides; without a role there, whoever has Manage Server counts as the GM, and the server owner's name is the GM's name for the answering prompt. `/angel iam` sets only the name, so the GM keeps that label. (Angel's choice.)

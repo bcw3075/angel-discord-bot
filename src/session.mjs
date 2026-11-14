@@ -178,7 +178,7 @@ export class Session {
       this.log.error(`couldn't answer: ${e.message}`);
       result = { say: "Sorry, I couldn't reach my rules brain just then. Give it a moment and ask me again?", sources: [], failed: true };
     }
-    const typed = typedAnswer({ asker, question, say: result.say, sources: result.sources });
+    const typed = typedAnswer({ asker, question, say: result.details ?? result.say, sources: result.sources });
     try { if (placeholder?.edit) await placeholder.edit(typed); else await target.send(typed); }
     catch (e) { this.log.warn(`couldn't post the answer: ${e.message}`); }
     this.transcript.add({ at: this.now(), speaker: "Angel", role: "angel", text: result.say, kind: "angel" });

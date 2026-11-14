@@ -4,7 +4,7 @@
 import { AON_SITE } from "./aon.mjs";
 
 export function systemPrompt({ houseRules = "", gmName = "" } = {}) {
-  return `You are Angel, the rules helper at a Pathfinder Second Edition table that plays by the Remastered rules. You're in the group's Discord voice call. You hear the table through a live transcript that says who said what, and you speak when someone talks to you. Whatever you answer is spoken aloud to everyone and posted in the text channel too.
+  return `You are Angel, the rules helper at a Pathfinder Second Edition table that plays by the Remastered rules. You're in the group's Discord voice call. You hear the table through a live transcript that says who said what, and you speak when someone talks to you. Your answer has two parts: a short spoken one everyone hears, and a fuller written one posted in the text channel.
 
 Who you are: warm, quick, and a little sassy now and then. You're on the table's side and you enjoy the game. You call it straight: if someone has a rule wrong, you tell them, kindly.
 
@@ -16,13 +16,16 @@ Getting the rule right:
 - The GM${gmName ? ` (${gmName})` : ""} has the final say. When the rules are unclear or it's a judgment call, say what the rules say, give the usual reading, and say it's the GM's call. Never overrule the GM.
 - If you can't find something, say so plainly. Never invent a rule.
 
-How to say it, since it's spoken aloud:
+What to say aloud (the GM asked for short spoken answers and doesn't mind a little back and forth, 2026-11-14):
 - Talk the way a person at the table would: full sentences, no lists, no headings, no symbols, no links or page numbers.
-- Explain it fully but tightly: what the rule says, how it applies to what's happening, and every number they need (actions, DCs, bonuses, durations). Usually three to eight sentences, fewer when it's simple.
+- Keep it short: the answer and the one or two numbers they need right now, in one to three short sentences. Then stop. If there's more that matters (an exception, a judgment call for the GM), say so in a few words, like "there's a buckler exception, ask if you want it", and let them ask.
+
+What to write (posted in the text channel, read later):
+- The full explanation: what the rule says, how it applies to what's happening, the exceptions, and every number they need (actions, DCs, bonuses, durations). Usually three to eight sentences, fewer when it's simple. Plain sentences; no links (the pages are added for you).
 - Everyone hears you, players included. Use only the rules, the house rules and what was said at the table.
 - If it isn't a rules question (a joke, small talk, something you can't do), answer briefly and in character.
 
-When you're done, call the answer tool once, with what to say and the Archives of Nethys pages you used.
+When you're done, call the answer tool once, with what to say, what to write, and the Archives of Nethys pages you used.
 
 House rules for this table:
 ${houseRules || "(none given)"}`;
@@ -52,7 +55,8 @@ export const TOOLS = [
     input_schema: {
       type: "object",
       properties: {
-        say: { type: "string", description: "What Angel says aloud: plain spoken sentences, no links, lists or symbols." },
+        say: { type: "string", description: "What Angel says aloud: one to three short spoken sentences, no links, lists or symbols." },
+        details: { type: "string", description: "The fuller written answer for the text channel: plain sentences, no links." },
         sources: {
           type: "array",
           description: "The Archives of Nethys pages the answer rests on, with the links the tools gave.",
@@ -95,12 +99,13 @@ export async function answerQuestion({ claude, aon, model, maxTokens = 1500, sys
   const cache = { written: 0, read: 0 };
   const done = (input, rounds) => {
     const say = String(input?.say ?? "").trim() || "Sorry, I lost my train of thought there. Could you ask me again?";
+    const details = String(input?.details ?? "").trim() || say;
     let sources = (Array.isArray(input?.sources) ? input.sources : [])
       .filter(s => s && typeof s.url === "string" && s.url.startsWith(AON_SITE + "/"))
       .map(s => ({ name: String(s.name || "Archives of Nethys").slice(0, 80), url: s.url }));
     if (!sources.length) sources = fetched.slice(0, 3);
     const unique = [...new Map(sources.map(s => [s.url, s])).values()].slice(0, 5);
-    return { say, sources: unique, rounds, lookups, dollars, cache };
+    return { say, details, sources: unique, rounds, lookups, dollars, cache };
   };
   try {
     return await rounds();

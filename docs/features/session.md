@@ -8,6 +8,7 @@ since: 0.1.0
 One game session from join to leave: speech to transcript, the wake check, answers one at a time, typed and spoken, costs and the cap.
 
 ## Decisions
+- Only the short spoken answer (`say`) is spoken and goes in the transcript; the channel gets the fuller written one (`details`) (d-1 as changed by Rhea, 2026-11-14).
 - A short phrase is spoken at once while she looks something up (`ackPhrase`, default "One sec, let me check."; made once at the start of the session), and a "Looking it up…" placeholder is posted and later replaced with the answer, so the table knows she heard. (Angel's choice.)
 - A spending cap per session (`maxSessionDollars`, default $5) and one per day for everything the bot does (`maxDailyDollars`, default $10, kept in `data/spend.json`): past either she says so once, and the cap is checked again before every paid step (listening, the check, each answer, its voice), so nothing more is paid for; a typed question is told so. (Angel's choice, a guard on top of the Console workspace's monthly cap.)
 - **Stop means stop** (review M2, 2026-11-13): "Angel, stop" cuts her off, drops questions still waiting their turn (a typed one is told), and an answer still being looked up is typed but not spoken.

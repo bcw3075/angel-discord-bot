@@ -289,7 +289,7 @@ export class AngelBot {
       result = { say: "Sorry, I couldn't reach my rules brain just then. Try me again in a moment?", sources: [] };
     }
     this.addSpend(result.dollars);
-    const typed = typedAnswer({ asker, question, say: result.say, sources: result.sources });
+    const typed = typedAnswer({ asker, question, say: result.details ?? result.say, sources: result.sources });
     try { if (msg?.edit) await msg.edit(typed); else await reply.send(typed); }
     catch (e) { this.log.warn(`couldn't post the answer: ${e.message}`); }
   }

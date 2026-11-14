@@ -58,6 +58,17 @@ test("a spoken question is checked, answered in the channel and spoken aloud", a
   assert.ok(st.costs.claude > 0.02 && st.costs.stt > 0 && st.costs.tts > 0);
 });
 
+test("the short answer is spoken and the fuller one written (Rhea, 2026-11-14)", async () => {
+  const { s, voice, posted } = setup({ heard: ["Angel, can I grapple?"], gate: () => ({ toAngel: true, complete: true, stop: false, question: "Can I grapple?" }) });
+  s.answer = async () => ({ say: "Only with a free hand.", details: "Grapple needs a free hand; a buckler leaves its hand free.", sources: [], dollars: 0.01 });
+  await s.start();
+  speech(voice, "p1");
+  await settle(); await s.answering;
+  assert.deepEqual(voice.spoken.map(String).slice(1), ["clip:Only with a free hand."], "only the short answer is spoken");
+  assert.match(posted[0].edits[0], /buckler/, "the written answer is the fuller one");
+  assert.equal(s.transcript.lines.at(-1).text, "Only with a free hand.", "the transcript has what she said");
+});
+
 test("talk that only mentions an angel in the story is not answered", async () => {
   const { s, voice, gates, asked } = setup({ heard: ["the angel statue starts to glow"], gate: () => ({ toAngel: false, complete: true, stop: false, question: "" }) });
   await s.start();

@@ -48,6 +48,21 @@ test("with no sources given, the pages she read are listed", async () => {
   ]);
   const r = await answerQuestion({ claude, aon: fakeAon, model: "m", system: "S", conversation: "", question: "q", asker: "A" });
   assert.deepEqual(r.sources, [{ name: "Grabbed", url: "https://2e.aonprd.com/Conditions.aspx?ID=77" }]);
+  assert.equal(r.details, "Yes.", "with no written part, the spoken one is written too");
+});
+
+test("short spoken answer, fuller written one (Rhea, 2026-11-14)", async () => {
+  const claude = fakeClaude([
+    { content: [{ type: "tool_use", id: "b", name: "answer", input: { say: "Not with a shield and a weapon: Grapple needs a free hand.", details: "Grapple needs at least one free hand. A buckler leaves its hand free; that's the GM's call." } }], usage: {} },
+  ]);
+  const r = await answerQuestion({ claude, aon: fakeAon, model: "m", system: "S", conversation: "", question: "q", asker: "A" });
+  assert.equal(r.say, "Not with a shield and a weapon: Grapple needs a free hand.");
+  assert.match(r.details, /buckler/);
+  const prompt = systemPrompt({});
+  assert.match(prompt, /one to three short sentences/);
+  assert.match(prompt, /posted in the text channel/);
+  const tool = claude.requests[0].tools.find(t => t.name === "answer");
+  assert.ok(tool.input_schema.properties.details, "the answer tool has the written part");
 });
 
 test("the last round forces an answer, and plain text counts as one", async () => {
