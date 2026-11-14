@@ -214,15 +214,29 @@ export function fixFor(service, message) {
   return "";
 }
 
-/* A pasted key that doesn't look like one (pasted twice, or into the wrong question): a warning, not a refusal */
+/* A pasted key that doesn't look like one (pasted twice, two keys run together, the wrong question). Setup's askKey
+   doesn't save it and asks again; keyCertainlyWrong says which can never be a real key, so pasting the same one
+   twice can't save it either. The format checks alone are only a guess, so the same key twice saves past them. */
 export function keyLooksWrong(which, key) {
   if (!key) return "";
   if (/\s/.test(key)) return "it has a space or line break in it";
   if (key.length >= 20 && key.length % 2 === 0 && key.slice(0, key.length / 2) === key.slice(key.length / 2)) return "it looks pasted twice";
   if (which === "anthropicApiKey" && (!key.startsWith("sk-ant-") || key.indexOf("sk-ant-", 1) > 0)) return "Claude keys start with sk-ant- (once)";
   if (which === "discordToken" && !/^[\w-]+\.[\w-]+\.[\w-]+$/.test(key)) return "Discord tokens are three parts with dots between them";
-  if (which === "deepgramApiKey" && key.length > 80) return "it's much longer than a Deepgram key (pasted twice?)";
+  if (which === "deepgramApiKey" && key.length > 40) return "it's longer than a Deepgram key (two pasted together?)";
+  if (which === "deepgramApiKey" && !/^[0-9a-f]+$/i.test(key)) return "Deepgram keys are letters a to f and digits only";
   return "";
+}
+
+/* never a real key, whatever the format: a space, the same paste twice, two keys run together */
+export function keyCertainlyWrong(which, key) {
+  if (!key) return false;
+  if (/\s/.test(key)) return true;
+  if (key.length >= 20 && key.length % 2 === 0 && key.slice(0, key.length / 2) === key.slice(key.length / 2)) return true;
+  if (which === "anthropicApiKey" && key.indexOf("sk-ant-", 1) > 0) return true;
+  if (which === "discordToken" && (key.match(/\./g) || []).length > 2) return true;
+  if (which === "deepgramApiKey" && key.length >= 80) return true;
+  return false;
 }
 
 /* what setup shows after a paste, so the owner can see it arrived whole without the key on screen (or in a screenshot):

@@ -3,7 +3,7 @@
 import readline from "node:readline";
 import { stdin, stdout } from "node:process";
 import { Client, GatewayIntentBits, PermissionsBitField, OAuth2Scopes, Events } from "discord.js";
-import { loadConfig, saveConfig, keyLooksWrong, pasteSummary, CONFIG_PATH } from "./config.mjs";
+import { loadConfig, saveConfig, keyLooksWrong, keyCertainlyWrong, pasteSummary, CONFIG_PATH } from "./config.mjs";
 
 export const INVITE_PERMISSIONS = new PermissionsBitField([
   "ViewChannel", "SendMessages", "EmbedLinks", "ReadMessageHistory", "AddReactions", "Connect", "Speak", "UseVAD",
@@ -19,6 +19,33 @@ export function within(ms, promise, reason) {
 
 /* Discord turned the token down (rather than not being reachable) */
 export const tokenRefused = e => e?.code === "TokenInvalid" || /invalid token/i.test(e?.message ?? "");
+
+/* one key question. A key that looks wrong (two pastes on the same hidden line, a space, the wrong question) is not
+   saved: she's asked again, and Enter keeps the old one. The same odd-looking key pasted twice in a row is saved,
+   so a format check that's wrong for a new kind of key can't lock her out (never one that can't be a key at all). Rhea hit this 2026-11-14: a first token
+   pasted without Enter, then a new one after Reset Token, went in as one long token. */
+export async function askKey(cfg, key, question, askHidden, say) {
+  let last = "", refused = false;
+  for (;;) {
+    const given = await askHidden(question, !!cfg[key]);
+    if (!given) {
+      if (cfg[key]) say(`  Kept: ${pasteSummary(cfg[key])}.`);
+      else if (refused) say("  Nothing saved for this key.");
+      return;
+    }
+    const wrong = keyLooksWrong(key, given);
+    if (!wrong || (given === last && !keyCertainlyWrong(key, given))) {
+      cfg[key] = given;
+      say(`  Got it: ${pasteSummary(given)}.${wrong ? " Saved as you pasted it twice; npm run check will test it." : ""}`);
+      return;
+    }
+    say(`  That doesn't look right (${pasteSummary(given)}): ${wrong}. Not saved.`);
+    say(keyCertainlyWrong(key, given)
+      ? "  Copy it fresh and paste it again (it replaces everything), or press Enter to skip."
+      : "  Paste it again (it replaces everything), paste the same one again to save it anyway, or press Enter to skip.");
+    last = given; refused = true;
+  }
+}
 
 export function inviteUrl(appId) {
   const scopes = [OAuth2Scopes.Bot, OAuth2Scopes.ApplicationsCommands].join("%20");
@@ -49,14 +76,7 @@ async function run() {
   };
 
   console.log("Angel setup. The keys you paste aren't shown on screen; after each one you see its start, end and length.\n");
-  const ask = async (key, question) => {
-    const given = await askHidden(question, !!cfg[key]);
-    if (!given) { if (cfg[key]) console.log(`  Kept: ${pasteSummary(cfg[key])}.`); return; }
-    cfg[key] = given;
-    console.log(`  Got it: ${pasteSummary(given)}.`);
-    const wrong = keyLooksWrong(key, given);
-    if (wrong) console.log(`  That doesn't look right: ${wrong}. It's saved anyway; npm run check will test it, or run setup again.`);
-  };
+  const ask = (key, question) => askKey(cfg, key, question, askHidden, line => console.log(line));
   await ask("discordToken", "Discord bot token (Developer Portal → your app → Bot → Reset Token)");
   await ask("anthropicApiKey", "Claude API key (Console → API keys; the bot's own workspace)");
   await ask("deepgramApiKey", "Deepgram API key (console.deepgram.com → API Keys)");

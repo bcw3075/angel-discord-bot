@@ -6,7 +6,7 @@ import path from "node:path";
 import { angelCommand, typedQuestion, SUBCOMMANDS } from "../src/commands.mjs";
 import { loadConfig, saveConfig, missingSettings, readKeyterms, readSpeakers, writeSpeakers, readHouseRules, DEFAULTS, tableFilesReport, fixFor, keyLooksWrong, pasteSummary } from "../src/config.mjs";
 import { initLog, redact } from "../src/log.mjs";
-import { inviteUrl, INVITE_PERMISSIONS, within, tokenRefused } from "../src/setup.mjs";
+import { inviteUrl, INVITE_PERMISSIONS, within, tokenRefused, askKey } from "../src/setup.mjs";
 import { transcribe } from "../src/stt.mjs";
 import { scriptedFetch } from "./helpers.mjs";
 
@@ -160,7 +160,7 @@ test("setup warns about a key that doesn't look like one, and only blames the to
   assert.match(keyLooksWrong("anthropicApiKey", "dg-123"), /sk-ant-/);
   assert.equal(keyLooksWrong("discordToken", "MTIz.Gabc.def-ghi_jk"), "");
   assert.match(keyLooksWrong("discordToken", "MTIz.Gabc"), /three parts/);
-  assert.match(keyLooksWrong("deepgramApiKey", "a".repeat(81)), /pasted twice/);
+  assert.match(keyLooksWrong("deepgramApiKey", "a".repeat(81)), /longer than a Deepgram key/);
   assert.match(keyLooksWrong("deepgramApiKey", "abc def"), /space or line break/);
   assert.equal(tokenRefused(Object.assign(new Error("An invalid token was provided."), { code: "TokenInvalid" })), true);
   assert.equal(tokenRefused(new Error("getaddrinfo ENOTFOUND discord.com")), false);
@@ -222,4 +222,45 @@ test("setup's paste summary shows the start, the end and the length, never the w
   assert.equal(pasteSummary(dg), "starts 0123456789, ends ...4567, 40 characters");
   assert.equal(pasteSummary("short"), "5 characters");
   assert.equal(pasteSummary(""), "");
+});
+
+test("setup asks again for a key that looks wrong instead of saving it, and Enter keeps the old one", async () => {
+  const run = async (answers, cfg = {}, key = "discordToken") => {
+    const said = [], q = [...answers];
+    await askKey(cfg, key, "key", async () => q.shift() ?? "", l => said.push(l));
+    assert.equal(q.length, 0, "every answer used");
+    return { cfg, said };
+  };
+  const good = "MTIz.Gabc.def-ghi_jk", other = "MTIy.Gxyz.uvw-rst_qp";
+  // two tokens on one hidden line (Rhea, 2026-11-14), then the right one: only the right one is saved
+  let r = await run([good + other, other]);
+  assert.equal(r.cfg.discordToken, other);
+  assert.match(r.said[0], /Not saved/);
+  assert.ok(!r.said.join(" ").includes(good) && !r.said.join(" ").includes(other), "no whole key shown");
+  assert.match(r.said.at(-1), /Got it/);
+  // two tokens run together can't be saved even pasted twice the same
+  r = await run([good + other, good + other, ""]);
+  assert.equal(r.cfg.discordToken, undefined);
+  assert.match(r.said.at(-1), /Nothing saved/);
+  // a wrong one, then Enter: the old key stays
+  r = await run([good + other, ""], { discordToken: good });
+  assert.equal(r.cfg.discordToken, good);
+  assert.match(r.said.at(-1), /Kept/);
+  // the same odd-looking key twice in a row is saved (a new format can't lock her out); A, B, A is not
+  r = await run(["odd-token", "odd-token"]);
+  assert.equal(r.cfg.discordToken, "odd-token");
+  assert.match(r.said.at(-1), /pasted it twice/);
+  r = await run(["odd-a", "odd-b", "odd-a", ""]);
+  assert.equal(r.cfg.discordToken, undefined);
+  // a good key at once: saved, one line
+  r = await run([good]);
+  assert.equal(r.cfg.discordToken, good);
+  assert.equal(r.said.length, 1);
+  // Claude and Deepgram: two keys on one line are refused
+  const ant = "sk-ant-api03-" + "a".repeat(40), ant2 = "sk-ant-api03-" + "b".repeat(40);
+  r = await run([ant + ant2, ant2], {}, "anthropicApiKey");
+  assert.equal(r.cfg.anthropicApiKey, ant2);
+  const dg = "0123456789abcdef0123456789abcdef01234567", dg2 = "fedcba9876543210fedcba9876543210fedcba98";
+  r = await run([dg + dg2, dg + dg2, dg2], {}, "deepgramApiKey");
+  assert.equal(r.cfg.deepgramApiKey, dg2);
 });

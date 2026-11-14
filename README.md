@@ -31,7 +31,7 @@ port or tunnel is needed.
      see typed "Angel, ..." messages.)
 5. Run `npm run setup` and paste the Discord token, the Claude key and the Deepgram key when asked (right-click
    pastes in Command Prompt). Nothing you paste shows on screen; after each paste setup shows its first few and last 4
-   characters and its length, so you can see it arrived whole. Setup checks the token and prints an **invite link**:
+   characters and its length, so you can see it arrived whole. If a paste looks wrong (two keys run together, a space), it isn't saved and setup asks again. Setup checks the token and prints an **invite link**:
    open it, pick your server and approve. Then run `npm run setup` once more, pressing Enter at each question to keep
    the keys: now that Angel is in your server, it saves it, so she answers only there.
 6. Put your table's files beside `package.json` (examples are in `examples/`). Check the names: with file extensions
