@@ -18,7 +18,7 @@ if not exist "node_modules\discord.js\package.json" (
 :loop
 node src\main.mjs
 if %errorlevel%==2 (
-  echo Angel needs setting up first: see the message above, or run  npm run setup  in this folder.
+  echo Angel can't start yet: see the message above. Missing keys? Run  npm run setup  in this folder.
   pause
   exit /b
 )

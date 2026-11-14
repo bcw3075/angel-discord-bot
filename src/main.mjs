@@ -13,6 +13,7 @@ async function main() {
   }
   ensureDataDir();
   initLog(cfg);
+  for (const problem of cfg.problems ?? []) log.warn(`config.json: ${problem}`);
   const missing = missingSettings(cfg);
   if (missing.length) {
     log.error(`Angel can't start yet: missing ${missing.join(", ")}. Run: npm run setup`);

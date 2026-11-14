@@ -39,6 +39,7 @@ async function check(cfg) {
   const [major, minor] = process.versions.node.split(".").map(Number);
   if (major > 22 || (major === 22 && minor >= 12)) ok("Node.js", process.versions.node);
   else bad("Node.js", `${process.versions.node} is too old; install the current LTS from nodejs.org (22.12 or newer)`);
+  for (const problem of cfg.problems) bad("Settings", problem);
   for (const line of tableFilesReport()) (line.level === "ok" ? ok : line.level === "fail" ? bad : note)(line.what, line.text);
 
   if (!cfg.anthropicApiKey) bad("Claude", "no key saved (npm run setup)");

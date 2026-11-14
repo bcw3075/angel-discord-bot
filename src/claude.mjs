@@ -16,7 +16,8 @@ export class Claude {
   /* usage.cache_creation splits cache writes into 5-minute and 1-hour ones, which cost different amounts; without
      the split, every write is priced at the dearer rate, so the spending caps never undercount */
   cost(model, usage = {}) {
-    const p = this.prices[model];
+    /* a model with no price (a newer one she typed in) counts at the dearest known price, so the caps still work */
+    const p = this.prices[model] ?? Object.values(this.prices).reduce((a, b) => (b[3] > (a?.[3] ?? -1) ? b : a), null);
     if (!p) return 0;
     const hourWrite = p[4] ?? p[0] * 2;
     const split = usage.cache_creation;

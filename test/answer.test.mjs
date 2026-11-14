@@ -102,7 +102,7 @@ test("the Claude client retries overload, reports other errors plainly, and pric
   assert.ok(Math.abs(new Claude({ prices: { m: [2, 2.5, 0.1, 10, 3] } }).cost("m", { cache_creation: { ephemeral_1h_input_tokens: 1e6 } }) - 3) < 1e-9, "a fifth price wins");
   assert.equal(f.calls[0].init.headers["x-api-key"], "sk");
   await assert.rejects(c.create({ model: "m" }), /Claude answered 400: max_tokens too big/);
-  assert.equal(c.cost("unknown", { input_tokens: 5 }), 0);
+  assert.ok(Math.abs(c.cost("unknown", { input_tokens: 5 }) - 5 * 2 / 1e6) < 1e-15, "an unpriced model counts at the dearest price (here the only one), never as free");
 });
 
 test("a timed-out Claude call is not sent again; a failed answer still reports what its rounds cost", async () => {
@@ -142,4 +142,15 @@ test("the bot passes its cache setting through to the answering calls (1 hour by
   const services = buildServices({ ...DEFAULTS, anthropicApiKey: "k", deepgramApiKey: "d" }, { fetchImpl, dataDir });
   await services.answer({ conversation: "", question: "Grabbed?", asker: "Mira", via: "text", gmName: "Dana" });
   assert.deepEqual(sent[0].system[0].cache_control, { type: "ephemeral", ttl: "1h" });
+});
+
+test("an answer model with no price is counted at the dearest known price, not as free", () => {
+  const c = new Claude({ prices: { cheap: [0.1, 0.125, 0.01, 0.5], dear: [4, 5, 0.2, 20] } });
+  assert.ok(Math.abs(c.cost("unknown", { input_tokens: 1e6 }) - 4) < 1e-9);
+});
+
+test("Deepgram's voice errors are read out of their JSON too", async () => {
+  const { synthesize } = await import("../src/tts.mjs");
+  const f = scriptedFetch([{ status: 401, body: { err_code: "INVALID_AUTH", err_msg: "Invalid credentials." } }]);
+  await assert.rejects(synthesize("Hello.", { apiKey: "k", fetchImpl: f }), /^Error: Deepgram speak answered 401: Invalid credentials\.$/);
 });

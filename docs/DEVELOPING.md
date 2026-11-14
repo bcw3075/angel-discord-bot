@@ -37,6 +37,10 @@ code, comments, tests, fixtures or docs (the privacy scan checks against a priva
 - **One review goes to the install path**: setup, `npm run check`, `Start Angel.cmd` and the README, read as the
   owner meets them on Windows (Command Prompt, Notepad, File Explorer with extensions hidden). The code reviews read
   the logic and missed all 18 things this found (2026-11-13).
+- **Every round of fixes gets its own fresh review before a release.** Each round so far has brought in new
+  problems: the third review's fixes made a spending cap typed as "$10" switch itself off, and a README line they
+  added invited a server id that JSON rounds (fourth review, 2026-11-14). A setting read from `config.json` that
+  guards money or access is checked for its kind, never trusted.
 - Plain fetch, no SDKs: fewer moving parts on the owner's PC.
 - Pinned versions (`--save-exact`). `@discordjs/voice` and `@snazzah/davey` follow Discord's voice encryption: before
   updating them, read their changelogs for receive and DAVE changes, then run the live voice checks.

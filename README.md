@@ -68,7 +68,9 @@ port or tunnel is needed.
   whoever can manage the Discord server counts as the GM.
 
 ## Settings in config.json
-Change them with Notepad, then restart Angel. `true`, `false` and numbers go without quote marks. The most useful:
+Change them with Notepad, then restart Angel. `true`, `false` and amounts go without quote marks, but `guildId`
+keeps its quote marks (it's too long a number for JSON without them). `npm run check` tells you if a setting can't
+be read. The most useful:
 - `ttsVoice`: Angel's voice (`npm run voices` to hear them).
 - `speak`: `false` makes her type only.
 - `ackPhrase`: what she says at once while looking something up (`""` for nothing).

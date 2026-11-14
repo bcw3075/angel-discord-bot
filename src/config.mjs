@@ -69,18 +69,32 @@ export const DEFAULTS = Object.freeze({
 /* A text file as Notepad may save it: UTF-8 (with or without a byte-order mark) or "Unicode" (UTF-16 LE). */
 export function readText(file) {
   const buf = fs.readFileSync(file);
-  const text = buf[0] === 0xff && buf[1] === 0xfe ? buf.toString("utf16le") : buf.toString("utf8");
+  let text;
+  if (buf[0] === 0xff && buf[1] === 0xfe) text = buf.toString("utf16le");
+  else if (buf[0] === 0xfe && buf[1] === 0xff) text = Buffer.from(buf.subarray(0, buf.length - (buf.length % 2))).swap16().toString("utf16le");
+  else text = buf.toString("utf8");
   return text.replace(/^\uFEFF/, "");
 }
 
-/* "false" typed with quotes is still false, "5" still 5: a setting keeps the kind its default has */
-function sameKind(value, fallback) {
-  if (typeof value !== "string") return value;
+/* A setting keeps the kind its default has: "false" typed with quote marks is still false, "$5" is 5. One that
+   can't be read that way gets the default and a problem line (npm run check shows it), because a spending cap left
+   as text would never trip. */
+function sameKind(key, value, fallback, problems) {
   if (typeof fallback === "boolean") {
-    if (/^\s*(true|yes|on|1)\s*$/i.test(value)) return true;
-    if (/^\s*(false|no|off|0)\s*$/i.test(value)) return false;
+    if (typeof value === "boolean") return value;
+    const t = String(value).trim();
+    if (/^(true|yes|on|1)$/i.test(t)) return true;
+    if (/^(false|no|off|0)$/i.test(t)) return false;
+    problems.push(`"${key}" should be true or false, not ${JSON.stringify(value)}, so ${fallback} is used`);
+    return fallback;
   }
-  if (typeof fallback === "number" && value.trim() !== "" && Number.isFinite(Number(value))) return Number(value);
+  if (typeof fallback === "number") {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    const t = typeof value === "string" ? value.replace(/[$,\s]/g, "") : "";
+    if (t !== "" && Number.isFinite(Number(t))) return Number(t);
+    problems.push(`"${key}" should be a number, not ${JSON.stringify(value)}, so ${fallback} is used`);
+    return fallback;
+  }
   return value;
 }
 
@@ -93,8 +107,19 @@ export function loadConfig(file = CONFIG_PATH) {
         + "(a missing or extra comma or quote mark is the usual cause), then try again.");
     }
   }
-  for (const k of Object.keys(saved)) saved[k] = sameKind(saved[k], DEFAULTS[k]);
-  return { ...DEFAULTS, ...saved, prices: { ...DEFAULTS.prices, ...(saved.prices ?? {}) }, deepgramPrices: { ...DEFAULTS.deepgramPrices, ...(saved.deepgramPrices ?? {}) } };
+  const problems = [];
+  for (const k of Object.keys(saved)) if (k in DEFAULTS) saved[k] = sameKind(k, saved[k], DEFAULTS[k], problems);
+  /* a server id is 18 or 19 digits: without quote marks JSON rounds it, and it matches no server */
+  if (saved.guildId !== undefined && typeof saved.guildId !== "string") {
+    problems.push(`"guildId" needs its quote marks (without them a long number loses its last digits): run npm run setup once more to save it again`);
+  }
+  const cfg = { ...DEFAULTS, ...saved, prices: { ...DEFAULTS.prices, ...(saved.prices ?? {}) }, deepgramPrices: { ...DEFAULTS.deepgramPrices, ...(saved.deepgramPrices ?? {}) } };
+  for (const model of new Set([cfg.answerModel, cfg.gateModel])) {
+    if (!cfg.prices[model]) problems.push(`no price is known for "${model}", so its cost is counted at the dearest price in the table`);
+  }
+  /* not enumerable, so saveConfig never writes it */
+  Object.defineProperty(cfg, "problems", { value: problems, enumerable: false });
+  return cfg;
 }
 
 /* Settings that follow each release (models and prices go stale): written to config.json only when they differ
@@ -181,10 +206,11 @@ export function tableFilesReport(files = LOCAL_FILES) {
 /* What to do about a refused key, added to npm run check's FAIL line for that service. */
 export function fixFor(service, message) {
   const m = String(message);
+  const keyed = service === "Claude" || service === "Deepgram";
   if (service === "Discord" && /invalid token/i.test(m)) return "the token was refused: run npm run setup and paste a fresh one (Developer Portal → Bot → Reset Token)";
-  if (/\b(401|403)\b/.test(m)) return `the ${service} key was refused: run npm run setup and paste it again`;
-  if (/\b402\b|credit|balance|billing/i.test(m)) return `${service} wants payment or credit on the account`;
-  if (/fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|took longer/i.test(m)) return `couldn't reach ${service}: check the internet connection (a VPN or firewall can block it), then try again`;
+  if (keyed && /answered (401|403)\b/.test(m)) return `the ${service} key was refused: run npm run setup and paste it again`;
+  if (keyed && /answered 402\b|credit balance|billing/i.test(m)) return `${service} wants payment or credit on the account`;
+  if (/fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|took longer|aborted due to timeout|timed out|didn't answer within/i.test(m)) return `couldn't reach ${service}: check the internet connection (a VPN or firewall can block it), then try again`;
   return "";
 }
 
@@ -192,6 +218,7 @@ export function fixFor(service, message) {
 export function keyLooksWrong(which, key) {
   if (!key) return "";
   if (/\s/.test(key)) return "it has a space or line break in it";
+  if (key.length >= 20 && key.length % 2 === 0 && key.slice(0, key.length / 2) === key.slice(key.length / 2)) return "it looks pasted twice";
   if (which === "anthropicApiKey" && (!key.startsWith("sk-ant-") || key.indexOf("sk-ant-", 1) > 0)) return "Claude keys start with sk-ant- (once)";
   if (which === "discordToken" && !/^[\w-]+\.[\w-]+\.[\w-]+$/.test(key)) return "Discord tokens are three parts with dots between them";
   if (which === "deepgramApiKey" && key.length > 80) return "it's much longer than a Deepgram key (pasted twice?)";

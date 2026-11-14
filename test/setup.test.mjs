@@ -155,7 +155,8 @@ test("a FAIL in check says what to do for the usual reasons", async () => {
 
 test("setup warns about a key that doesn't look like one, and only blames the token when Discord refused it", async () => {
   assert.equal(keyLooksWrong("anthropicApiKey", "sk-ant-api03-abc"), "");
-  assert.match(keyLooksWrong("anthropicApiKey", "sk-ant-api03-abcsk-ant-api03-abc"), /start with sk-ant- \(once\)/);
+  assert.match(keyLooksWrong("anthropicApiKey", "sk-ant-api03-abcsk-ant-api03-abc"), /pasted twice/);
+  assert.match(keyLooksWrong("anthropicApiKey", "sk-ant-api03-abcsk-ant-api03-xyz"), /start with sk-ant- \(once\)/);
   assert.match(keyLooksWrong("anthropicApiKey", "dg-123"), /sk-ant-/);
   assert.equal(keyLooksWrong("discordToken", "MTIz.Gabc.def-ghi_jk"), "");
   assert.match(keyLooksWrong("discordToken", "MTIz.Gabc"), /three parts/);
@@ -165,4 +166,49 @@ test("setup warns about a key that doesn't look like one, and only blames the to
   assert.equal(tokenRefused(new Error("getaddrinfo ENOTFOUND discord.com")), false);
   await assert.rejects(within(10, new Promise(() => {}), "Discord didn't answer"), /Discord didn't answer/);
   assert.equal(await within(1000, Promise.resolve(5), "no"), 5);
+});
+
+test("a setting that can't be read as its kind gets the default and a problem line, so a cap can't silently stop working", () => {
+  const dir = tmp(), f = path.join(dir, "config.json");
+  fs.writeFileSync(f, '{"maxDailyDollars": "$12", "maxSessionDollars": "5 dollars", "speak": "maybe", "guildId": 1234567890123456789, "answerModel": "claude-new-9"}');
+  const c = loadConfig(f);
+  assert.equal(c.maxDailyDollars, 12, "a dollar sign is fine");
+  assert.equal(c.maxSessionDollars, DEFAULTS.maxSessionDollars);
+  assert.equal(c.speak, DEFAULTS.speak);
+  assert.equal(c.problems.length, 4);
+  assert.match(c.problems.join("\n"), /"maxSessionDollars" should be a number/);
+  assert.match(c.problems.join("\n"), /"speak" should be true or false/);
+  assert.match(c.problems.join("\n"), /"guildId" needs its quote marks/);
+  assert.match(c.problems.join("\n"), /no price is known for "claude-new-9"/);
+  saveConfig(c, f);
+  assert.equal("problems" in JSON.parse(fs.readFileSync(f, "utf8")), false, "never written to the file");
+  assert.deepEqual(loadConfig(path.join(dir, "none.json")).problems, []);
+});
+
+test('a "Unicode big endian" file reads too', () => {
+  const dir = tmp(), f = path.join(dir, "house-rules.md");
+  fs.writeFileSync(f, Buffer.from(Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("Hero points.", "utf16le")])).swap16());
+  assert.equal(readHouseRules(f), "Hero points.");
+});
+
+test("FAIL advice only talks about keys for the services that have one", () => {
+  assert.equal(fixFor("Archives", "Archives of Nethys answered 403"), "");
+  assert.equal(fixFor("Speakers", "speakers.json: Unexpected token at position 402 (line 1 column 403)"), "");
+  assert.match(fixFor("Deepgram", "The operation was aborted due to timeout"), /couldn't reach Deepgram/);
+  assert.match(fixFor("Discord", "Discord didn't answer within 30 seconds (a VPN or firewall can block it)"), /couldn't reach Discord/);
+  assert.match(fixFor("Claude", "Claude answered 400: Your credit balance is too low"), /payment or credit/);
+});
+
+test("a key pasted twice is noticed whatever its length", () => {
+  const dg = "0123456789abcdef0123456789abcdef01234567";
+  assert.equal(keyLooksWrong("deepgramApiKey", dg), "");
+  assert.match(keyLooksWrong("deepgramApiKey", dg + dg), /pasted twice/);
+});
+
+test("the time limit leaves no timer behind once the step is done", async () => {
+  const timers = () => process.getActiveResourcesInfo().filter(r => r === "Timeout").length;
+  const before = timers();
+  await within(60000, Promise.resolve("done"), "too slow");
+  await within(60000, Promise.reject(new Error("refused")), "too slow").catch(() => {});
+  assert.equal(timers(), before);
 });
