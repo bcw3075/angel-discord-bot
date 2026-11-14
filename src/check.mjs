@@ -9,17 +9,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Client, GatewayIntentBits, Events } from "discord.js";
-import { loadConfig, ensureDataDir, tableFilesReport, fixFor, DATA_DIR } from "./config.mjs";
+import { loadConfig, saveConfig, ensureDataDir, tableFilesReport, fixFor, DATA_DIR } from "./config.mjs";
 import { Claude } from "./claude.mjs";
 import { Aon } from "./aon.mjs";
 import { transcribe } from "./stt.mjs";
-import { synthesize, oggPackets } from "./tts.mjs";
+import { synthesize, oggPackets, VOICES, voiceFromName } from "./tts.mjs";
 import { createDecoder, decodePackets } from "./audio.mjs";
 import { inviteUrl, within } from "./setup.mjs";
 import { buildServices } from "./services.mjs";
 import { isIntentRefusal } from "./bot.mjs";
 
-export const VOICES = ["aura-2-thalia-en", "aura-2-andromeda-en", "aura-2-helena-en", "aura-2-luna-en", "aura-2-athena-en", "aura-2-cora-en", "aura-2-electra-en", "aura-2-asteria-en"];
 const SAMPLE = "Hi, I'm Angel. Grab your dice: the rules say you're off-guard, so that's a minus two to your armor class.";
 
 const ok = (what, more = "") => console.log(`  OK    ${what}${more ? ": " + more : ""}`);
@@ -118,11 +117,21 @@ async function voices(cfg) {
   console.log(`Saving samples in ${dir} ...`);
   for (const v of VOICES) {
     try {
-      fs.writeFileSync(path.join(dir, `${v}.mp3`), await synthesize(SAMPLE, { apiKey: cfg.deepgramApiKey, voice: v, format: "mp3" }));
-      console.log(`  ${v}.mp3`);
+      const short = v.split("-")[2];
+      fs.writeFileSync(path.join(dir, `${short}.mp3`), await synthesize(SAMPLE, { apiKey: cfg.deepgramApiKey, voice: v, format: "mp3" }));
+      console.log(`  ${short}.mp3${v === cfg.ttsVoice ? "  (her voice now)" : ""}`);
     } catch (e) { console.log(`  ${v}: ${e.message}`); }
   }
-  console.log(`\nNow: ${cfg.ttsVoice}. To change it, put the one you like as "ttsVoice" in config.json (e.g. "aura-2-luna-en") and restart Angel.`);
+  console.log(`\nNow: ${cfg.ttsVoice}. To change it: npm run voices -- --set luna (any name above), then restart Angel.`);
+}
+
+/* `npm run voices -- --set luna`: saves Angel's voice in config.json (keys untouched) */
+function setVoice(cfg, name) {
+  const v = voiceFromName(name);
+  if (!v) { console.log(`"${name}" isn't one of the voices: ${VOICES.map(x => x.split("-")[2]).join(", ")}.`); failures++; return; }
+  cfg.ttsVoice = v;
+  saveConfig(cfg);
+  console.log(`Angel's voice is now ${v.split("-")[2]}. Restart Angel (close her window, double-click Start Angel.cmd) to hear it.`);
 }
 
 /* `npm run ask -- "can I grapple with a shield in my hand?"`: one question through the real answering, without
@@ -143,6 +152,6 @@ async function ask(cfg, question) {
 let cfg;
 try { cfg = loadConfig(); }
 catch (e) { console.log(e.message); process.exit(1); }
-const askAt = process.argv.indexOf("--ask");
-const job = askAt >= 0 ? ask(cfg, process.argv.slice(askAt + 1).join(" ").trim()) : process.argv.includes("--voices") ? voices(cfg) : check(cfg);
+const askAt = process.argv.indexOf("--ask"), setAt = process.argv.indexOf("--set");
+const job = setAt >= 0 ? Promise.resolve(setVoice(cfg, process.argv[setAt + 1])) : askAt >= 0 ? ask(cfg, process.argv.slice(askAt + 1).join(" ").trim()) : process.argv.includes("--voices") ? voices(cfg) : check(cfg);
 job.catch(e => { console.log(`Failed: ${e.message}`); failures++; }).then(() => process.exit(failures ? 1 : 0));

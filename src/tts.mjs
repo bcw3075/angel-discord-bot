@@ -62,3 +62,16 @@ export function chunkText(text, max = TTS_MAX_CHARS) {
   push(cur);
   return pieces;
 }
+
+/* every feminine Aura-2 English voice (Rhea asked for all of them, 2026-11-14; list from a third-party copy of
+   Deepgram's catalogue, so `npm run voices` shows any that fail). One feminine voice is left out: its name is on the
+   private word list (a campaign name), which no public file may hold. */
+export const VOICES = ["amalthea", "andromeda", "asteria", "athena", "callista", "cora", "cordelia", "delia", "electra",
+  "harmonia", "helena", "hera", "iris", "janus", "juno", "luna", "minerva", "ophelia", "pandora", "phoebe", "selene", "thalia",
+  "theia", "vesta"].map(n => `aura-2-${n}-en`);
+
+/* "luna", "Luna" or "aura-2-luna-en" → the model id; "" when it isn't one of VOICES */
+export function voiceFromName(name) {
+  const n = String(name ?? "").trim().toLowerCase().replace(/\.mp3$/, "");
+  return VOICES.find(v => v === n || v === `aura-2-${n}-en`) ?? "";
+}

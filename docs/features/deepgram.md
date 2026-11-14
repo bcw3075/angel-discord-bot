@@ -1,6 +1,6 @@
 ---
 feature: deepgram
-files: [src/stt.mjs, src/tts.mjs, src/speech.mjs]
+files: [Choose Voice.cmd, src/stt.mjs, src/tts.mjs, src/speech.mjs]
 functions: []
 dependsOn: []
 since: 0.1.0
@@ -8,6 +8,7 @@ since: 0.1.0
 Deepgram: turning each piece of speech into text, and Angel's voice; making answers sound right when spoken.
 
 ## Decisions
+- **Every feminine Aura-2 English voice to choose from** (Rhea: "I want a sample of all female voices", 2026-11-14): `VOICES` in `tts.mjs` lists 24 of the 25 (one shares its name with a campaign name on the private word list, which no public file may hold), from a third-party copy of Deepgram's catalogue (Deepgram's own page isn't reachable from the build workspace), so `npm run voices` reports any that fail; `voiceFromName` takes a short name ("luna"). Deepgram now calls Aura-2 its previous generation, beside the newer Flux voices on /v2/speak: a later choice, not this release.
 - **Deepgram for both listening and Angel's voice** (the owner, 2026-11-12, d-2; the other choices were a free program on her PC using the graphics card, or OpenAI). One account and key; new accounts get $200 of credit; billed per second.
 - Listening: Nova-3 pre-recorded, one request per piece of speech, with the campaign's names as key terms (`keyterms.txt`).
 - Voice: an Aura-2 voice (default `aura-2-thalia-en`; the owner picks from `npm run voices`), asked for as Ogg Opus. The eight voices `npm run voices` plays are all on Deepgram's own catalogue as feminine American Aura-2 English voices (checked 2026-11-13).
@@ -25,7 +26,8 @@ Deepgram: turning each piece of speech into text, and Angel's voice; making answ
 ## Checks
 - (dg-1) {live} in a real session, ten of the names in `keyterms.txt` said aloud come out spelled right in the transcript.
 - (dg-2) {live} an answer of 1,500 characters or more is spoken whole, in pieces with no long gaps between them.
-- (dg-3) {unit} the request shapes, chunking, the spoken copy and the Ogg reader (`test/speech.test.mjs`).
+- (dg-4) {live} `Choose Voice.cmd` on the owner's PC saves a sample of every voice (any that fail are listed), opens the folder, and a typed name becomes her voice after a restart.
+- (dg-3) {unit} the voice names, the request shapes, chunking, the spoken copy and the Ogg reader (`test/speech.test.mjs`).
 
 ## Traps
 - `/v1/speak` takes at most 2,000 characters a request; longer answers must be split (`chunkText`).

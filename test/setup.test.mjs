@@ -8,6 +8,7 @@ import { loadConfig, saveConfig, missingSettings, readKeyterms, readSpeakers, wr
 import { initLog, redact } from "../src/log.mjs";
 import { inviteUrl, INVITE_PERMISSIONS, within, tokenRefused, askKey } from "../src/setup.mjs";
 import { transcribe } from "../src/stt.mjs";
+import { VOICES, voiceFromName } from "../src/tts.mjs";
 import { scriptedFetch } from "./helpers.mjs";
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "angel-c-"));
@@ -263,4 +264,14 @@ test("setup asks again for a key that looks wrong instead of saving it, and Ente
   const dg = "0123456789abcdef0123456789abcdef01234567", dg2 = "fedcba9876543210fedcba9876543210fedcba98";
   r = await run([dg + dg2, dg + dg2, dg2], {}, "deepgramApiKey");
   assert.equal(r.cfg.deepgramApiKey, dg2);
+});
+
+test("the voice chooser knows the voices by short name", () => {
+  assert.equal(VOICES.length, 24);
+  assert.ok(VOICES.includes("aura-2-thalia-en"), "the default is among them");
+  assert.equal(voiceFromName("Luna"), "aura-2-luna-en");
+  assert.equal(voiceFromName(" luna.mp3 "), "aura-2-luna-en");
+  assert.equal(voiceFromName("aura-2-hera-en"), "aura-2-hera-en");
+  assert.equal(voiceFromName("zeus"), "");
+  assert.equal(voiceFromName(""), "");
 });

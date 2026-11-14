@@ -33,6 +33,9 @@ echo Paste each key when asked: right-click pastes. The key won't show; you'll s
 call npm run setup
 if errorlevel 1 goto fail
 echo.
+rem setup saves the server when Angel is already in exactly one: then there is nothing to invite
+node -e "process.exit(JSON.parse(require('fs').readFileSync('config.json','utf8')).guildId?0:1)" 2>nul
+if not errorlevel 1 goto check
 echo ===== Step 3 of 4: invite Angel to your server =====
 echo Copy the invite link above (select it with the mouse, right-click; in the newer Terminal Ctrl+click opens it),
 echo open it in your browser,
@@ -41,6 +44,8 @@ pause
 echo Now press Enter at each question to keep your keys: this saves your server.
 call npm run setup
 if errorlevel 1 goto fail
+echo.
+:check
 echo.
 echo ===== Step 4 of 4: checking everything =====
 call npm run check

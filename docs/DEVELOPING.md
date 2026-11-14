@@ -66,7 +66,7 @@ nothing from her: defaults fill the gap.
 | Feature | Doc | Owns | Checks |
 |---|---|---|---|
 | answering | `docs/features/answering.md` | src/answer.mjs, src/claude.mjs, src/aon.mjs | 5 |
-| deepgram | `docs/features/deepgram.md` | src/stt.mjs, src/tts.mjs, src/speech.mjs | 3 |
+| deepgram | `docs/features/deepgram.md` | Choose Voice.cmd, src/stt.mjs, src/tts.mjs, src/speech.mjs | 4 |
 | discord | `docs/features/discord.md` | src/bot.mjs, src/commands.mjs | 6 |
 | session | `docs/features/session.md` | src/session.mjs | 3 |
 | setup | `docs/features/setup.md` | Install Angel.cmd, src/config.mjs, src/log.mjs, src/setup.mjs, src/check.mjs, src/services.mjs, src/main.mjs | 6 |
