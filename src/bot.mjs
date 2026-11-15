@@ -227,8 +227,9 @@ export class AngelBot {
       try {
         await this.knowOwner(channel.guild);
         const startedAt = Date.now();
-        /* one thread per session holds everything she posts, so the channel stays clean (Rhea, 2026-11-14); without
-           the thread permissions she falls back to the channel itself */
+        /* one thread holds everything she posts, so the channel stays clean (Rhea, 2026-11-14), and a second join on
+           the same day goes on in that day's thread (Rhea the same evening, after six threads of one name: "One
+           thread per day"); without the thread permissions she falls back to the channel itself */
         let thread = null;
         made = () => thread;
         const me = textChannel.guild?.members?.me;
@@ -236,12 +237,19 @@ export class AngelBot {
         if (cfg.sessionThread && !textChannel.threads?.create) log.info("no thread: this channel can't hold threads (a voice channel's chat or a thread); posting here");
         else if (cfg.sessionThread && !mayThread) log.warn("no thread: Angel lacks Create Public Threads or Send Messages in Threads here; posting in the channel");
         if (cfg.sessionThread && textChannel.threads?.create && mayThread) {
+          const within5s = work => Promise.race([work, new Promise((_, no) => setTimeout(() => no(new Error("Discord took over 5 seconds")), 5000).unref?.())]);
+          const name = threadName(startedAt);
+          /* today's thread, if she made one in this channel and it is still open; the newest when there are several */
           try {
-            thread = await Promise.race([
-              textChannel.threads.create({ name: threadName(startedAt), autoArchiveDuration: 1440, reason: "Angel's session" }),
-              new Promise((_, no) => setTimeout(() => no(new Error("Discord took over 5 seconds")), 5000).unref?.()),
-            ]);
-          } catch (e) { log.warn(`couldn't start a thread, posting in the channel instead: ${e.message}`); }
+            const open = textChannel.threads.fetchActive ? (await within5s(textChannel.threads.fetchActive())).threads : null;
+            const mine = [...(open?.values?.() ?? [])].filter(t => t.name === name && !t.archived && !t.locked && (!this.client?.user?.id || t.ownerId === this.client.user.id));
+            mine.sort((a, b) => (b.createdTimestamp ?? 0) - (a.createdTimestamp ?? 0));
+            thread = mine[0] ?? null;
+          } catch (e) { log.info(`couldn't look for today's thread (${e.message}); starting a new one`); }
+          if (!thread) {
+            try { thread = await within5s(textChannel.threads.create({ name, autoArchiveDuration: 1440, reason: "Angel's session" })); }
+            catch (e) { log.warn(`couldn't start a thread, posting in the channel instead: ${e.message}`); }
+          }
         }
         let home = thread ?? textChannel;
         const post = { send: text => home.send({ content: text, ...NO_PINGS }) };

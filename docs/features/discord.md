@@ -8,6 +8,7 @@ since: 0.1.0
 The Discord side: logging in, the /angel commands, typed questions, a session per server, leaving an empty channel.
 
 ## Decisions
+- **One thread a day** (Rhea, 2026-11-14 22:0x, after an evening of test joins left six threads all named "Angel · Sat, Nov 14"; she chose "One thread per day" over the time in the name or leaving it): a join looks for her own open thread of today's name in that channel (`threads.fetchActive`, read in discord.js: it lists the server's active threads and keeps this channel's) and goes on in the newest; an archived or locked one, another day's, or someone else's of the same name is not used; if the look fails or takes over 5 s a new thread is made as before.
 - **The spend file can't stop her** (full code check, 2026-11-14): it is written whole beside itself and swapped in, so a crash mid-write can't leave half a file; a write that fails (a locked file, a full disk) is said once in the log, kept in memory and tried again. Before, a failed write on the one-minute timer ended the program. A total that isn't a number counts as over the cap.
 - Typed questions outside a session are answered one at a time, so each is checked against the day's cap after the one before it was counted.
 - **One thread per session** (Rhea, 2026-11-14: "instead of posting and spamming the channel... could she start a thread for this session and then keep everything in that thread?"): `/angel join` starts a thread named like "Angel · Sat, Nov 14" in the channel it was typed in; the transcribing notice, every answer, a lost-connection note and the summary go there, and a typed question asked in the channel is answered in the thread. The join reply only points to it. Without both thread permissions (Create Public Threads, Send Messages in Threads), when the thread takes over 5 s, or when its first post fails, she posts in the channel as before. A typed question answered in the thread gets a 🧵 on it in the channel. The thread is archived after the summary. Anything failing after the voice join leaves voice and deletes an empty thread. `sessionThread: false` turns it off. Rhea gave Angel's role Administrator on her server (2026-11-14), which covers it.
@@ -35,6 +36,8 @@ The Discord side: logging in, the /angel commands, typed questions, a session pe
 - A typed stop is read with the bot's mention replaced by "Angel", so "@Angel stop" stops her like "Angel, stop".
 
 ## Checks
+- (dc-10) {live} a second /angel join on the same day posts in the thread the first one made.
+- (dc-11) {unit} today's open thread reused, and a new one when there is none or the look fails (`test/bot.test.mjs`).
 - (dc-9) {unit} a spend file that can't be written, a total that isn't a number, typed questions one at a time (`test/bot.test.mjs`).
 - (dc-1) {live} `/angel` shows in the owner's server with its seven subcommands within a minute of starting.
 - (dc-2) {live} `/angel join` from a voice channel: Angel joins (not deafened, Discord shows the call as end-to-end encrypted) and the notice appears in the text channel.

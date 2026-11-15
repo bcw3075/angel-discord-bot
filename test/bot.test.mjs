@@ -426,3 +426,35 @@ test("typed questions outside a session are answered one at a time, each checked
   assert.ok(sent.some(t => /spending cap/.test(t)));
   clearInterval(bot.bookTimer);
 });
+
+test("a second join on the same day goes on in that day's thread instead of making another (Rhea, 2026-11-14)", async () => {
+  const w = world(), { bot } = makeBot();
+  const sentIn = { old: [], hers: [], older: [], shut: [], someone: [] };
+  const th = (key, extra) => ({ id: key, name: threadName(Date.now()), ownerId: "angel1", archived: false, locked: false, createdTimestamp: 1, toString: () => `<#${key}>`, send: async m => { sentIn[key].push(m.content ?? m); return { edit: async () => {} }; }, ...extra });
+  const active = new Map([
+    ["older", th("older", { createdTimestamp: 5 })],
+    ["hers", th("hers", { createdTimestamp: 9 })],
+    ["shut", th("shut", { createdTimestamp: 20, archived: true })],
+    ["someone", th("someone", { createdTimestamp: 30, ownerId: "p1" })],
+    ["old", th("old", { createdTimestamp: 40, name: "Angel · Fri, Nov 13" })],
+  ]);
+  let created = 0;
+  w.textChannel.threads = { fetchActive: async () => ({ threads: active }), create: async () => { created++; return th("hers"); } };
+  const i = interaction(w, "join");
+  await bot.onInteraction(i);
+  assert.equal(created, 0, "no new thread");
+  assert.match(i.edits[0], /Everything for this session is in <#hers>/, "her newest open thread of today: not an archived one, another day's, or someone else's of the same name");
+  assert.match(sentIn.hers[0], /listening and transcribing/);
+  await bot.end("g1", "test");
+  /* none open today, or the look fails: a new one is made */
+  for (const fetchActive of [async () => ({ threads: new Map([["old", active.get("old")]]) }), async () => { throw new Error("Missing Access"); }]) {
+    const w2 = world(), b2 = makeBot().bot;
+    let made = 0;
+    w2.textChannel.threads = { fetchActive, create: async o => { made++; return th("hers", { name: o.name }); } };
+    await b2.onInteraction(interaction(w2, "join"));
+    assert.equal(made, 1);
+    await b2.end("g1", "test");
+    clearInterval(b2.bookTimer);
+  }
+  clearInterval(bot.bookTimer);
+});

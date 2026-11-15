@@ -68,7 +68,7 @@ nothing from her: defaults fill the gap.
 |---|---|---|---|
 | answering | `docs/features/answering.md` | src/answer.mjs, src/claude.mjs, src/aon.mjs | 11 |
 | deepgram | `docs/features/deepgram.md` | Choose Voice.cmd, src/stt.mjs, src/tts.mjs, src/speech.mjs | 5 |
-| discord | `docs/features/discord.md` | src/bot.mjs, src/commands.mjs | 7 |
+| discord | `docs/features/discord.md` | src/bot.mjs, src/commands.mjs | 9 |
 | session | `docs/features/session.md` | src/session.mjs | 7 |
 | setup | `docs/features/setup.md` | Install Angel.cmd, Test Angel.cmd, src/selftest.mjs, src/config.mjs, src/log.mjs, src/setup.mjs, src/check.mjs, src/services.mjs, src/main.mjs | 9 |
 | transcript | `docs/features/transcript.md` | src/transcript.mjs | 3 |
