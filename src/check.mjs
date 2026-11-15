@@ -149,8 +149,11 @@ async function ask(cfg, question) {
   if (!cfg.anthropicApiKey) { console.log("Save the Claude key first: npm run setup"); failures++; return; }
   const services = buildServices(cfg);
   const started = Date.now();
-  const r = await services.answer({ conversation: "", question, asker: "The GM", via: "text", gmName: "" });
+  /* when the first words she would say were written: in a session her voice starts from there, not from the end */
+  let firstWords = 0;
+  const r = await services.answer({ conversation: "", question, asker: "The GM", via: "text", gmName: "", onSay: () => { firstWords ||= Date.now(); } });
   console.log(`\nSpoken: ${r.say}\n\nWritten: ${r.details}\n`);
+  if (firstWords) console.log(`First spoken words written after ${((firstWords - started) / 1000).toFixed(1)} s.`);
   for (const s of r.sources) console.log(`  ${s.name}: ${s.url}`);
   console.log(`\n${((Date.now() - started) / 1000).toFixed(1)} s, ${r.lookups} lookup${r.lookups === 1 ? "" : "s"}, about $${r.dollars.toFixed(3)} (${cfg.answerModel}).`);
   /* a second question within the hour should read the prompt from the cache rather than write it again */

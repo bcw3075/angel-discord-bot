@@ -7,7 +7,7 @@ import { packetsToWav, createDecoder } from "./audio.mjs";
 import { Transcript } from "./transcript.mjs";
 import { mentionsAngel, isStopRequest } from "./wake.mjs";
 import { typedAnswer, shortQuestion } from "./answer.mjs";
-import { speakable } from "./speech.mjs";
+import { speakable, SentenceCutter } from "./speech.mjs";
 
 /* does `heard` look like her own words coming back? most of its words are in what she just said */
 /* when the check gave no reaction of its own (a typed question, a failed check) */
@@ -86,13 +86,14 @@ export class Session {
     if (!heard.text || this.ended) return;
     const who = this.speakerOf(userId);
     const line = this.transcript.add({ at: startedAt, userId, speaker: who.name, role: who.role, text: heard.text, kind: "voice" });
-    if (line) await this.onLine(line);
+    /* when they stopped talking (speech time; a pause inside the piece isn't counted): the timing in the log starts here */
+    if (line) await this.onLine(line, startedAt + piece.durationMs);
   }
 
   /* a stop said after the question was said cancels it, wherever it is: transcribing, being checked, queued or looked up */
   stoppedSince(at) { return this.lastStopAt > at; }
 
-  async onLine(line) {
+  async onLine(line, until = line.at) {
     if (isStopRequest(line.text)) { this.stop(line.at); return; }
     const uid = line.userId;
     /* the person she just answered may reply without her name for a little while after she stops talking (Rhea,
@@ -140,13 +141,13 @@ export class Session {
     /* what they said while the check ran is the rest of the question, finished or not */
     const rest = later.length ? ` ${later.join(" ")}` : "";
     if (!decision.complete) {
-      if (rest) { this.ask({ question: `${text}${rest}`, asker: line.speaker, role: line.role, via: "voice", at, userId: uid }); return; }
+      if (rest) { this.ask({ question: `${text}${rest}`, asker: line.speaker, role: line.role, via: "voice", at, userId: uid, until }); return; }
       const timer = setTimeout(() => this.pending.delete(uid), this.cfg.followUpMs);
       timer.unref?.();
       this.pending.set(uid, { text, at: this.now(), timer });
       return;
     }
-    this.ask({ question: `${decision.question || text}${rest}`, asker: line.speaker, role: line.role, via: "voice", at, userId: uid, chat: decision.chat === true, ack: decision.ack || "", turn: byName ? 0 : (r?.turn ?? 0) + 1 });
+    this.ask({ question: `${decision.question || text}${rest}`, asker: line.speaker, role: line.role, via: "voice", at, userId: uid, until, chat: decision.chat === true, ack: decision.ack || "", turn: byName ? 0 : (r?.turn ?? 0) + 1 });
   }
 
   /* A typed question (@Angel, "Angel, …" in chat, or /angel ask): no check needed, they meant her. */
@@ -167,7 +168,7 @@ export class Session {
     return this.answering;
   }
 
-  async runAsk({ question, asker, via, reply, at, userId = null, chat = false, turn = 0, ack = "" }) {
+  async runAsk({ question, asker, via, reply, at, userId = null, until = null, chat = false, turn = 0, ack = "" }) {
     const target = reply ?? this.post;
     if (this.ended) {
       /* a deferred /angel ask must still hear back */
@@ -183,67 +184,121 @@ export class Session {
       if (reply) await reply.send(this.capMessage()).catch(() => {});
       return;
     }
+    const began = this.now();
     /* small talk spoken to her: no "looking it up", no post in the channel, just her spoken reply */
     const quiet = chat && via === "voice" && this.cfg.speak;
-    let placeholder = null;
-    if (!quiet) {
-      try { placeholder = await target.send(`**${asker} asked:** ${shortQuestion(question)}\n-# Looking it up…`); } catch (e) { this.log.warn(`couldn't post in the channel: ${e.message}`); }
+    /* the placeholder and her quick reaction are started but not waited for: the answer is already being worked out */
+    const placed = quiet ? null
+      : target.send(`**${asker} asked:** ${shortQuestion(question)}\n-# Looking it up…`).catch(e => { this.log.warn(`couldn't post in the channel: ${e.message}`); return null; });
+    /* everything she says for this question is handed to the voice in order, through this chain */
+    let line = Promise.resolve();
+    if (!quiet && this.cfg.speak && this.cfg.ackPhrase !== "") {
       /* her own quick reaction to this question (the check writes it), else one of a few, so it isn't the same line
          every time (Rhea, 2026-11-14: "the 'one sec, let me check' on every reply is getting repetitive") */
-      if (this.cfg.speak && this.cfg.ackPhrase !== "") {
-        const line = ack || ACKS[this.counts.questions % ACKS.length];
-        try { const clips = await this.tts(line); this.costs.tts += this.ttsCost(line); if (!this.stoppedSince(at)) this.voice.speak(clips); }
-        catch (e) { if (this.ackClips) this.voice.speak(this.ackClips); }
-      }
+      const words = ack || ACKS[this.counts.questions % ACKS.length];
+      const made = this.tts(words);
+      line = made.then(clips => { this.costs.tts += this.ttsCost(words); if (!this.ended && !this.stoppedSince(at)) this.voice.speak(clips); })
+        .catch(() => { if (this.ackClips && !this.ended && !this.stoppedSince(at)) this.voice.speak(this.ackClips); });
     }
+
+    /* Her answer is spoken as she writes it (Rhea chose this to make her faster, 2026-11-14): each sentence of `say`
+       is turned into voice the moment it is whole, and the pieces play in order behind her quick reaction. */
+    const said = [];       /* the pieces given to the voice so far */
+    const times = {};      /* for the log: when the first words were written, when her voice started */
+    let lastPlayed = null; /* resolves when the last piece has played (or was stopped) */
+    const sayPiece = text => {
+      const spoken = speakable(text);
+      /* the cap is asked before she begins an answer, not in the middle of one: a sentence of voice costs a
+         fraction of a cent, and an answer cut off half way helps nobody */
+      if (!spoken || !this.cfg.speak || this.ended || this.stoppedSince(at) || (!said.length && this.overCap())) return;
+      const made = this.tts(spoken);
+      made.catch(() => {}); /* waited for in order below; a failure there is logged once */
+      said.push(text);
+      /* what she is saying counts as hers for the echo check from the moment it is on its way */
+      this.lastSaid = said.join(" ");
+      line = line.then(async () => {
+        let clips;
+        try { clips = await made; this.costs.tts += this.ttsCost(spoken); }
+        catch (e) { this.log.warn(`couldn't speak the answer: ${e.message}`); return; }
+        if (this.ended || this.stoppedSince(at)) return;
+        try { lastPlayed = this.voice.speak(clips, { onStart: () => { times.voice ??= this.now(); } }); }
+        catch (e) { this.log.warn(`couldn't speak the answer: ${e.message}`); }
+      });
+    };
+    const cutter = new SentenceCutter();
+    let sayEnded = false;  /* all she was going to say had been written */
+    /* `end` comes when all of what she will say is written, which is before the written answer is: the last
+       sentence (or the only one) is spoken from there, not from the end of the whole answer */
+    const onSay = this.cfg.speakAsWritten === false ? null : (piece, { end = false } = {}) => {
+      try {
+        if (piece) times.written ??= this.now();
+        for (const sentence of cutter.push(piece)) sayPiece(sentence);
+        if (end) { const last = cutter.flush(); if (last) sayPiece(last); sayEnded = true; }
+      } catch (e) { this.log.warn(`couldn't speak part of the answer as it was written: ${e.message}`); }
+    };
+
     let result;
     try {
       result = await this.answer({
         conversation: Transcript.format(this.transcript.recent(this.cfg.memoryMinutes, this.now())),
-        question, asker, via,
+        question, asker, via, onSay,
       });
       this.costs.claude += result.dollars ?? 0;
     } catch (e) {
       /* what the failed rounds cost still counts */
       this.costs.claude += e.dollars ?? 0;
       this.log.error(`couldn't answer: ${e.message}`);
-      result = { say: "Sorry, I couldn't reach my rules brain just then. Give it a moment and ask me again?", sources: [], failed: true };
+      /* it broke off after she had said all she was going to say: what she said is the answer, with no apology on
+         top; only the written details are missing, and the post says so */
+      if (sayEnded && said.length) result = { say: said.join(" "), details: `${said.join(" ")}\n-# (I lost the written details for this one. Ask again if you want them.)`, sources: [], failed: true, saidAll: true };
+      else result = { say: "Sorry, I couldn't reach my rules brain just then. Give it a moment and ask me again?", sources: [], failed: true };
     }
+    times.answered = this.now();
+    /* what is left to say: the end of an answer spoken as it was written, or all of one that wasn't (a failure's
+       apology comes after whatever she had already begun) */
+    const early = said.join(" ");
+    const rest = result.failed ? "" : cutter.flush();
+    if (result.saidAll) { /* nothing more to say */ }
+    else if (result.failed || (!said.length && !rest)) sayPiece(result.say);
+    else if (rest) sayPiece(rest);
+    const heard = result.failed && early && !result.saidAll ? `${early} ${result.say}` : result.say;
+
     /* the check may call a rules question small talk: one that looked something up is posted anyway */
     let posted = false;
     const post = async () => {
       if (posted) return;
       posted = true;
       const typed = typedAnswer({ asker, question, say: result.details ?? result.say, sources: result.sources });
+      const placeholder = await placed;
       try { if (placeholder?.edit) await placeholder.edit(typed); else await target.send(typed); }
       catch (e) { this.log.warn(`couldn't post the answer: ${e.message}`); }
     };
     if (!quiet || result.failed || result.lookups > 0 || result.sources?.length) await post();
-    this.transcript.add({ at: this.now(), speaker: "Angel", role: "angel", text: result.say, kind: "angel" });
-    this.lastSaid = result.say;
-    /* told to stop while she was looking it up: the answer stays typed, but she doesn't say it */
-    if (!this.cfg.speak || this.ended || this.stoppedSince(at) || this.overCap()) { if (quiet && !this.stoppedSince(at)) await post(); return; }
-    const spoken = speakable(result.say);
-    try {
-      const clips = await this.tts(spoken);
-      this.costs.tts += this.ttsCost(spoken);
-      if (!this.ended && !this.stoppedSince(at)) {
-        const played = this.voice.speak(clips);
-        /* the person she answered may reply without her name, from when this answer ends; at most three such replies
-           in a row, so small talk can't run on and on at the table's expense */
-        if (via === "voice" && userId && turn >= 3 && this.replyTo?.userId === userId) this.replyTo = null;
-        if (via === "voice" && userId && turn < 3) {
-          Promise.resolve(played).then(() => {
-            if (this.ended || this.stoppedSince(at)) return;
-            this.replyTo = { userId, from: this.now(), turn };
-            this.log.info(`${asker} can reply without her name for ${Math.round(this.cfg.replyWindowMs / 1000)} s`);
-          }).catch(() => {});
-        }
-      }
-    } catch (e) {
-      this.log.warn(`couldn't speak the answer: ${e.message}`);
-      if (quiet) await post();
+    /* in the transcript at the moment she began to say it */
+    this.transcript.add({ at: times.written ?? this.now(), speaker: "Angel", role: "angel", text: heard, kind: "angel" });
+    this.lastSaid = heard;
+    await line.catch(e => this.log.warn(`speaking failed: ${e.message}`));
+    const since = t => (t == null ? "n/a" : `${((t - began) / 1000).toFixed(1)} s`);
+    const startLog = () => this.log.info(`timing for ${asker}'s question: first words written ${since(times.written)}, her answer began aloud ${since(times.voice)}, whole answer written ${since(times.answered)} after it was taken up`
+      + `${until ? ` (taken up ${((began - until) / 1000).toFixed(1)} s after they stopped talking)` : ""}; ${result.rounds ?? "?"} round(s), ${result.lookups ?? 0} lookup(s)${early ? "" : ", not spoken as written"}`);
+    /* nothing of the answer reached the voice (told to stop, the session ended, a cap, or the voice failed): a
+       small-talk reply that was only going to be spoken is typed instead, unless she was told to stop */
+    if (!lastPlayed) {
+      if (this.cfg.speak) startLog();
+      if (quiet && !this.stoppedSince(at)) await post();
+      return;
     }
+    /* the person she answered may reply without her name, from when this answer ends; at most three such replies
+       in a row, so small talk can't run on and on at the table's expense */
+    if (via === "voice" && userId && turn >= 3 && this.replyTo?.userId === userId) this.replyTo = null;
+    Promise.resolve(lastPlayed).then(() => {
+      startLog();
+      if (this.ended || this.stoppedSince(at)) return;
+      if (via === "voice" && userId && turn < 3) {
+        this.replyTo = { userId, from: this.now(), turn };
+        this.log.info(`${asker} can reply without her name for ${Math.round(this.cfg.replyWindowMs / 1000)} s`);
+      }
+    }).catch(() => {});
   }
 
   /* "Angel, stop": cut her off, drop questions still waiting, and don't speak an answer still being looked up.

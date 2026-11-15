@@ -83,6 +83,8 @@ be read. The most useful:
   she's in.
 - `answerModel`: `claude-sonnet-5-5` by default; `claude-opus-5-5` is slower and costs about twice as much. This one
   isn't in the file until you add it: a new line such as `"answerModel": "claude-opus-5-5",` after the first `{`.
+- `speakAsWritten`: she starts speaking as soon as her first sentence is written, while she finishes the rest
+  (default true; false makes her wait for the whole answer, as before 0.1.2).
 - `replyWindowMs`: how long after she stops talking the person she answered can reply without saying her name (default 60000, a minute).
 - `sessionThread`: `false` makes her post in the channel itself instead of one thread per session.
 - `memoryMinutes`: how much of the conversation she's given with a question (default 15).

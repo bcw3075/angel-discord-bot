@@ -119,16 +119,18 @@ export class VoiceLink extends EventEmitter {
   }
 
   /* Play Ogg Opus clips one after another; queued behind anything already playing. Resolves when done or stopped. */
-  speak(clips) {
+  speak(clips, { onStart = null } = {}) {
     const token = this.playToken;
-    this.queue = this.queue.then(() => this.playClips(clips, token)).catch(e => this.log.warn(`speaking failed: ${e.message}`));
+    this.queue = this.queue.then(() => this.playClips(clips, token, onStart)).catch(e => this.log.warn(`speaking failed: ${e.message}`));
     return this.queue;
   }
 
-  async playClips(clips, token) {
+  /* onStart is called once, as the first of these clips starts to play (not when it was queued) */
+  async playClips(clips, token, onStart = null) {
     if (!this.player) return;
     for (const clip of clips) {
       if (this.closed || token !== this.playToken) return;
+      if (onStart) { try { onStart(); } catch { /* the caller's note, not the voice's trouble */ } onStart = null; }
       this.speakingNow = true;
       this.speakingSince = this.now();
       const resource = this.lib.createAudioResource(Readable.from([clip]), { inputType: this.lib.StreamType.OggOpus });

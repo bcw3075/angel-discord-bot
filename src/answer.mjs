@@ -1,7 +1,9 @@
 /* Answering a question: Claude (Sonnet by default) with the recent conversation, the house rules and two
    Archives of Nethys tools, finishing with an `answer` tool call that gives what to say and the pages used.
-   The answer is written for the ear; the typed copy adds the links. */
+   The answer is written for the ear; the typed copy adds the links. Each round is read as Claude writes it, so what
+   she will say (`say`, written first) can be spoken while the rest of the answer is still being written. */
 import { AON_SITE } from "./aon.mjs";
+import { FieldReader } from "./claude.mjs";
 
 export function systemPrompt({ houseRules = "", gmName = "" } = {}) {
   return `You are Angel, the rules helper at a Pathfinder Second Edition table that plays by the Remastered rules. You're in the group's Discord voice call. You hear the table through a live transcript that says who said what, and you speak when someone talks to you. Your answer has two parts: a short spoken one everyone hears, and a fuller written one posted in the text channel.
@@ -28,7 +30,7 @@ What to write (posted in Discord, read at a glance mid-game; the GM asked for fo
 - Everyone hears you, players included. Use only the rules, the house rules and what was said at the table.
 - If it isn't a rules question (a joke, small talk, something you can't do), answer briefly and in character.
 
-When you're done, call the answer tool once, with what to say, what to write, and the Archives of Nethys pages you used.
+When you're done, call the answer tool once, with what to say, what to write, and the Archives of Nethys pages you used. Always write say first: you start speaking it while you're still writing the rest.
 
 House rules for this table:
 ${houseRules || "(none given)"}`;
@@ -54,7 +56,9 @@ export const TOOLS = [
   },
   {
     name: "answer",
-    description: "Give your final answer. Call it once, at the end.",
+    description: "Give your final answer. Call it once, at the end. Write say first, then details, then sources.",
+    /* her input arrives as she writes it instead of a whole value at a time, so `say` can be spoken sentence by sentence */
+    eager_input_streaming: true,
     input_schema: {
       type: "object",
       properties: {
@@ -94,7 +98,9 @@ async function runTool(aon, use) {
   }
 }
 
-export async function answerQuestion({ claude, aon, model, maxTokens = 1500, system, conversation, question, asker, via = "voice", maxRounds = 6, cacheTtl = "5m" }) {
+/* onSay(text) is given each new piece of `say` as it is written, and onSay("", { end: true }) once when `say` is
+   whole, which is before the rest of the answer is (only with a Claude client that can stream) */
+export async function answerQuestion({ claude, aon, model, maxTokens = 1500, system, conversation, question, asker, via = "voice", maxRounds = 6, cacheTtl = "5m", onSay = null }) {
   const cacheControl = cacheTtl === "1h" ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" };
   const messages = [{ role: "user", content: userMessage({ conversation, question, asker, via }) }];
   const fetched = [];
@@ -113,7 +119,8 @@ export async function answerQuestion({ claude, aon, model, maxTokens = 1500, sys
   try {
     return await rounds();
   } catch (e) {
-    /* the rounds that ran before the failure were paid for: the caller counts them */
+    /* the rounds that ran before the failure were paid for, and so was what is known of one that broke off */
+    if (e.usage) dollars += claude.cost(model, e.usage);
     e.dollars = dollars;
     throw e;
   }
@@ -127,12 +134,26 @@ export async function answerQuestion({ claude, aon, model, maxTokens = 1500, sys
         const tail = messages.at(-1);
         if (Array.isArray(tail?.content)) tail.content.push({ type: "text", text: "That's all the looking up there's time for: give your answer now with the answer tool." });
       }
-      const res = await claude.create({
+      const body = {
         model,
         max_tokens: maxTokens,
         system: [{ type: "text", text: system, cache_control: cacheControl }],
         tools: last ? TOOLS.filter(t => t.name === "answer") : TOOLS,
         messages,
+      };
+      /* what the answer tool's `say` holds so far, per tool call, read out of its unfinished JSON */
+      const saying = new Map();
+      const res = !claude.stream ? await claude.create(body) : await claude.stream(body, {
+        onDelta: ({ index, block, delta }) => {
+          if (block.type !== "tool_use" || block.name !== "answer" || delta.type !== "input_json_delta") return;
+          let reader = saying.get(index);
+          if (!reader && saying.size) return; /* one answer is spoken: a second answer call in the same reply is not */
+          if (!reader) saying.set(index, reader = new FieldReader("say"));
+          const wasDone = reader.done;
+          const fresh = reader.feed(delta.partial_json);
+          if (fresh && onSay) onSay(fresh);
+          if (reader.done && !wasDone && onSay) onSay("", { end: true });
+        },
       });
       dollars += claude.cost(model, res.usage);
       cache.written += res.usage?.cache_creation_input_tokens ?? 0;
@@ -140,7 +161,11 @@ export async function answerQuestion({ claude, aon, model, maxTokens = 1500, sys
       const content = res.content ?? [];
       const uses = content.filter(b => b.type === "tool_use");
       const final = uses.find(u => u.name === "answer");
-      if (final) return done(final.input, round);
+      if (final) {
+        /* an answer cut short (out of tokens, or JSON that doesn't parse) still has what she was saying */
+        const heard = [...saying.values()][0]?.text ?? "";
+        return done(String(final.input?.say ?? "").trim() ? final.input : { ...final.input, say: heard }, round);
+      }
       if (!uses.length) {
         const text = content.filter(b => b.type === "text").map(b => b.text).join(" ").trim();
         return done({ say: text }, round);

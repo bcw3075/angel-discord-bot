@@ -66,10 +66,10 @@ nothing from her: defaults fill the gap.
 <!-- feature-index:start -->
 | Feature | Doc | Owns | Checks |
 |---|---|---|---|
-| answering | `docs/features/answering.md` | src/answer.mjs, src/claude.mjs, src/aon.mjs | 5 |
-| deepgram | `docs/features/deepgram.md` | Choose Voice.cmd, src/stt.mjs, src/tts.mjs, src/speech.mjs | 4 |
+| answering | `docs/features/answering.md` | src/answer.mjs, src/claude.mjs, src/aon.mjs | 7 |
+| deepgram | `docs/features/deepgram.md` | Choose Voice.cmd, src/stt.mjs, src/tts.mjs, src/speech.mjs | 5 |
 | discord | `docs/features/discord.md` | src/bot.mjs, src/commands.mjs | 6 |
-| session | `docs/features/session.md` | src/session.mjs | 3 |
+| session | `docs/features/session.md` | src/session.mjs | 5 |
 | setup | `docs/features/setup.md` | Install Angel.cmd, src/config.mjs, src/log.mjs, src/setup.mjs, src/check.mjs, src/services.mjs, src/main.mjs | 6 |
 | transcript | `docs/features/transcript.md` | src/transcript.mjs | 2 |
 | voice | `docs/features/voice.md` | src/voice.mjs, src/capture.mjs, src/audio.mjs | 5 |

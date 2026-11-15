@@ -39,6 +39,8 @@ export function scriptedFetch(responses) {
     const status = r.status ?? 200;
     const text = typeof r.body === "string" ? r.body : JSON.stringify(r.body ?? {});
     return {
+      /* `events` makes it a streamed reply (server-sent events), cut into pieces of `pieceSize` characters */
+      body: r.events ? sseBody(r.events, r) : undefined,
       ok: status >= 200 && status < 300, status,
       headers: { get: k => r.headers?.[k.toLowerCase()] ?? null },
       text: async () => text, json: async () => JSON.parse(text),
@@ -47,6 +49,43 @@ export function scriptedFetch(responses) {
   };
   fn.calls = calls;
   return fn;
+}
+
+/* A streamed reply's body: the events as server-sent events, arriving in pieces cut anywhere (bytes, as fetch gives
+   them). `breakAfter` ends the body with an error after that many pieces; `gapMs` waits between pieces. */
+export function sseBody(events, { pieceSize = 37, breakAfter = Infinity, gapMs = 0, crlf = false, breakWith = null, given = null } = {}) {
+  const nl = crlf ? "\r\n" : "\n";
+  const text = events.map(e => `event: ${e.type}${nl}data: ${JSON.stringify(e)}${nl}${nl}`).join("");
+  const bytes = Buffer.from(text);
+  return (async function* () {
+    let n = 0;
+    for (let i = 0; i < bytes.length; i += pieceSize) {
+      if (n++ >= breakAfter) throw breakWith ?? new Error("socket hang up");
+      if (gapMs) await sleep(gapMs);
+      if (given) given.left = bytes.length - i - pieceSize; /* how much of the reply is still to come after this piece */
+      yield bytes.subarray(i, i + pieceSize);
+    }
+  })();
+}
+
+/* The events of one streamed reply holding these content blocks (text, or tool_use with its input written in pieces
+   of `jsonPiece` characters, or as the exact string `rawInput`). */
+export function streamEvents(blocks, { usage = { input_tokens: 10 }, outputTokens = 5, jsonPiece = 9, stop = "tool_use" } = {}) {
+  /* the real start event already has output_tokens, a placeholder of 1; the true count comes with message_delta */
+  const ev = [{ type: "message_start", message: { id: "m", role: "assistant", content: [], usage: { ...usage, output_tokens: 1 } } }, { type: "ping" }];
+  blocks.forEach((b, index) => {
+    if (b.type === "text") {
+      ev.push({ type: "content_block_start", index, content_block: { type: "text", text: "" } });
+      ev.push({ type: "content_block_delta", index, delta: { type: "text_delta", text: b.text } });
+    } else {
+      ev.push({ type: "content_block_start", index, content_block: { type: "tool_use", id: b.id, name: b.name, input: {} } });
+      const json = b.rawInput ?? JSON.stringify(b.input);
+      for (let i = 0; i < json.length; i += jsonPiece) ev.push({ type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: json.slice(i, i + jsonPiece) } });
+    }
+    ev.push({ type: "content_block_stop", index });
+  });
+  ev.push({ type: "message_delta", delta: { stop_reason: stop }, usage: { output_tokens: outputTokens } }, { type: "message_stop" });
+  return ev;
 }
 
 export const sleep = ms => new Promise(r => setTimeout(r, ms));

@@ -46,6 +46,8 @@ export const DEFAULTS = Object.freeze({
   /* "Angel?" with the question still to come: how long to wait for the rest */
   followUpMs: 12000,
   replyWindowMs: 60000,
+  /* she starts speaking as soon as her first spoken sentence is written, instead of when the whole answer is */
+  speakAsWritten: true,
   sessionThread: true,
   /* Angel stops listening and answering for the rest of the session past this */
   maxSessionDollars: 5,

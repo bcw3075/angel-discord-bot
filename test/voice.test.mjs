@@ -90,8 +90,12 @@ test("clips play one after another; stop cuts the rest; the echo window follows 
   let t = 1000;
   const v = new VoiceLink({ channel, lib, log: quiet, echoGuardMs: 2500, now: () => t });
   await v.join();
-  const done = v.speak([Buffer.from("a"), Buffer.from("b"), Buffer.from("c")]);
+  let starts = 0, never = 0;
+  const done = v.speak([Buffer.from("a"), Buffer.from("b"), Buffer.from("c")], { onStart: () => starts++ });
+  const dropped = v.speak([Buffer.from("d")], { onStart: () => never++ });
+  assert.equal(starts, 0, "queued is not started");
   await sleep(1);
+  assert.equal(starts, 1, "told when the first clip starts to play");
   assert.equal(lib.player.played.length, 1);
   assert.equal(lib.resources[0].opts.inputType, "ogg/opus");
   assert.equal(v.inEchoWindow(1500), true, "speech that began while she talks");
@@ -100,8 +104,10 @@ test("clips play one after another; stop cuts the rest; the echo window follows 
   await sleep(1);
   assert.equal(lib.player.played.length, 2);
   t = 3000; v.stopSpeaking();
-  await done;
+  await done; await dropped;
   assert.equal(lib.player.played.length, 2, "the third clip never plays");
+  assert.equal(starts, 1, "once, not for each clip");
+  assert.equal(never, 0, "clips dropped by a stop never start");
   assert.equal(v.inEchoWindow(5400), true, "just after she stopped");
   assert.equal(v.inEchoWindow(5600), false, "well after");
   assert.equal(v.inEchoWindow(1999), true);

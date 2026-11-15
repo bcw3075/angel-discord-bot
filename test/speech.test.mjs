@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { speakable } from "../src/speech.mjs";
+import { speakable, SentenceCutter } from "../src/speech.mjs";
 import { chunkText, oggPackets, TTS_MAX_CHARS, synthesize } from "../src/tts.mjs";
 import { transcribe } from "../src/stt.mjs";
 import { scriptedFetch } from "./helpers.mjs";
@@ -58,4 +58,31 @@ test("listening sends the WAV with the key terms and reads the transcript", asyn
   assert.equal(u.searchParams.get("model"), "nova-3");
   assert.deepEqual(u.searchParams.getAll("keyterm"), ["Angel", "Brightwater"]);
   assert.equal(f.calls[0].init.headers["Content-Type"], "audio/wav");
+});
+
+test("sentences are cut off as they are written, whatever the size of the pieces", () => {
+  const text = "Yes. Grabbed makes you off-guard and immobilized, e.g. you can't Stride. A DC 5 flat check, or 2.5 times that? No! \"Ask the GM.\" Then the last bit";
+  const want = ["Yes. Grabbed makes you off-guard and immobilized, e.g. you can't Stride.", "A DC 5 flat check, or 2.5 times that?", "No! \"Ask the GM.\"", "Then the last bit"];
+  for (const size of [1, 3, 8, 50, 1000]) {
+    const c = new SentenceCutter();
+    const out = [];
+    for (let i = 0; i < text.length; i += size) out.push(...c.push(text.slice(i, i + size)));
+    const rest = c.flush();
+    assert.deepEqual([...out, rest], want, `pieces of ${size}`);
+    assert.equal(c.flush(), "", "nothing is given twice");
+  }
+  const c = new SentenceCutter();
+  assert.deepEqual(c.push("It's a plus 2 circumstance bonus."), [], "a sentence isn't given until what follows it has begun (it could be 2.5)");
+  assert.deepEqual(c.push(" And"), ["It's a plus 2 circumstance bonus."]);
+  assert.equal(c.flush(), "And");
+  const t0 = performance.now();
+  const big = new SentenceCutter();
+  for (let i = 0; i < 3000; i++) big.push("no end here... 2.5.5!?x ");
+  big.push("?".repeat(50000));
+  for (let i = 0; i < 30000; i++) big.push("?");
+  assert.ok(performance.now() - t0 < 1000, "plain steps: long odd text is still quick, also a long run of end marks coming one at a time");
+  const marks = new SentenceCutter();
+  const got = [];
+  for (const ch of "Is that really so?!?!\" Yes it is.") got.push(...marks.push(ch));
+  assert.deepEqual([...got, marks.flush()], ["Is that really so?!?!\"", "Yes it is."], "a run of end marks coming one at a time is still one end");
 });

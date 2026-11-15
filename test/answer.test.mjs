@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { answerQuestion, systemPrompt, typedAnswer, userMessage, TOOLS } from "../src/answer.mjs";
-import { Claude } from "../src/claude.mjs";
-import { scriptedFetch } from "./helpers.mjs";
+import { Claude, FieldReader } from "../src/claude.mjs";
+import { scriptedFetch, streamEvents, sseBody } from "./helpers.mjs";
 
 /* a stand-in Claude that replies from a script and records the requests */
 function fakeClaude(replies) {
@@ -155,12 +155,15 @@ test("the bot passes its cache setting through to the answering calls (1 hour by
   const sent = [];
   const fetchImpl = async (url, init) => {
     sent.push(JSON.parse(init.body));
-    const body = { content: [{ type: "tool_use", id: "t", name: "answer", input: { say: "Yes.", sources: [] } }], usage: {} };
-    return { ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify(body), json: async () => body };
+    return { ok: true, status: 200, headers: { get: () => null }, body: sseBody(streamEvents([{ type: "tool_use", id: "t", name: "answer", input: { say: "Yes, it does.", sources: [] } }])) };
   };
   const services = buildServices({ ...DEFAULTS, anthropicApiKey: "k", deepgramApiKey: "d" }, { fetchImpl, dataDir });
-  await services.answer({ conversation: "", question: "Grabbed?", asker: "Mira", via: "text", gmName: "Dana" });
+  const heard = [];
+  const r = await services.answer({ conversation: "", question: "Grabbed?", asker: "Mira", via: "text", gmName: "Dana", onSay: t => heard.push(t) });
   assert.deepEqual(sent[0].system[0].cache_control, { type: "ephemeral", ttl: "1h" });
+  assert.equal(sent[0].stream, true, "the bot's answering calls are read as they are written");
+  assert.equal(heard.join(""), "Yes, it does.", "and what she says is passed on as it comes");
+  assert.equal(r.say, "Yes, it does.");
 });
 
 test("an answer model with no price is counted at the dearest known price, not as free", () => {
@@ -172,4 +175,143 @@ test("Deepgram's voice errors are read out of their JSON too", async () => {
   const { synthesize } = await import("../src/tts.mjs");
   const f = scriptedFetch([{ status: 401, body: { err_code: "INVALID_AUTH", err_msg: "Invalid credentials." } }]);
   await assert.rejects(synthesize("Hello.", { apiKey: "k", fetchImpl: f }), /^Error: Deepgram speak answered 401: Invalid credentials\.$/);
+});
+
+/* a real Claude client over a scripted streamed reply */
+function streamingClaude(replies, opts = {}) {
+  const f = scriptedFetch(replies);
+  const c = new Claude({ apiKey: "sk", prices: { m: [2, 2.5, 0.1, 10] }, fetchImpl: f, sleep: async ms => { (opts.sleeps ?? []).push(ms); } });
+  return { c, f };
+}
+
+test("a streamed reply comes back in the same shape as a plain one, however the pieces are cut", async () => {
+  const blocks = [{ type: "text", text: "Here it is: “two” lines\nand é." }, { type: "tool_use", id: "t1", name: "aon_search", input: { query: "grabbed \"condition\"", category: "condition" } }, { type: "tool_use", id: "t2", name: "aon_get", input: {} , rawInput: "" }];
+  for (const pieceSize of [1, 7, 37, 100000]) {
+    const { c, f } = streamingClaude([{ events: streamEvents(blocks, { usage: { input_tokens: 100, cache_read_input_tokens: 6000 }, outputTokens: 40 }), pieceSize }]);
+    const deltas = [];
+    const res = await c.stream({ model: "m", max_tokens: 5 }, { onDelta: d => deltas.push(d.delta.type) });
+    assert.deepEqual(res.content, [{ type: "text", text: "Here it is: “two” lines\nand é." }, { type: "tool_use", id: "t1", name: "aon_search", input: { query: "grabbed \"condition\"", category: "condition" } }, { type: "tool_use", id: "t2", name: "aon_get", input: {} }], `pieces of ${pieceSize}`);
+    assert.deepEqual(res.usage, { input_tokens: 100, cache_read_input_tokens: 6000, output_tokens: 40 }, "the usage of the start and the end together");
+    assert.equal(res.stop_reason, "tool_use");
+    assert.ok(deltas.includes("text_delta") && deltas.includes("input_json_delta"));
+    const sent = JSON.parse(f.calls[0].init.body);
+    assert.equal(sent.stream, true);
+    assert.equal(sent.tool_choice, undefined, "never a forced tool");
+    assert.ok(Math.abs(c.spent - (100 * 2 + 6000 * 0.1 + 40 * 10) / 1e6) < 1e-12, "priced like any call");
+  }
+});
+
+test("a streamed call is sent again only while nothing has been written; a reply that breaks off is still counted", async () => {
+  const sleeps = [];
+  const ok = streamEvents([{ type: "tool_use", id: "t", name: "answer", input: { say: "Yes." } }]);
+  /* refused with 529, then overloaded before a word was written, then a good reply */
+  const early = [{ type: "message_start", message: { content: [], usage: { input_tokens: 50 } } }, { type: "error", error: { type: "overloaded_error", message: "Overloaded" } }];
+  let { c, f } = streamingClaude([{ status: 529, body: { error: { message: "Overloaded" } } }, { events: early }, { events: ok }], { sleeps });
+  const res = await c.stream({ model: "m" });
+  assert.equal(res.content[0].input.say, "Yes.");
+  assert.equal(f.calls.length, 3);
+  assert.equal(sleeps.length, 2);
+  /* overloaded after she began writing: not sent again (the first words may already be spoken) */
+  const late = [...streamEvents([{ type: "tool_use", id: "t", name: "answer", input: { say: "Yes, and there is more." } }], { usage: { input_tokens: 1e6 } }).slice(0, 5), { type: "error", error: { type: "overloaded_error", message: "Overloaded" } }];
+  ({ c, f } = streamingClaude([{ events: late }, { events: ok }]));
+  const heard = [];
+  const err = await c.stream({ model: "m" }, { onDelta: d => heard.push(d.delta.partial_json) }).catch(e => e);
+  assert.match(err.message, /Claude's reply broke off: Overloaded/);
+  assert.equal(f.calls.length, 1, "not sent again");
+  assert.ok(heard.length > 0, "what came before the break was passed on");
+  assert.equal(err.usage.input_tokens, 1e6, "what is known of its usage goes with the error");
+  assert.equal(err.usage.output_tokens, 6, "what she had written is put at a token per three characters (18 arrived): its count only comes at the end, and the start's placeholder of 1 is not it");
+  assert.ok(Math.abs(c.spent - (2 + 6 * 10 / 1e6)) < 1e-12, "and both are counted");
+  /* the time limit passes while the reply is being read: not sent again, and said plainly */
+  const late2 = Object.assign(new Error("aborted"), { name: "TimeoutError" });
+  ({ c, f } = streamingClaude([{ events: ok, pieceSize: 20, breakAfter: 6, breakWith: late2 }, { events: ok }]));
+  await assert.rejects(c.stream({ model: "m" }), /took longer than 45 s/);
+  assert.equal(f.calls.length, 1);
+  /* a reply with Windows line ends reads the same */
+  ({ c } = streamingClaude([{ events: ok, crlf: true, pieceSize: 3 }]));
+  assert.equal((await c.stream({ model: "m" })).content[0].input.say, "Yes.");
+  /* the connection drops half way, and a reply that just ends */
+  ({ c } = streamingClaude([{ events: ok, pieceSize: 20, breakAfter: 6 }]));
+  await assert.rejects(c.stream({ model: "m" }), /Claude's reply broke off: socket hang up/);
+  ({ c } = streamingClaude([{ events: ok.slice(0, -1) }]));
+  await assert.rejects(c.stream({ model: "m" }), /broke off before it was finished/);
+  ({ c } = streamingClaude([{ status: 400, body: { error: { message: "tool_choice not supported" } } }]));
+  await assert.rejects(c.stream({ model: "m" }), /Claude answered 400: tool_choice not supported/);
+  let calls = 0;
+  const slow = new Claude({ apiKey: "k", prices: {}, fetchImpl: async () => { calls++; const e = new Error("aborted"); e.name = "TimeoutError"; throw e; }, sleep: async () => {} });
+  await assert.rejects(slow.stream({ model: "m" }), /took longer than 45 s/);
+  assert.equal(calls, 1, "a timed-out call is not sent again");
+});
+
+test("one field is read out of JSON that is still being written", () => {
+  const whole = JSON.stringify({ note: { say: "not this one" }, list: ["say", "nor this"], say: "She said \"no\".\nTab\there, a \\ and é ☺ 😀 done", details: "**bold** say: \"x\"", sources: [{ name: "say", url: "u" }] }).replace("é", "\\u00e9");
+  for (const size of [1, 2, 3, 5, 11, 1000]) {
+    const r = new FieldReader("say");
+    let out = "";
+    for (let i = 0; i < whole.length; i += size) out += r.feed(whole.slice(i, i + size));
+    assert.equal(out, "She said \"no\". Tab here, a \\ and é ☺ 😀 done", `pieces of ${size}: escapes undone, line breaks as spaces, only the top-level say`);
+    assert.equal(r.text, out);
+    assert.equal(r.done, true);
+  }
+  const cut = new FieldReader("say");
+  cut.feed('{"say": "Half a sent');
+  assert.equal(cut.text, "Half a sent", "an unfinished value gives what there is");
+  assert.equal(cut.done, false);
+  const none = new FieldReader("say");
+  none.feed('{"details": "say", "x": {"say": "no"}}');
+  assert.equal(none.text, "");
+  const t0 = performance.now();
+  new FieldReader("say").feed('{"say": "' + "\\\\\\\"{[:,".repeat(40000) + '"}');
+  assert.ok(performance.now() - t0 < 500, "plain steps: a long odd value is still quick");
+});
+
+test("what she says is passed on while the rest of the answer is still being written", async () => {
+  const input = { say: "Grabbed means off-guard and immobilized. Escape is one action.", details: "**Off-guard and immobilized.**\n- Escape: one action", sources: [{ name: "Grabbed", url: "https://2e.aonprd.com/Conditions.aspx?ID=77" }] };
+  const order = [], ends = [];
+  const given = {}; /* the second reply's body reports how much of it is still to come */
+  const { c: c2, f: f2 } = streamingClaude([
+    { events: streamEvents([{ type: "tool_use", id: "t1", name: "aon_search", input: { query: "grabbed" } }]) },
+    { events: streamEvents([{ type: "text", text: "Got it." }, { type: "tool_use", id: "t2", name: "answer", input }], { jsonPiece: 6 }), pieceSize: 50, gapMs: 1, given },
+  ]);
+  const leftAt = [];
+  const done = answerQuestion({ claude: c2, aon: fakeAon, model: "m", system: "S", conversation: "", question: "Grabbed?", asker: "Mira", onSay: (t, o) => { if (o?.end) ends.push(given.left); else { order.push(t); leftAt.push(given.left); } } });
+  done.then(() => order.push("<done>"));
+  const r = await done;
+  await null;
+  assert.equal(order.at(-1), "<done>");
+  assert.ok(leftAt[0] > 1500, `her first words are passed on while most of the reply has not arrived yet (${leftAt[0]} bytes still to come)`);
+  assert.equal(ends.length, 1, "told once that all she will say is written");
+  assert.ok(ends[0] > 500, `and that comes before the written answer and the pages (${ends[0]} bytes still to come)`);
+  assert.equal(order.slice(0, -1).join(""), input.say, "all of say, and nothing of the text before the tool or of details");
+  assert.ok(order.length > 5, "in pieces, as written");
+  assert.equal(r.say, input.say);
+  assert.equal(r.details, input.details);
+  assert.equal(r.rounds, 2);
+  assert.equal(r.lookups, 1);
+  const tools = JSON.parse(f2.calls[1].init.body).tools;
+  assert.equal(tools.find(t => t.name === "answer").eager_input_streaming, true, "the answer tool's input is asked for as written");
+  assert.equal(tools.find(t => t.name === "aon_search").eager_input_streaming, undefined, "the lookups stay checked by the API");
+  assert.ok(Math.abs(r.dollars - c2.spent) < 1e-12, "each round's own cost");
+});
+
+test("an answer cut short still says what she had written; one that breaks off reports its cost", async () => {
+  /* out of tokens inside details: the JSON never closes */
+  let { c } = streamingClaude([{ events: streamEvents([{ type: "tool_use", id: "t", name: "answer", rawInput: '{"say": "Yes, with a free hand.", "details": "**Yes' }], { stop: "max_tokens" }) }]);
+  const heard = [];
+  const r = await answerQuestion({ claude: c, aon: fakeAon, model: "m", system: "S", conversation: "", question: "q", asker: "A", onSay: t => heard.push(t) });
+  assert.equal(r.say, "Yes, with a free hand.");
+  assert.equal(heard.join(""), "Yes, with a free hand.");
+  assert.equal(r.details, "Yes, with a free hand.", "with no written part, the spoken one is written");
+  /* two answer calls in one reply: only the first is passed on to be spoken, and it is the answer */
+  ({ c } = streamingClaude([{ events: streamEvents([{ type: "tool_use", id: "a", name: "answer", input: { say: "The first one." } }, { type: "tool_use", id: "b", name: "answer", input: { say: "A second one." } }]) }]));
+  heard.length = 0;
+  const twice = await answerQuestion({ claude: c, aon: fakeAon, model: "m", system: "S", conversation: "", question: "q", asker: "A", onSay: t => heard.push(t) });
+  assert.equal(heard.join(""), "The first one.");
+  assert.equal(twice.say, "The first one.");
+  /* the second round breaks off: the first round and what is known of the second are both counted */
+  const broken = streamEvents([{ type: "tool_use", id: "t2", name: "answer", input: { say: "Yes." } }], { usage: { input_tokens: 1e6 } }).slice(0, 3);
+  ({ c } = streamingClaude([{ events: streamEvents([{ type: "tool_use", id: "t1", name: "aon_search", input: { query: "q" } }], { usage: { input_tokens: 5e5 }, outputTokens: 0 }) }, { events: broken }]));
+  const err = await answerQuestion({ claude: c, aon: fakeAon, model: "m", system: "S", conversation: "", question: "q", asker: "A" }).catch(e => e);
+  assert.match(err.message, /broke off/);
+  assert.ok(Math.abs(err.dollars - (3 + 10 / 1e6)) < 1e-12, "$1 for the first round and $2 for what the broken one had read (and the start's one token of writing)");
 });

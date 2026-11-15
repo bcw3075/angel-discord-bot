@@ -19,6 +19,7 @@ Deepgram: turning each piece of speech into text, and Angel's voice; making answ
 - `transcribe(wav)`: POST to `/v1/listen` with `model` nova-3, `language` en, `smart_format`, `punctuate` and one `keyterm` per name, header `Authorization: Token <key>`; returns the text, its confidence and the billed seconds.
 - `synthesize(text, { format })`: POST to `/v1/speak` with `model` (the voice), `encoding` opus and `container` ogg (or `mp3`, or 16 kHz `linear16` WAV for the check), body `{ "text": … }`.
 - `chunkText` splits at sentence ends, then commas, then spaces, at most `TTS_MAX_CHARS` (1,800) a piece; the pieces play one after another.
+- `SentenceCutter` (in `speech.mjs`) cuts text into sentences while it is still being written, for speaking an answer as it comes: a sentence ends at . ! or ? once the space after it has arrived (so "2.5" is never cut), sentences under 16 characters stay with the next, "e.g." and its kind end nothing; plain character steps, no regex. Each sentence is its own voice request, so a short pause between sentences is possible when the next clip isn't ready yet.
 - `speakable` drops markdown and links and says "2d6" as "2 d 6", "+2" as "plus 2", "-1" as "minus 1", "e.g." as "for example".
 - `oggPackets` reads the packets out of an Ogg file (used by the check and tests).
 - `deepgramError` turns a refusal into a plain line: Deepgram explains it in JSON (`{"err_msg": "Invalid credentials."}`), and the words are kept without the braces, so `npm run check` can say what to do about it.
@@ -27,7 +28,8 @@ Deepgram: turning each piece of speech into text, and Angel's voice; making answ
 - (dg-1) {live} in a real session, ten of the names in `keyterms.txt` said aloud come out spelled right in the transcript.
 - (dg-2) {live} an answer of 1,500 characters or more is spoken whole, in pieces with no long gaps between them.
 - (dg-4) {live} `Choose Voice.cmd` on the owner's PC saves a sample of every voice (any that fail are listed), opens the folder, and a typed name becomes her voice after a restart.
-- (dg-3) {unit} the voice names, the request shapes, chunking, the spoken copy and the Ogg reader (`test/speech.test.mjs`).
+- (dg-5) {live} an answer spoken sentence by sentence sounds like one answer: no long gap or odd break between the sentences.
+- (dg-3) {unit} the voice names, the request shapes, chunking, the sentence cutter, the spoken copy and the Ogg reader (`test/speech.test.mjs`).
 
 ## Traps
 - `/v1/speak` takes at most 2,000 characters a request; longer answers must be split (`chunkText`).

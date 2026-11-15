@@ -369,3 +369,216 @@ test("a reply right after she stops isn't taken for her echo unless its words ar
   speech(voice, "p1"); await settle(); await s.answering;
   assert.equal(gates.length, 2, "her own words coming back were not");
 });
+
+/* an answer that is written slowly: `say` arrives in pieces through onSay, then the rest takes `tail` to finish */
+const written = (say, { details = "**Written.**", piece = 9, tail = async () => {}, fail = null, extra = {}, end = false } = {}) => async q => {
+  for (let i = 0; i < say.length; i += piece) { q.onSay?.(say.slice(i, i + piece)); await sleep(1); }
+  if (end) q.onSay?.("", { end: true });
+  await tail();
+  if (fail) { const e = new Error(fail); e.dollars = 0.01; throw e; }
+  return { say, details, sources: [], rounds: 2, lookups: 1, dollars: 0.02, ...extra };
+};
+const SAY = "Grabbed means off-guard and immobilized. Escape takes one action. Ask if you want the details.";
+
+test("she starts speaking as soon as her first sentence is written; the post waits for the whole answer (Rhea, 2026-11-14)", async () => {
+  const { s, voice, posted } = setup({ heard: ["Angel, what does grabbed do?"], gate: () => ({ toAngel: true, complete: true, stop: false, question: "What does grabbed do?", ack: "Ooh, grabbed." }) });
+  let release, midway;
+  s.answer = written(SAY, { tail: () => new Promise(r => { midway = { spoken: voice.spoken.map(String), edits: posted[0]?.edits.length, said: s.lastSaid }; release = r; }) });
+  const infos = [];
+  s.log.info = m => infos.push(m);
+  await s.start();
+  speech(voice, "p1");
+  await settle();
+  assert.deepEqual(midway.spoken, ["clip:Ooh, grabbed.", "clip:Grabbed means off-guard and immobilized.", "clip:Escape takes one action."], "her reaction, then each whole sentence, while the answer is still being written");
+  assert.equal(midway.edits, 0, "the written answer isn't posted yet");
+  assert.equal(midway.said, "Grabbed means off-guard and immobilized. Escape takes one action.", "what she is saying counts as hers for the echo check at once");
+  release(); await settle(); await s.answering;
+  assert.deepEqual(voice.spoken.map(String).slice(3), ["clip:Ask if you want the details."], "the last sentence once the answer is whole, and nothing twice");
+  assert.match(posted[0].edits[0], /\*\*Written\.\*\*/);
+  assert.equal(s.transcript.lines.at(-1).text, SAY, "the transcript has all she said, once");
+  assert.equal(s.lastSaid, SAY);
+  assert.ok(Math.abs(s.costs.tts - s.ttsCost("Ooh, grabbed." + SAY.replaceAll(". ", ".")) - s.ttsCost(DEFAULTS.ackPhrase)) < 1e-9, "each piece of voice is paid for once");
+  assert.ok(infos.some(m => /timing for Mira's question: first words written \d+\.\d s, her answer began aloud .* whole answer written \d+\.\d s after it was taken up \(taken up -?\d+\.\d s after they stopped talking\); 2 round\(s\), 1 lookup\(s\)$/.test(m)), `the times go in the log: ${infos.join(" | ")}`);
+  assert.ok(infos.some(m => /Mira can reply without her name/.test(m)), "the reply window opens after her answer");
+});
+
+test("the pieces are spoken in the order written, even when a later one is ready first", async () => {
+  const { s, voice } = setup({ heard: ["Angel, what does grabbed do?"], cfg: { ackPhrase: "" } });
+  s.tts = async text => { await sleep(/^Grabbed/.test(text) ? 40 : 1); return [Buffer.from(`clip:${text}`)]; };
+  s.answer = written(SAY);
+  await s.start();
+  speech(voice, "p1");
+  await settle(); await s.answering;
+  assert.deepEqual(voice.spoken.map(String), ["clip:Grabbed means off-guard and immobilized.", "clip:Escape takes one action.", "clip:Ask if you want the details."]);
+});
+
+test('"Angel, stop" while she is speaking an answer still being written: the rest is not spoken, the answer is still typed', async () => {
+  const { s, voice, posted } = setup({ heard: ["Angel, what does grabbed do?", "Angel, stop"], cfg: { ackPhrase: "" } });
+  let release;
+  s.answer = written(SAY, { piece: 45, tail: () => new Promise(r => { release = r; }) });
+  await s.start();
+  speech(voice, "p1"); await settle();
+  assert.equal(voice.spoken.length, 2, "the first two sentences are out, the last is still to come");
+  speech(voice, "p1"); await settle();
+  assert.equal(voice.stops, 1);
+  release(); await settle(); await s.answering;
+  assert.equal(voice.spoken.length, 2, "nothing more after the stop");
+  assert.match(posted[0].edits[0], /Written/, "the answer is still typed");
+  assert.equal(s.replyTo ?? null, null, "no reply window after a stop");
+});
+
+test("an answer that fails after she began: what she said and the apology are both in the transcript", async () => {
+  const { s, voice, posted } = setup({ heard: ["Angel, what does grabbed do?"], cfg: { ackPhrase: "" } });
+  s.answer = written("Grabbed means off-guard and immobilized. And then", { fail: "Claude's reply broke off" });
+  await s.start();
+  speech(voice, "p1");
+  await settle(); await s.answering;
+  assert.deepEqual(voice.spoken.map(String), ["clip:Grabbed means off-guard and immobilized.", "clip:Sorry, I couldn't reach my rules brain just then. Give it a moment and ask me again?"]);
+  assert.equal(s.transcript.lines.at(-1).text, "Grabbed means off-guard and immobilized. Sorry, I couldn't reach my rules brain just then. Give it a moment and ask me again?");
+  assert.match(posted[0].edits[0], /Sorry/);
+  assert.ok(Math.abs(s.costs.claude - 0.0101) < 1e-9, "the failed rounds are counted");
+});
+
+test("with speakAsWritten off, or an answer that isn't written piece by piece, she speaks it whole as before", async () => {
+  let { s, voice } = setup({ heard: ["Angel, what does grabbed do?"], cfg: { ackPhrase: "", speakAsWritten: false } });
+  let given;
+  s.answer = async q => { given = q.onSay; return written(SAY)(q); };
+  await s.start();
+  speech(voice, "p1");
+  await settle(); await s.answering;
+  assert.equal(given, null, "nothing asks for the pieces");
+  assert.deepEqual(voice.spoken.map(String), [`clip:${SAY}`]);
+  ({ s, voice } = setup({ heard: ["Angel, what does grabbed do?"], cfg: { ackPhrase: "" } }));
+  await s.start();
+  speech(voice, "p1");
+  await settle(); await s.answering;
+  assert.deepEqual(voice.spoken.map(String), ["clip:Answer to: Angel, what does grabbed do?"], "an answer that came whole is spoken whole");
+});
+
+test("the reply window opens when her spoken answer ends, not when it was written", async () => {
+  const { s, voice } = setup({ heard: ["Angel, what does grabbed do?"], cfg: { ackPhrase: "" } });
+  const ends = [];
+  voice.speak = function (clips, { onStart } = {}) { this.spoken.push(...clips); onStart?.(); return new Promise(r => ends.push(r)); };
+  s.answer = written(SAY);
+  await s.start();
+  speech(voice, "p1");
+  await settle(); await s.answering;
+  assert.equal(voice.spoken.length, 3);
+  assert.equal(s.replyTo ?? null, null, "written and queued, but she is still talking");
+  ends[0](); ends[1](); await settle();
+  assert.equal(s.replyTo ?? null, null, "the last sentence is still playing");
+  ends[2](); await settle();
+  assert.equal(s.replyTo?.userId, "p1");
+});
+
+test("the cap is asked before she begins an answer, never in the middle of one", async () => {
+  const { s, voice, posted } = setup({ heard: ["Angel, what does grabbed do?", "Angel, and prone?"], cfg: { ackPhrase: "", maxSessionDollars: 0.021 } });
+  s.answer = written(SAY, { tail: async () => { s.costs.claude += 1; } });
+  await s.start();
+  speech(voice, "p1");
+  await settle(); await s.answering;
+  assert.equal(voice.spoken.length, 3, "the answer she had begun is finished although the cap was passed while she wrote it");
+  speech(voice, "p1");
+  await settle(); await s.answering;
+  assert.equal(voice.spoken.length, 3, "past the cap nothing more is spoken");
+  assert.ok(posted.some(m => /spending cap/.test(m.text)), "and she says so");
+});
+
+test("small talk spoken as written is not posted; if her voice fails it is typed instead", async () => {
+  let { s, voice, posted } = setup({ heard: ["Angel, how are you?"], gate: () => ({ toAngel: true, complete: true, stop: false, chat: true, question: "How are you?" }) });
+  s.answer = written("Never better. I do love a good rules argument.", { extra: { lookups: 0 } });
+  await s.start();
+  speech(voice, "p1");
+  await settle(); await s.answering;
+  assert.deepEqual(voice.spoken.map(String), ["clip:Never better. I do love a good rules argument."], "a very short first sentence stays with the next");
+  assert.equal(posted.length, 0);
+  ({ s, voice, posted } = setup({ heard: ["Angel, how are you?"], gate: () => ({ toAngel: true, complete: true, stop: false, chat: true, question: "How are you?" }) }));
+  s.tts = async () => { throw new Error("Deepgram is down"); };
+  s.answer = written("Never better. I do love a good rules argument.", { extra: { lookups: 0 } });
+  await s.start();
+  speech(voice, "p1");
+  await settle(); await s.answering;
+  assert.equal(voice.spoken.length, 0);
+  assert.equal(posted.length, 1, "typed, since it couldn't be spoken");
+});
+
+test('"Angel, stop" while a sentence is still being turned into voice: it is never played', async () => {
+  const { s, voice } = setup({ heard: ["Angel, what does grabbed do?", "Angel, stop"], cfg: { ackPhrase: "" } });
+  const making = [];
+  s.tts = text => new Promise(r => making.push(() => r([Buffer.from(`clip:${text}`)])));
+  s.answer = written(SAY);
+  await s.start();
+  speech(voice, "p1"); await settle();
+  assert.ok(making.length >= 2, "sentences are on their way to the voice");
+  speech(voice, "p1"); await settle();
+  assert.equal(voice.stops, 1);
+  for (const done of making) done();
+  await settle(); await s.answering;
+  assert.equal(voice.spoken.length, 0, "ready after the stop, so not played");
+  assert.equal(s.replyTo ?? null, null);
+});
+
+test("her last sentence, or her only one, is spoken as soon as all she will say is written, not when the whole answer is", async () => {
+  for (const say of ["It's a plus 2 circumstance bonus to AC.", "Yes. It gives a minus 2 penalty.", SAY]) {
+    const { s, voice, posted } = setup({ heard: ["Angel, what does grabbed do?"], cfg: { ackPhrase: "" } });
+    let release, midway;
+    s.answer = written(say, { end: true, tail: async () => { await settle(); midway = voice.spoken.map(String).join(" ").replaceAll("clip:", ""); await new Promise(r => { release = r; }); } });
+    await s.start();
+    speech(voice, "p1");
+    for (let i = 0; i < 40 && !release; i++) await settle();
+    assert.equal(midway, say, "all of it is out while the written answer is still being written");
+    assert.equal(posted[0].edits.length, 0);
+    release(); await settle(); await s.answering;
+    assert.equal(voice.spoken.map(String).join(" ").replaceAll("clip:", ""), say, "and nothing is said twice when the answer is whole");
+  }
+});
+
+test("a say that holds nothing still gets her spoken apology; a stop pays for no more voice; a session that ends mid-answer says no more", async () => {
+  let { s, voice } = setup({ heard: ["Angel, what does grabbed do?"], cfg: { ackPhrase: "" } });
+  s.answer = async q => { q.onSay?.(" "); q.onSay?.("", { end: true }); return { say: "Sorry, I lost my train of thought there. Could you ask me again?", sources: [], dollars: 0.01 }; };
+  await s.start();
+  speech(voice, "p1");
+  await settle(); await s.answering;
+  assert.deepEqual(voice.spoken.map(String), ["clip:Sorry, I lost my train of thought there. Could you ask me again?"]);
+
+  /* stopped while she writes: the sentences written after the stop are never sent to be made into voice */
+  let made = 0, release;
+  ({ s, voice } = setup({ heard: ["Angel, what does grabbed do?", "Angel, stop"], cfg: { ackPhrase: "" } }));
+  s.tts = async text => { made++; return [Buffer.from(`clip:${text}`)]; };
+  s.answer = async q => { q.onSay("Grabbed means off-guard and immobilized. "); await new Promise(r => { release = r; }); q.onSay("Escape takes one action. And more. "); q.onSay("", { end: true }); return { say: SAY, sources: [], dollars: 0.01 }; };
+  await s.start();
+  speech(voice, "p1"); await settle();
+  assert.equal(made, 1);
+  speech(voice, "p1"); await settle();
+  release(); await settle(); await s.answering;
+  assert.equal(made, 1, "nothing more is paid for after the stop");
+  assert.equal(voice.spoken.length, 1);
+
+  /* the session ends while she writes */
+  made = 0; release = null;
+  let posted;
+  ({ s, voice, posted } = setup({ heard: ["Angel, what does grabbed do?"] }));
+  s.tts = async text => { made++; return [Buffer.from(`clip:${text}`)]; };
+  s.answer = async q => { q.onSay("Grabbed means off-guard and immobilized. "); await new Promise(r => { release = r; }); q.onSay("Escape takes one action. "); q.onSay("", { end: true }); return { say: SAY, details: "**Written.**", sources: [], dollars: 0.01 }; };
+  await s.start();
+  speech(voice, "p1"); await settle();
+  const before = made, spokenBefore = voice.spoken.length;
+  s.end();
+  release(); await settle(); await s.answering;
+  assert.equal(made, before, "no voice is made after the session ended");
+  assert.equal(voice.spoken.length, spokenBefore);
+  assert.match(posted[0].edits[0], /Written/, "the answer she had is still typed");
+  assert.equal(s.replyTo ?? null, null);
+});
+
+test("an answer that breaks off after she said all of it: no apology on top, and the post says the written details are missing", async () => {
+  const { s, voice, posted } = setup({ heard: ["Angel, what does grabbed do?"], cfg: { ackPhrase: "" } });
+  s.answer = written(SAY, { end: true, fail: "Claude took longer than 45 s" });
+  await s.start();
+  speech(voice, "p1");
+  await settle(); await s.answering;
+  assert.equal(voice.spoken.map(String).join(" ").replaceAll("clip:", ""), SAY, "what she said, and no apology after it");
+  assert.equal(s.transcript.lines.at(-1).text, SAY);
+  assert.match(posted[0].edits[0], /Grabbed means off-guard[\s\S]*lost the written details/);
+  assert.ok(s.replyTo, "she did answer, so they can reply");
+});
