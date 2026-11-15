@@ -676,3 +676,31 @@ test("an answer whose written part was lost is posted with a note and not kept; 
   speech(voice, "p1"); await settle(); await s.answering;
   assert.equal(given, null, "so a reply cut off can still be asked again");
 });
+
+test("a long question cut into pieces while they are still talking is not checked or answered until they finish (live 2026-11-14)", async () => {
+  const { s, voice, gates, asked } = setup({ heard: ["Angel, thanks. I'd like you to look up how the reaction works when the hit has multiple different damage", "types. Like fire, lightning and acid.", "How does the damage reduction apply to that attack?"], gate: ({ bareText }) => ({ toAngel: true, complete: true, stop: false, question: "" }) });
+  const infos = [];
+  s.log.info = m => infos.push(m);
+  await s.start();
+  const t = Date.now();
+  /* the first two pieces were cut at the 30-second limit: the speaker went on talking */
+  voice.emit("speech", { userId: "p1", packets: tonePackets(1), startedAt: t, final: false });
+  await settle();
+  assert.equal(gates.length, 0, "no check on a piece that isn't the whole question");
+  assert.equal(asked.length, 0, "and no answer over the top of them");
+  assert.ok(infos.some(m => /Mira is still talking: waiting for the rest/.test(m)));
+  voice.emit("speech", { userId: "p1", packets: tonePackets(1), startedAt: t + 30000, final: false });
+  await settle();
+  assert.equal(gates.length, 0);
+  voice.emit("speech", { userId: "p1", packets: tonePackets(1), startedAt: t + 60000, final: true });
+  await settle(); await s.answering;
+  assert.equal(gates.length, 1, "one check, on the whole of it");
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].question, "Angel, thanks. I'd like you to look up how the reaction works when the hit has multiple different damage types. Like fire, lightning and acid. How does the damage reduction apply to that attack?");
+  /* a long piece that doesn't name her is only transcript, cut or not */
+  const other = setup({ heard: ["and so the dragon said to the knight"] });
+  await other.s.start();
+  other.voice.emit("speech", { userId: "p1", packets: tonePackets(1), startedAt: Date.now(), final: false });
+  await settle();
+  assert.equal(other.s.pending.size, 0);
+});

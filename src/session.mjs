@@ -78,7 +78,7 @@ export class Session {
     return d;
   }
 
-  async onSpeech({ userId, packets, startedAt }) {
+  async onSpeech({ userId, packets, startedAt, final = true }) {
     if (this.ended || this.overCap()) return;
     const piece = packetsToWav(this.decoderFor(userId), packets, this.cfg);
     if (!piece.wav) { this.counts.skipped++; return; }
@@ -100,7 +100,7 @@ export class Session {
       const line = this.transcript.add({ at: startedAt, userId, speaker: who.name, role: who.role, text: heard.text, kind: "voice" });
       /* started in order, not waited for in order: what they say while the check on this line runs is the rest of
          the question. `until` is when they stopped talking (speech time): the timing in the log starts there */
-      if (line && !stoppedEarly) { handling = this.onLine(line, startedAt + piece.durationMs); handling.catch(() => {}); }
+      if (line && !stoppedEarly) { handling = this.onLine(line, startedAt + piece.durationMs, final === false); handling.catch(() => {}); }
     });
     const settled = turn.catch(() => {});
     this.heardOrder.set(userId, settled);
@@ -112,7 +112,8 @@ export class Session {
   /* a stop said after the question was said cancels it, wherever it is: transcribing, being checked, queued or looked up */
   stoppedSince(at) { return this.lastStopAt > at; }
 
-  async onLine(line, until = line.at) {
+  /* `more` means this piece was cut off because the speaker has talked for maxUtteranceSeconds and is still talking */
+  async onLine(line, until = line.at, more = false) {
     if (isStopRequest(line.text)) { this.stop(line.at); return; }
     const uid = line.userId;
     /* the person she just answered may reply without her name for a little while after she stops talking (Rhea,
@@ -139,8 +140,20 @@ export class Session {
     if (waiting) {
       this.pending.delete(uid);
       clearTimeout(waiting.timer);
-      if (this.now() - waiting.at <= this.cfg.followUpMs) text = `${waiting.text} ${line.text}`;
+      if (this.now() - waiting.at <= (waiting.holdMs ?? this.cfg.followUpMs)) text = `${waiting.text} ${line.text}`;
       else if (!named) return;
+    }
+    /* They are still talking: a long question is cut into pieces every maxUtteranceSeconds so the transcript keeps
+       up, and the piece so far is not the question. It is kept, without the check, until the rest comes (live
+       2026-11-14: a question said over 40 s was checked and answered from its first 30 s, and she began to talk
+       while Rhea was still asking it). */
+    if (more) {
+      const holdMs = this.cfg.maxUtteranceSeconds * 1000 + this.cfg.followUpMs;
+      const timer = setTimeout(() => this.pending.delete(uid), holdMs);
+      timer.unref?.();
+      this.pending.set(uid, { text, at: this.now(), timer, holdMs });
+      this.log.info(`${line.speaker} is still talking: waiting for the rest before the check`);
+      return;
     }
     const context = Transcript.format(this.transcript.before(line, 7).slice(0, -1));
     const later = [];
