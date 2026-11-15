@@ -101,7 +101,7 @@ test("the check gets a short time limit and one more try; a reply cut off at its
   const d = await gate({ claude, model: "h", contextText: "", lastText: "Rhea: How about this, tell me how it works, Angel", bareText: "How about this, tell me how it works, Angel" });
   assert.deepEqual(seen[0][1], { timeoutMs: 8000, retries: 1, maxWaitMs: 1500 });
   assert.equal(d.dollars, 0.002, "the cut-off call was still paid for and is counted");
-  assert.equal(seen[0][0].max_tokens, 400, "room for a long question written back");
+  assert.equal(seen[0][0].max_tokens, 600, "room for a long question written back");
   assert.match(d.error, /cut off/, "said in the log by the session");
   assert.equal(d.fallback, true);
 });
