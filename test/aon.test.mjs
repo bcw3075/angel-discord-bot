@@ -202,3 +202,12 @@ test("for a wordy search, the entry whose name is among the words asked comes fi
   const r2 = await new Aon({ userAgent: "t", fetchImpl: f2 }).search("persistent fire damage");
   assert.deepEqual(r2.map(e => e.name), ["Persistent Damage", "Fire", "Damage", "Counting Damage Dice"]);
 });
+
+test("the little words of a question never move a one-word entry of that name up (review 7)", async () => {
+  const mk = (id, name, category = "rules") => ({ _id: id, name, category, url: `/${id}`, primary_source: "Player Core", release_date: "2023-11-15" });
+  const index = [mk("p1", "Persistent Damage", "condition"), mk("w1", "Work", "rules"), mk("h1", "How to Play", "rules"), mk("f1", "Fire", "trait"), mk("d1", "Damage")];
+  const f = scriptedFetch([hits(index), hits([])]);
+  const r = await new Aon({ userAgent: "t", fetchImpl: f }).search("how does fire damage work with persistent", { withText: 3 });
+  assert.deepEqual(r.map(e => e.name), ["Fire", "Damage", "Persistent Damage", "Work", "How to Play"], "Work is not moved up for the word 'work'");
+  assert.deepEqual(JSON.parse(f.calls[1].body).query.ids.values, ["f1", "d1", "p1"], "Persistent Damage keeps its text");
+});

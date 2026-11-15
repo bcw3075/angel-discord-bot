@@ -81,7 +81,12 @@ export class Session {
   async onSpeech({ userId, packets, startedAt, final = true }) {
     if (this.ended || this.overCap()) return;
     const piece = packetsToWav(this.decoderFor(userId), packets, this.cfg);
-    if (!piece.wav) { this.counts.skipped++; return; }
+    if (!piece.wav) {
+      this.counts.skipped++;
+      /* the end of their speech, too short to hear: a long question held for its rest has had all of it */
+      if (final !== false) await this.afterTurn(userId, () => this.releaseHold(userId, "they stopped"));
+      return;
+    }
     this.counts.pieces++;
     /* pieces are transcribed side by side, but one speaker's lines are taken in the order they were said: when the
        second half of a question came back first it had no name yet and was dropped, and the first half then waited
@@ -95,7 +100,7 @@ export class Session {
     const turn = before.then(async () => {
       const heard = await hearing;
       this.costs.stt += this.sttCost(heard.seconds || piece.durationMs / 1000);
-      if (!heard.text || this.ended) return;
+      if (!heard.text || this.ended) { if (final !== false && !this.ended) handling = this.releaseHold(userId, "they stopped"); return; }
       const who = this.speakerOf(userId);
       const line = this.transcript.add({ at: startedAt, userId, speaker: who.name, role: who.role, text: heard.text, kind: "voice" });
       /* started in order, not waited for in order: what they say while the check on this line runs is the rest of
@@ -109,34 +114,44 @@ export class Session {
     await handling;
   }
 
+  /* runs once this speaker's earlier pieces have been taken, so a release can't overtake a piece still being heard */
+  async afterTurn(userId, work) {
+    await (this.heardOrder.get(userId) ?? Promise.resolve());
+    await work();
+  }
+
   /* a stop said after the question was said cancels it, wherever it is: transcribing, being checked, queued or looked up */
   stoppedSince(at) { return this.lastStopAt > at; }
 
   /* `more` means this piece was cut off because the speaker has talked for maxUtteranceSeconds and is still talking */
-  async onLine(line, until = line.at, more = false) {
+  async onLine(line, until = line.at, more = false, released = null) {
     if (isStopRequest(line.text)) { this.stop(line.at); return; }
     const uid = line.userId;
     /* the person she just answered may reply without her name for a little while after she stops talking (Rhea,
        2026-11-14: "you replied first but not when I replied to you"); the check still decides it was for her */
     const r = this.replyTo;
     const replying = !!r && r.userId === uid && line.at >= r.from && line.at <= r.from + this.cfg.replyWindowMs;
-    const byName = mentionsAngel(line.text);
-    const named = byName || replying;
+    const byName = mentionsAngel(line.text) || released?.byName === true;
+    const named = byName || replying || !!released;
     /* the check on this speaker's last line is still running: keep the line, it may be the rest of the question */
     const inFlight = this.checking.get(uid);
     if (inFlight && !byName) { inFlight.push(line.text); return; }
-    const waiting = this.pending.get(uid);
+    const waiting = released ? null : this.pending.get(uid);
     if (!waiting && !named) return;
     /* her own voice coming back through a microphone. A reply without her name gets a closer look instead of the plain
        time rule: right after she stops is exactly when people answer her (2026-11-14: "Nice. And does that stack...?"
        began 2 s after she finished and was dropped). It's an echo only if its words are hers. */
-    if (!waiting && this.voice.inEchoWindow(line.at) && (byName || !replying || echoOf(line.text, this.lastSaid))) {
+    if (!waiting && !released && this.voice.inEchoWindow(line.at) && (byName || !replying || echoOf(line.text, this.lastSaid))) {
       /* in the log, so a line she didn't answer can be explained */
       if (byName) this.log.info(`${line.speaker}'s line naming her began while she was talking (or just after): taken as her own voice coming back, not answered`);
       return;
     }
     if (this.overCap()) return;
     let text = line.text;
+    /* when the question began: a stop said after that cancels it, even one said during its first piece (review 7) */
+    const firstAt = released?.firstAt ?? (waiting?.held ? waiting.firstAt : line.at);
+    /* her name in any piece of it makes it a named question, not a reply (review 7) */
+    const wasNamed = byName || waiting?.byName === true;
     if (waiting) {
       this.pending.delete(uid);
       clearTimeout(waiting.timer);
@@ -148,10 +163,14 @@ export class Session {
        2026-11-14: a question said over 40 s was checked and answered from its first 30 s, and she began to talk
        while Rhea was still asking it). */
     if (more) {
+      if (this.stoppedSince(firstAt)) return;
       const holdMs = this.cfg.maxUtteranceSeconds * 1000 + this.cfg.followUpMs;
-      const timer = setTimeout(() => this.pending.delete(uid), holdMs);
-      timer.unref?.();
-      this.pending.set(uid, { text, at: this.now(), timer, holdMs, byName: byName || waiting?.byName === true });
+      const held = { text, at: this.now(), holdMs, byName: wasNamed, held: true, firstAt, line: { ...line, at: firstAt }, until };
+      /* the rest may never become a line (too short, too quiet, nothing transcribed): then what was said is checked
+         as it is, not dropped (review 7) */
+      held.timer = setTimeout(() => this.releaseHold(uid, "the rest never came"), holdMs);
+      held.timer.unref?.();
+      this.pending.set(uid, held);
       this.log.info(`${line.speaker} is still talking: waiting for the rest before the check`);
       return;
     }
@@ -160,15 +179,15 @@ export class Session {
     this.checking.set(uid, later);
     this.counts.gateChecks++;
     let decision;
-    try { decision = await this.gate({ contextText: context, lastText: `${line.speaker}: ${text}`, bareText: text, replying: replying && !byName }); }
+    try { decision = await this.gate({ contextText: context, lastText: `${line.speaker}: ${text}`, bareText: text, replying: replying && !wasNamed }); }
     finally { if (this.checking.get(uid) === later) this.checking.delete(uid); }
     if (typeof decision.dollars === "number") this.costs.claude += decision.dollars;
     if (decision.error) this.log.warn(`the "was that for me?" check failed (${decision.error}); the plain rule decided`);
     else if (decision.fallback) this.log.warn(`the "was that for me?" check gave a reply that couldn't be read; the plain rule decided`);
     /* what the check decided goes in the log (no words, just the verdict), so a line she didn't answer can be explained */
-    this.log.info(`check on ${line.speaker}'s line${byName || waiting?.byName ? "" : " (a reply, no name)"}: ${decision.toAngel ? (decision.chat ? "for Angel, small talk" : decision.complete === false ? "for Angel, waiting for the rest" : "for Angel") : "not for Angel"}`);
-    if (!decision.toAngel || this.ended || this.stoppedSince(line.at)) return;
-    let at = line.at;
+    this.log.info(`check on ${line.speaker}'s line${wasNamed ? "" : " (a reply, no name)"}: ${decision.toAngel ? (decision.chat ? "for Angel, small talk" : decision.complete === false ? "for Angel, waiting for the rest" : "for Angel") : "not for Angel"}`);
+    if (!decision.toAngel || this.ended || this.stoppedSince(firstAt)) return;
+    let at = firstAt;
     let asked = text; /* their own words */
     if (decision.stop) {
       this.stop(line.at);
@@ -189,7 +208,20 @@ export class Session {
     }
     /* the answer is worked out from their own words; the check's reading of them (a paraphrase by a small model, which
        can drop or bend a detail) goes along as a hint only, and is what the post shows as the question */
-    this.ask({ question: `${asked}${rest}`, meaning: decision.question ? `${decision.question}${rest}` : "", asker: line.speaker, role: line.role, via: "voice", at, userId: uid, until, chat: decision.chat === true, ack: decision.ack || "", turn: byName ? 0 : (r?.turn ?? 0) + 1 });
+    this.ask({ question: `${asked}${rest}`, meaning: decision.question ? `${decision.question}${rest}` : "", asker: line.speaker, role: line.role, via: "voice", at, userId: uid, until, chat: decision.chat === true, ack: decision.ack || "", turn: wasNamed ? 0 : (r?.turn ?? 0) + 1 });
+  }
+
+  /* a held piece of a long question whose rest didn't come as a line: checked and answered as it stands */
+  releaseHold(uid, why) {
+    const w = this.pending.get(uid);
+    if (!w?.held) return null;
+    this.pending.delete(uid);
+    clearTimeout(w.timer);
+    if (this.ended) return null;
+    this.log.info(`${w.line.speaker}'s long question: ${why}; checking what was said`);
+    const p = this.onLine({ ...w.line, text: w.text }, w.until, false, w);
+    p.catch(() => {});
+    return p;
   }
 
   /* A typed question (@Angel, "Angel, …" in chat, or /angel ask): no check needed, they meant her. */

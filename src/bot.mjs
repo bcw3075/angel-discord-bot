@@ -230,8 +230,9 @@ export class AngelBot {
         /* one thread holds everything she posts, so the channel stays clean (Rhea, 2026-11-14), and a second join on
            the same day goes on in that day's thread (Rhea the same evening, after six threads of one name: "One
            thread per day"); without the thread permissions she falls back to the channel itself */
-        let thread = null;
-        made = () => thread;
+        let thread = null, madeNow = false;
+        /* only a thread made by this join is deleted if the join fails: a reused one holds today's earlier answers */
+        made = () => (madeNow ? thread : null);
         const me = textChannel.guild?.members?.me;
         const mayThread = !me || !textChannel.permissionsFor || textChannel.permissionsFor(me)?.has?.(["CreatePublicThreads", "SendMessagesInThreads"]) !== false;
         if (cfg.sessionThread && !textChannel.threads?.create) log.info("no thread: this channel can't hold threads (a voice channel's chat or a thread); posting here");
@@ -239,17 +240,24 @@ export class AngelBot {
         if (cfg.sessionThread && textChannel.threads?.create && mayThread) {
           const within5s = work => Promise.race([work, new Promise((_, no) => setTimeout(() => no(new Error("Discord took over 5 seconds")), 5000).unref?.())]);
           const name = threadName(startedAt);
-          /* today's thread, if she made one in this channel and it is still open; the newest when there are several */
+          /* today's thread, if she made one in this channel; the newest when there are several. A session's thread is
+             closed (archived) when it ends, and Discord's list of active threads leaves closed ones out, so the closed
+             ones are looked through too and today's is opened again (review 7: looking only at the active list made a
+             new thread at every second join) */
+          const ours = list => [...(list?.values?.() ?? [])].filter(t => t.name === name && !t.locked && (!this.client?.user?.id || t.ownerId === this.client.user.id))
+            .sort((a, b) => (b.createdTimestamp ?? 0) - (a.createdTimestamp ?? 0));
           try {
             const open = textChannel.threads.fetchActive ? (await within5s(textChannel.threads.fetchActive())).threads : null;
-            const mine = [...(open?.values?.() ?? [])].filter(t => t.name === name && !t.archived && !t.locked && (!this.client?.user?.id || t.ownerId === this.client.user.id));
-            mine.sort((a, b) => (b.createdTimestamp ?? 0) - (a.createdTimestamp ?? 0));
-            thread = mine[0] ?? null;
-          } catch (e) { log.info(`couldn't look for today's thread (${e.message}); starting a new one`); }
+            thread = ours(open).find(t => !t.archived) ?? null;
+            if (!thread && textChannel.threads.fetchArchived) {
+              const closed = ours((await within5s(textChannel.threads.fetchArchived({ type: "public", limit: 25 }))).threads)[0];
+              if (closed?.setArchived) { await within5s(closed.setArchived(false, "Angel's session, again today")); thread = closed; }
+            }
+          } catch (e) { log.info(`couldn't find or reopen today's thread (${e.message}); starting a new one`); thread = null; }
           if (!thread) {
-            try { thread = await within5s(textChannel.threads.create({ name, autoArchiveDuration: 1440, reason: "Angel's session" })); }
+            try { thread = await within5s(textChannel.threads.create({ name, autoArchiveDuration: 1440, reason: "Angel's session" })); madeNow = true; }
             catch (e) { log.warn(`couldn't start a thread, posting in the channel instead: ${e.message}`); }
-          }
+          } else log.info("going on in today's thread");
         }
         let home = thread ?? textChannel;
         const post = { send: text => home.send({ content: text, ...NO_PINGS }) };

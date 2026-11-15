@@ -704,3 +704,43 @@ test("a long question cut into pieces while they are still talking is not checke
   await settle();
   assert.equal(other.s.pending.size, 0);
 });
+
+test("a held long question whose rest is too short to hear is checked and answered, not dropped (review 7)", async () => {
+  const { s, voice, gates, asked } = setup({ heard: ["Angel, I'd like to know how resistance works against fire and cold?", ""], cfg: { maxUtteranceSeconds: 5, followUpMs: 1000 } });
+  await s.start();
+  const t = Date.now();
+  voice.emit("speech", { userId: "p1", packets: tonePackets(1), startedAt: t, final: false });
+  await settle();
+  voice.emit("speech", { userId: "p1", packets: tonePackets(0.2), startedAt: t + 5000, final: true });
+  await settle(); await s.answering;
+  assert.equal(gates.length, 1, "checked once");
+  assert.equal(asked.length, 1, "and answered");
+  assert.equal(s.pending.size, 0);
+  s.end();
+});
+
+test("a stop said during the first piece of a long question cancels it (review 7)", async () => {
+  const { s, voice, asked } = setup({ heard: ["Angel, how does resistance work with", "several damage types?"] });
+  await s.start();
+  const t = Date.now() - 40000;
+  voice.emit("speech", { userId: "p1", packets: tonePackets(1), startedAt: t, final: false });
+  s.stop(t + 10000);
+  await settle();
+  voice.emit("speech", { userId: "p1", packets: tonePackets(1), startedAt: t + 30000, final: true });
+  await settle(); await s.answering;
+  assert.equal(asked.length, 0);
+  s.end();
+});
+
+test("a named question said in two pieces counts as named, not as a reply (review 7)", async () => {
+  const { s, voice, gates } = setup({ heard: ["Angel, how does resistance work with", "several damage types?"] });
+  await s.start();
+  const t = Date.now();
+  voice.emit("speech", { userId: "p1", packets: tonePackets(1), startedAt: t, final: false });
+  await settle();
+  voice.emit("speech", { userId: "p1", packets: tonePackets(1), startedAt: t + 30000, final: true });
+  await settle(); await s.answering;
+  assert.equal(gates.at(-1).replying, false, "the check for a named question");
+  assert.equal(s.replyTo?.turn, 0, "her name was said: the reply count starts again");
+  s.end();
+});

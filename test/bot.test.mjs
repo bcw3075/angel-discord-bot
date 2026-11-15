@@ -458,3 +458,39 @@ test("a second join on the same day goes on in that day's thread instead of maki
   }
   clearInterval(bot.bookTimer);
 });
+
+test("leaving and joining again the same day goes on in today's thread, opened again (review 7)", async () => {
+  const w = world(), { bot } = makeBot();
+  const threads = new Map();
+  let created = 0;
+  const mk = name => { const t = { id: `t${++created}`, name, ownerId: "angel1", archived: false, locked: false, createdTimestamp: created, toString() { return `<#${this.id}>`; }, send: async () => ({ edit: async () => {} }), setArchived: async a => { t.archived = a; }, delete: async () => { threads.delete(t.id); } }; threads.set(t.id, t); return t; };
+  /* as Discord: the active list holds only threads that aren't archived; closed ones come from fetchArchived */
+  w.textChannel.threads = {
+    fetchActive: async () => ({ threads: new Map([...threads].filter(([, t]) => !t.archived)) }),
+    fetchArchived: async () => ({ threads: new Map([...threads].filter(([, t]) => t.archived)) }),
+    create: async o => mk(o.name),
+  };
+  await bot.onInteraction(interaction(w, "join"));
+  await bot.end("g1", "leave");
+  assert.equal(threads.get("t1").archived, true, "closed when the session ends");
+  await bot.onInteraction(interaction(w, "join"));
+  assert.equal(created, 1, "no second thread");
+  assert.equal(threads.get("t1").archived, false, "today's thread opened again");
+  assert.equal(bot.sessions.get("g1").thread.id, "t1");
+  await bot.end("g1", "leave");
+  clearInterval(bot.bookTimer);
+});
+
+test("a join that fails after reusing today's thread leaves that thread alone (review 7)", async () => {
+  const w = world(), { bot } = makeBot();
+  let deleted = 0;
+  const t = { id: "hers", name: threadName(Date.now()), ownerId: "angel1", archived: false, locked: false, createdTimestamp: 1, send: async () => ({ edit: async () => {} }), delete: async () => { deleted++; } };
+  w.textChannel.threads = { fetchActive: async () => ({ threads: new Map([["hers", t]]) }), create: async () => { throw new Error("no"); } };
+  const real = bot.sessions;
+  bot.sessions = { has: k => real.has(k), get: k => real.get(k), delete: k => real.delete(k), keys: () => real.keys(), values: () => real.values(), set: () => { throw new Error("later step failed"); } };
+  const i = interaction(w, "join");
+  await bot.onInteraction(i);
+  assert.equal(deleted, 0, "the reused thread holds today's earlier answers");
+  assert.match(String(i.edits.at(-1)), /couldn't start the session/);
+  clearInterval(bot.bookTimer);
+});

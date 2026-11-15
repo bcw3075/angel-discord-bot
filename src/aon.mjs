@@ -127,11 +127,13 @@ export class Aon {
     const exact = d => !preRemaster(d) && (plainName(d.name) === want || (d.oldName && plainName(d.oldName) === want));
     /* next, entries whose whole name is among the words searched for ("Resistance" in "resistance to all damage",
        "Persistent Damage" in "persistent fire damage") */
-    const words = wordsOf(q), asked = new Set(words);
+    /* little words of a question ("how does it work with...") never move a one-word entry of that name up */
+    const words = wordsOf(q), asked = new Set(words.filter(w => !FILLER.has(w)));
     const nameWords = d => wordsOf(d.name);
     const inside = d => !exact(d) && !preRemaster(d) && nameWords(d).length > 0 && nameWords(d).every(w => asked.has(w));
     /* the one named earliest in the search first (people put the subject first: "resistance multiple damage types"
-       is about Resistance), then the longer name, then the index's own order */
+       is about Resistance, so longest-name-first was tried and refused in review 7), then the longer name, then the
+       index's own order */
     const at = d => words.indexOf(nameWords(d)[0]);
     const named = docs.filter(inside).map((d, i) => [d, i]).sort((a, b) => at(a[0]) - at(b[0]) || nameWords(b[0]).length - nameWords(a[0]).length || a[1] - b[1]).map(x => x[0]);
     const top = newestPrintingFirst([...docs.filter(exact), ...named, ...docs.filter(d => !exact(d) && !inside(d))]).slice(0, limit);
@@ -211,6 +213,8 @@ function newestPrintingFirst(docs) {
 }
 
 /* the words of a name or a search, lower case, letters and digits only; plain steps, no regex on what was asked */
+const FILLER = new Set(["a", "an", "the", "of", "to", "in", "on", "at", "by", "for", "with", "and", "or", "if", "is", "it", "be", "do", "does", "did", "can", "could", "will", "would", "how", "what", "when", "who", "why", "work", "works", "i", "you", "me", "my", "we", "this", "that", "one", "get", "use"]);
+
 function wordsOf(s) {
   const out = [];
   let cur = "";

@@ -94,6 +94,8 @@ ${asker} ${via === "text" ? "typed" : "said"} to you: "${question}"${hint}`;
 async function runTool(aon, use, failed, seen, looked) {
   const fail = e => {
     failed.count++;
+    /* in the log too, so an answer slowed by failing lookups can be explained (review 7) */
+    looked.push(`${use.name === "aon_get" ? "page" : "search"} "${String(use.input?.query ?? use.input?.ref ?? "").slice(0, 60)}": failed (${String(e?.message ?? e).slice(0, 80)})`);
     return `The lookup failed: ${e.message}. Answer from what you know only if you're sure, and say plainly that you couldn't check Archives of Nethys.`;
   };
   try { return await lookUp(aon, use, seen, looked); }
