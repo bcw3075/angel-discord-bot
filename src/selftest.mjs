@@ -42,7 +42,7 @@ export const CASES = [
   /* a player who has it wrong: she says so, kindly */
   { id: "player-is-wrong", steps: [{ say: "Angel, off-guard is a minus 4 to AC, right?", want: [/2/], never: [/\b(yes|right|correct)[,.!]? (it'?s|that'?s|off-guard is) (a )?(minus|-|−|–) ?4/i], lookups: 1 }] },
   /* a rule that doesn't exist: she must say so, never make one up */
-  { id: "no-such-rule", steps: [{ say: "Angel, what does the blorptangled condition do?", want: [/can'?t find|couldn'?t find|don'?t (see|have|know)|no (such|condition|entry|rule)|not (a|an|find|found)|isn'?t (a|an|in)|doesn'?t exist|nothing/i], lookups: 1 }] },
+  { id: "no-such-rule", steps: [{ say: "Angel, what does the blorptangled condition do?", want: [/can'?t find|couldn'?t find|don'?t (see|have|know)|no (such|condition|entry|rule)|not (a|an|find|found)|isn'?t (a|an|in)|doesn'?t exist|nothing/i], lookups: 1, noPages: true }] },
   /* a judgment call: she gives the rule and leaves it to the GM */
   { id: "gm-call", steps: [{ say: "Angel, can I use Athletics to Trip a swarm of rats?", want: [/GM/], lookups: 1 }] },
   /* "this" and "that" mean what the table was just talking about */
@@ -220,7 +220,7 @@ async function runStep({ services, asker, role = "GM", step, lines, now, previou
     if (step.fresh && previous && plain(previous) === plain(a.say)) r.notes.push("she said the same words again instead of explaining it another way");
     if (step.asksBack && !a.say.includes("?")) r.notes.push("the question was too vague to answer: she should have asked what they meant");
     if (step.asksBack && (a.lookups ?? 0) > 0) r.notes.push("she looked something up for a question too vague to answer");
-    if ((a.lookups ?? 0) > 0 && !(a.sources ?? []).length) r.notes.push("looked things up but named no pages");
+    if ((a.lookups ?? 0) > 0 && !(a.sources ?? []).length && !step.noPages) r.notes.push("looked things up but named no pages");
   } catch (e) {
     r.answer = { ms: now() - t0, error: e.message, dollars: e.dollars ?? 0 };
     r.failed = `the answer: ${e.message}`;
