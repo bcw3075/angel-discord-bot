@@ -340,7 +340,8 @@ test('"Angel, stop" while she looks something up: the answer is typed but not sp
   s.answer = q => new Promise(r => { release = () => r({ say: `Answer to: ${q.question}`, sources: [], dollars: 0.01 }); });
   await s.start();
   speech(voice, "p1"); await settle();
-  speech(voice, "p1"); await settle();
+  // another player's question waits its turn (the same person's would be answered with the first: see "said more")
+  speech(voice, "p2"); await settle();
   assert.equal(posted.length, 1, "the second waits its turn");
   speech(voice, "p1"); await settle();
   assert.equal(voice.stops, 1);
@@ -349,6 +350,125 @@ test('"Angel, stop" while she looks something up: the answer is typed but not sp
   assert.equal(voice.spoken.length, 1, "only her quick reaction, the answer not spoken");
   assert.ok(ACKS.includes(String(voice.spoken[0]).replace("clip:", "")), "no reaction from the check: one of the varied lines");
   assert.equal(posted.length, 1, "the queued question was dropped, not answered");
+});
+
+test("the same person says more before she begins her reply: one reply to all of it (Rhea, 2026-11-15)", async () => {
+  // her live round: "Interesting." then, 3 s later, "How hard is it for you to search?" got two replies
+  const releases = [];
+  const { s, voice, posted, asked } = setup({ heard: ["Angel, interesting.", "How hard is it for you to search?"], gate: ({ bareText }) => ({ toAngel: true, complete: true, stop: false, chat: true, question: bareText }) });
+  // the dropped reply goes on being written in the background: none of it may be spoken
+  s.answer = q => { asked.push(q); return new Promise(r => releases.push(() => { q.onSay?.(`Answer to: ${q.question}`, { end: true }); r({ say: `Answer to: ${q.question}`, sources: [], lookups: 0, dollars: 0.01 }); })); };
+  await s.start();
+  speech(voice, "p1"); await settle();
+  s.replyTo = { userId: "p1", from: Date.now() - 10, turn: 0 };
+  speech(voice, "p1", 1, Date.now()); await settle();
+  assert.equal(asked.length, 2, "the fuller question is worked out at once, without waiting for the dropped one");
+  assert.equal(asked[1].question, "Angel, interesting. How hard is it for you to search?", "with everything they said");
+  releases[1](); await settle(); releases[0](); await settle(); await s.answering; await settle();
+  assert.equal(voice.spoken.map(c => String(c).replace("clip:", "")).join(" "), "Answer to: Angel, interesting. How hard is it for you to search?", "one reply, the dropped one never spoken");
+  assert.equal(posted.length, 0, "small talk: nothing posted");
+  assert.equal(s.status().merged, 1);
+  assert.ok(s.costs.claude >= 0.02, "the dropped reply's cost still counts");
+  assert.equal(s.transcript.lines.filter(l => l.kind === "angel").length, 1, "one reply in the transcript");
+});
+
+test("said more once she has begun speaking: the new line waits its turn and gets its own reply", async () => {
+  const { s, voice, asked } = setup({ heard: ["Angel, what does grabbed do?", "And restrained?"], gate: ({ bareText }) => ({ toAngel: true, complete: true, stop: false, question: bareText }) });
+  let release;
+  s.answer = q => { asked.push(q); if (asked.length > 1) return Promise.resolve({ say: `Answer to: ${q.question}`, sources: [], lookups: 1, dollars: 0.01 });
+    q.onSay?.("Grabbed makes you off-guard. "); return new Promise(r => { release = () => r({ say: "Grabbed makes you off-guard. And immobilized.", sources: [], lookups: 1, dollars: 0.01 }); }); };
+  await s.start();
+  speech(voice, "p1"); await settle();
+  s.replyTo = { userId: "p1", from: Date.now() - 10, turn: 0 };
+  speech(voice, "p1", 1, Date.now()); await settle();
+  release(); await settle(); await s.answering; await settle(); await s.answering;
+  assert.equal(asked.length, 2);
+  assert.equal(asked[1].question, "And restrained?", "not merged: she had begun");
+  assert.ok(voice.spoken.some(c => /Answer to: And restrained/.test(String(c))), "and answered after");
+  assert.equal(s.status().merged, 0);
+});
+
+test("a rules reply dropped for a fuller question takes its 'looking it up' post away and gives no second quick reaction", async () => {
+  const releases = [];
+  const deleted = [];
+  const { s, voice, posted, asked } = setup({ heard: ["Angel, what does grabbed do?", "Angel, and restrained?"], gate: ({ bareText }) => ({ toAngel: true, complete: true, stop: false, question: bareText, ack: "On it." }) });
+  s.post = { send: async text => { const m = { text, edits: [], edit: async t => { m.edits.push(t); }, delete: async () => { deleted.push(text); } }; posted.push(m); return m; } };
+  s.answer = q => { asked.push(q); return new Promise(r => releases.push(() => r({ say: `Answer to: ${q.question}`, details: "d", sources: [], lookups: 1, dollars: 0.01 }))); };
+  await s.start();
+  speech(voice, "p1"); await settle();
+  speech(voice, "p1"); await settle();
+  releases[1](); await settle(); releases[0](); await settle(); await s.answering; await settle();
+  assert.equal(deleted.length, 1, "the first placeholder is taken away");
+  assert.equal(voice.spoken.filter(c => !/^clip:Answer to/.test(String(c))).length, 1, "her quick reaction once, not twice");
+  assert.match(posted.at(-1).edits[0], /^\*\*Mira asked:\*\* Angel, what does grabbed do\? Angel, and restrained\?\n/, "one post, for all of it");
+  assert.equal(asked.at(-1).question, "Angel, what does grabbed do? Angel, and restrained?");
+});
+
+test("review 10: three lines merged give one quick reaction; an answer in hand is never dropped; a stop after the first line cancels the merge; no merge over the cap", async () => {
+  // three lines before she begins: her quick reaction once
+  {
+    const releases = [];
+    const { s, voice, asked } = setup({ heard: ["Angel, what's grabbed?", "Angel, and restrained?", "Angel, and paralyzed?"], gate: ({ bareText }) => ({ toAngel: true, complete: true, stop: false, question: bareText, ack: "On it." }) });
+    s.answer = q => { asked.push(q); return new Promise(r => releases.push(() => r({ say: `Answer to: ${q.question}`, details: "d", sources: [], lookups: 1, dollars: 0.01 }))); };
+    await s.start();
+    for (let i = 0; i < 3; i++) { speech(voice, "p1"); await settle(); }
+    assert.equal(asked.at(-1).question, "Angel, what's grabbed? Angel, and restrained? Angel, and paralyzed?");
+    releases.forEach(r => r()); await settle(); await s.answering; await settle();
+    assert.equal(voice.spoken.filter(c => !/^clip:Answer to/.test(String(c))).length, 1, "one quick reaction for all three");
+  }
+  // voice off: once the answer is in hand (its post still going out), a new line is not merged into it
+  {
+    let editing;
+    const { s, voice, posted, asked } = setup({ heard: ["Angel, what's grabbed?", "Angel, and restrained?"], gate: ({ bareText }) => ({ toAngel: true, complete: true, stop: false, question: bareText }), cfg: { speak: false } });
+    s.post = { send: async text => { const m = { text, edits: [], edit: t => new Promise(r => { editing = () => { m.edits.push(t); r(); }; }) }; posted.push(m); return m; } };
+    s.answer = async q => { asked.push(q); return { say: `Answer to: ${q.question}`, details: `Answer to: ${q.question}`, sources: [], lookups: 1, dollars: 0.01 }; };
+    await s.start();
+    speech(voice, "p1"); await settle();
+    speech(voice, "p1"); await settle();
+    editing(); await settle(); editing(); await settle(); await s.answering;
+    assert.equal(asked.length, 2);
+    assert.equal(asked[1].question, "Angel, and restrained?", "not merged: the first answer was already in hand");
+    assert.equal(s.status().merged, 0);
+  }
+  // a stop said after the first line (heard only after the second was merged) cancels all of it
+  {
+    const releases = [];
+    const { s, voice, asked } = setup({ heard: ["Angel, what's grabbed?", "Angel, and restrained?"], gate: ({ bareText }) => ({ toAngel: true, complete: true, stop: false, question: bareText }) });
+    s.answer = q => { asked.push(q); return new Promise(r => releases.push(() => r({ say: `Answer to: ${q.question}`, sources: [], lookups: 1, dollars: 0.01 }))); };
+    await s.start();
+    const t = Date.now();
+    speech(voice, "p1", 1, t); await settle();
+    speech(voice, "p1", 1, t + 4000); await settle();
+    s.stop(t + 2000);
+    releases.forEach(r => r()); await settle(); await s.answering; await settle();
+    assert.equal(voice.spoken.filter(c => /Answer to/.test(String(c))).length, 0, "nothing of either is spoken");
+  }
+  // the new line comes in the very moment the first answer arrives: the first is still dropped, not posted
+  {
+    const releases = [];
+    const { s, voice, posted, asked } = setup({ heard: ["Angel, what's grabbed?"], gate: ({ bareText }) => ({ toAngel: true, complete: true, stop: false, question: bareText }) });
+    s.answer = q => { asked.push(q); return new Promise(r => releases.push(() => r({ say: `Answer to: ${q.question}`, details: `Answer to: ${q.question}`, sources: [], lookups: 1, dollars: 0.01 }))); };
+    await s.start();
+    speech(voice, "p1"); await settle();
+    releases[0]();
+    s.ask({ question: "Angel, and restrained?", asker: "Mira", via: "voice", userId: "p1", at: Date.now() });
+    await settle(); releases[1](); await settle(); await s.answering; await settle();
+    assert.equal(posted.filter(m => m.edits.some(e => /Answer to: Angel, what's grabbed\?\s*$/.test(e))).length, 0, "the first answer alone is not posted");
+    assert.ok(posted.some(m => m.edits.some(e => e.includes("Answer to: Angel, what's grabbed? Angel, and restrained?"))), "the merged one is");
+  }
+  // over the cap when the line is added: the first question keeps its answer
+  {
+    const releases = [];
+    const { s, voice, asked, posted } = setup({ heard: ["Angel, what's grabbed?", "Angel, and restrained?"], gate: ({ bareText }) => ({ toAngel: true, complete: true, stop: false, question: bareText, dollars: 0.6 }), cfg: { maxSessionDollars: 1 } });
+    s.answer = q => { asked.push(q); return new Promise(r => releases.push(() => r({ say: `Answer to: ${q.question}`, sources: [], lookups: 1, dollars: 0.01 }))); };
+    await s.start();
+    speech(voice, "p1"); await settle();
+    speech(voice, "p1"); await settle();
+    releases.forEach(r => r()); await settle(); await s.answering; await settle();
+    assert.equal(s.status().merged, 0, "no merge past the cap");
+    // past the cap she doesn't begin speaking (as before), but the first question's written answer still comes
+    assert.ok(posted.some(m => (m.edits[0] ?? "").includes("Answer to: Angel, what's grabbed?")), "the first is still answered in writing");
+  }
 });
 
 test("what the speaker says while the check runs is kept as the rest of the question", async () => {

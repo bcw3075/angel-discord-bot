@@ -20,6 +20,9 @@ export function echoOf(heard, said = "") {
   return h.filter(w => mine.has(w)).length / h.length >= 0.7;
 }
 
+/* what a dropped reply's wait resolves to */
+const DROPPED = Symbol("dropped");
+
 export class Session {
   constructor({ cfg, voice, post, stt, tts, gate, answer, speakerOf, transcript = new Transcript(), keytermCount = 1, log, now = Date.now, newDecoder = createDecoder, dailyOver = () => false }) {
     Object.assign(this, { cfg, voice, post, stt, tts, gate, answer, speakerOf, transcript, keytermCount, log, now, newDecoder, dailyOver });
@@ -28,7 +31,9 @@ export class Session {
     this.pending = new Map();   /* userId → { text, at, timer }: "Angel?" with the question still to come */
     this.checking = new Map();  /* userId → lines said while the check on their last line is still running */
     this.costs = { claude: 0, stt: 0, tts: 0 };
-    this.counts = { pieces: 0, skipped: 0, questions: 0, gateChecks: 0 };
+    this.counts = { pieces: 0, skipped: 0, questions: 0, gateChecks: 0, merged: 0 };
+    /* each speaker's reply not yet begun, so a line they add can be answered with it (see `ask`) */
+    this.open = new Map();
     this.capped = false;
     this.ended = false;
     this.lastStopAt = -Infinity; /* when the last "stop" was said: a question said before it is dropped or not spoken */
@@ -240,13 +245,52 @@ export class Session {
 
   ask(q) {
     this.counts.questions++;
-    const asked = { at: this.now(), ...q };
+    let asked = { at: this.now(), ...q };
+    /* the same person said more before she began to speak her reply to them: that reply is dropped and everything they
+       said is answered as one (Rhea, 2026-11-15: "Interesting." then "How hard is it to search?" got two replies, the
+       first talking past her question; "Answer all in one"). Once she has begun speaking, the new line waits its turn. */
+    const uid = q.via === "voice" ? q.userId : null;
+    if (uid) {
+      const prev = this.open.get(uid);
+      if (prev && !prev.started && !prev.superseded && !this.ended && !this.stoppedSince(prev.at) && !this.overCap()) {
+        prev.superseded = true;
+        prev.drop();
+        this.counts.merged++;
+        this.log.info(`${q.asker} said more before she began her reply: answering it all as one`);
+        asked = {
+          ...asked,
+          question: `${prev.question} ${q.question}`,
+          meaning: prev.meaning || q.meaning ? `${prev.meaning || prev.question} ${q.meaning || q.question}` : "",
+          chat: prev.chat === true && q.chat === true,
+          unnamed: prev.unnamed === true && q.unnamed === true,
+          turn: Math.min(prev.turn ?? 0, q.turn ?? 0),
+          until: q.until ?? prev.until,
+          /* a stop said after the first line cancels all of it (review 10) */
+          at: prev.at,
+          ack: prev.ackPlayed ? "" : q.ack,
+          noAck: prev.ackPlayed,
+        };
+      }
+      let drop;
+      const entry = { question: asked.question, meaning: asked.meaning ?? "", chat: asked.chat, unnamed: asked.unnamed, turn: asked.turn, until: asked.until, at: asked.at,
+        started: false, superseded: false, ackPlayed: asked.noAck === true, dropped: new Promise(r => { drop = r; }) };
+      entry.drop = () => drop(DROPPED);
+      this.open.set(uid, entry);
+      asked = { ...asked, entry };
+    }
     this.answering = this.answering.then(() => this.runAsk(asked)).catch(e => this.log.error(`answering failed: ${e.message}`));
     return this.answering;
   }
 
-  async runAsk({ question, meaning = "", asker, via, reply, at, userId = null, until = null, chat = false, turn = 0, unnamed = false, ack = "" }) {
+  async runAsk(q) {
+    try { return await this.runAskInner(q); }
+    finally { if (q.entry && this.open.get(q.userId) === q.entry) this.open.delete(q.userId); }
+  }
+
+  async runAskInner({ question, meaning = "", asker, via, reply, at, userId = null, until = null, chat = false, turn = 0, unnamed = false, ack = "", noAck = false, entry = null }) {
     const target = reply ?? this.post;
+    /* they said more before its turn came: answered together with what they said next */
+    if (entry?.superseded) return;
     const shown = meaning || question; /* the question as the channel shows it */
     if (this.ended) {
       /* a deferred /angel ask must still hear back */
@@ -270,7 +314,8 @@ export class Session {
       : target.send(`**${asker} asked:** ${shortQuestion(shown)}\n-# Looking it up…`).catch(e => { this.log.warn(`couldn't post in the channel: ${e.message}`); return null; });
     /* everything she says for this question is handed to the voice in order, through this chain */
     let line = Promise.resolve();
-    if (!quiet && this.cfg.speak && this.cfg.ackPhrase !== "") {
+    if (!quiet && !noAck && this.cfg.speak && this.cfg.ackPhrase !== "") {
+      if (entry) entry.ackPlayed = true;
       /* her own quick reaction to this question (the check writes it), else one of a few, so it isn't the same line
          every time (Rhea, 2026-11-14: "the 'one sec, let me check' on every reply is getting repetitive") */
       const words = ack || ACKS[this.counts.questions % ACKS.length];
@@ -290,6 +335,9 @@ export class Session {
       /* the cap is asked before she begins an answer, not in the middle of one: a sentence of voice costs a
          fraction of a cent, and an answer cut off half way helps nobody */
       if (!spoken || !this.cfg.speak || this.ended || this.stoppedSince(at) || (!said.length && this.overCap())) return;
+      /* dropped for a fuller question before she began: nothing of it is said. Once begun, it can't be dropped. */
+      if (entry?.superseded && !said.length) return;
+      if (entry) entry.started = true;
       const made = this.tts(spoken);
       made.catch(() => {}); /* waited for in order below; a failure there is logged once */
       said.push(text);
@@ -316,18 +364,39 @@ export class Session {
       } catch (e) { this.log.warn(`couldn't speak part of the answer as it was written: ${e.message}`); }
     };
 
+    /* a dropped reply leaves nothing behind: no post (its placeholder is taken away, not waited for), no transcript
+       line, no reply window; its cost is counted when its call ends. Past this point the reply can't be dropped. */
+    const answeringRef = {};
+    const dropNow = got => {
+      if (!(entry?.superseded && !entry.started)) {
+        if (entry) entry.started = true; /* the answer is in hand: from here it is hers to give (review 10) */
+        return false;
+      }
+      if (got.raced) answeringRef.p?.then(r => { this.costs.claude += r?.dollars ?? 0; }, e => { this.costs.claude += e?.dollars ?? 0; });
+      else this.costs.claude += (got.result ?? got.error)?.dollars ?? 0;
+      placed?.then(m => m?.delete?.().catch(() => {}));
+      return true;
+    };
     let result;
     try {
       /* her last written answer goes along: the table can see it and asks about it ("what about that second
          exception?"), and only her spoken words are in the transcript */
       const w = this.lastWritten;
       const wrote = w && this.now() - w.at <= this.cfg.memoryMinutes * 60000 ? `\n\nYour last written answer in the text channel (the table can see it):\n${w.text}` : "";
-      result = await this.answer({
+      const answering = this.answer({
         conversation: Transcript.format(this.transcript.recent(this.cfg.memoryMinutes, this.now())) + wrote,
         question, meaning, asker, via, onSay,
         /* this reply, if it stays small talk, closes the window: she says so in her own words (Rhea, 2026-11-15) */
         lastReply: via === "voice" && !!userId && unnamed && chat && turn + 1 >= 3,
       });
+      answeringRef.p = answering;
+      /* dropped while it was being worked out: the next question doesn't wait for it, and what it cost still counts */
+      let first;
+      try { first = entry ? await Promise.race([answering, entry.dropped]) : await answering; }
+      catch (e) { if (dropNow({ error: e })) return; throw e; }
+      /* dropped while it was worked out, or in the moment after (review 10): whatever came back is not used */
+      if (dropNow(first === DROPPED ? { raced: true } : { result: first })) return;
+      result = first === DROPPED ? await answering : first;
       this.costs.claude += result.dollars ?? 0;
       /* three or more lookups make a slow answer: what she searched for and what came back, so it can be mended */
       if ((result.looked?.length ?? 0) >= 3) this.log.info(`lookups for ${asker}'s question: ${result.looked.join(" | ")}`);
