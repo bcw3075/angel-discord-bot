@@ -9,8 +9,16 @@ import { DEFAULTS } from "../src/config.mjs";
 import { tonePackets, sleep } from "./helpers.mjs";
 
 class FakeVoice extends EventEmitter {
-  constructor() { super(); this.spoken = []; this.stops = 0; this.echo = false; }
-  speak(clips) { this.spoken.push(...clips.map(String)); return Promise.resolve(); }
+  constructor() { super(); this.spoken = []; this.stops = 0; this.echo = false; this.speakMs = 0; this.periods = []; }
+  /* with speakMs set, each clip takes that long and goes in her own speech (the echo window), as live */
+  speak(clips) {
+    this.spoken.push(...clips.map(String));
+    if (!this.speakMs) return Promise.resolve();
+    const start = Date.now();
+    this.periods.push([start, null]);
+    return sleep(this.speakMs * clips.length).then(() => { this.periods.at(-1)[1] = Date.now(); });
+  }
+  ownSpeech() { return this.periods; }
   stopSpeaking() { this.stops++; }
   inEchoWindow() { return this.echo; }
   ignore() {}
@@ -562,13 +570,15 @@ test("(se-12) 'hold on' that stopped longer ago than a breath, its piece still o
 });
 
 test("(se-12) a trickle of clicks too short to be words doesn't block the gap", async () => {
-  const x = await started(setup({ heard: ["Angel, what does grabbed do?"], cfg: REAL }));
-  x.voice.talk("p2", true, Date.now() - 500);
+  /* live lengths: a click of 0.1 s is under a blip and under the shortest piece ever transcribed; 0.45 s apart (no
+     breath joins them into talk, but closer than the any-sound margin review 4 removed) */
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?"], cfg: { ...REAL, busyBlipMs: 500, minUtteranceMs: 400 } }));
+  x.voice.talk("p2", true, Date.now() - 800);
   speech(x.voice, "p1");
   await until(() => x.voice.spoken.length === 1);
   stops(x, "p2");
   let on = true;
-  (async () => { while (on) { x.voice.talk("p3", true); await sleep(100); x.voice.talk("p3", false); await sleep(600); } })();
+  (async () => { while (on) { x.voice.talk("p3", true); await sleep(100); x.voice.talk("p3", false); await sleep(450); } })();
   await until(() => answers(x.voice).length === 1, 4000);
   on = false;
   await x.s.answering;
@@ -602,4 +612,76 @@ test("(se-12) an answer unsaid with nothing said for it leaves her last words as
   x.s.stop();
   await x.s.answering;
   assert.equal(x.s.lastSaid, "her earlier answer");
+});
+
+/* ---- the fifth review of 0.1.3 (live lengths: blip 0.5 s, shortest piece 0.4 s, a piece 0.8 s after the talk) ---- */
+const LIVE = { ...REAL, silenceMs: 800, busyBlipMs: 500, minUtteranceMs: 400, busyFirstWaitMs: 700, busyGapMs: 1000 };
+
+test("(se-12) a 'hold on' begun during her 'I'm ready' is waited for, not talked over", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Hold on Angel."], hold: a => (/Hold on/.test(a.bareText) ? { kind: "wait" } : { kind: "none" }), cfg: LIVE }));
+  x.voice.speakMs = 600;
+  x.voice.talk("p2", true, Date.now() - 800);
+  speech(x.voice, "p1");
+  await until(() => x.voice.spoken.length === 1, 3000); /* her cut-in, playing */
+  await sleep(300);
+  x.voice.talk("p3", true);    /* starts over her */
+  stops(x, "p2");
+  await sleep(1000);           /* her cut-in ended 0.7 s ago */
+  x.voice.talk("p3", false);
+  setTimeout(() => speech(x.voice, "p3", Date.now() - 1800), 800);
+  await sleep(1600);
+  assert.deepEqual(answers(x.voice), [], "the 'hold on' was heard first");
+  assert.equal(x.s.holding?.mode, "invite");
+  x.s.end();
+  await x.s.answering;
+});
+
+test("(se-12) no 'I'm ready' over a line just said and not yet heard (a breath after 'hold on')", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Hold on Angel."], hold: a => (/Hold on/.test(a.bareText) ? { kind: "wait" } : { kind: "none" }), cfg: LIVE }));
+  x.voice.talk("p2", true, Date.now() - 800);
+  speech(x.voice, "p1");
+  await until(() => x.s.holding);
+  await sleep(500);
+  x.voice.talk("p2", false);   /* 0.2 s before the first wait ends: still "talking" then, but just said */
+  setTimeout(() => speech(x.voice, "p2", Date.now() - 1800), 800);
+  await sleep(1500);
+  assert.deepEqual(x.voice.spoken, [], "no cut-in, no answer");
+  assert.equal(x.s.holding?.mode, "invite");
+  x.s.end();
+  await x.s.answering;
+});
+
+test("(se-12) 'Wait... wait.' in two short bursts reaches her as one piece and is waited for", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Wait... wait."], hold: a => (/Wait/.test(a.bareText) ? { kind: "wait" } : { kind: "none" }), cfg: { ...LIVE, busyGapMs: 1500 } }));
+  x.voice.talk("p2", true, Date.now() - 800);
+  speech(x.voice, "p1");
+  await until(() => x.voice.spoken.length === 1, 3000);
+  stops(x, "p2");
+  await sleep(200);
+  x.voice.talk("p3", true); await sleep(250); x.voice.talk("p3", false);
+  await sleep(600);
+  x.voice.talk("p3", true); await sleep(250); x.voice.talk("p3", false);
+  setTimeout(() => speech(x.voice, "p3", Date.now() - 1100), 800);
+  await sleep(1400);
+  assert.deepEqual(answers(x.voice), []);
+  assert.equal(x.s.holding?.mode, "invite");
+  x.s.end();
+  await x.s.answering;
+});
+
+test("(se-12) talk that comes back while her words are still being written: a gap still releases her, not her words", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "So I move up."], cfg: LIVE }));
+  x.s.readyLine = async () => { await sleep(5000); return { text: "Late." }; };
+  x.voice.talk("p2", true, Date.now() - 800);
+  speech(x.voice, "p1");
+  await until(() => x.s.holding);
+  await sleep(200);
+  x.voice.talk("p2", false);   /* 0.5 s before the first wait ends: not talking then, nothing heard yet: no cut-in */
+  setTimeout(() => speech(x.voice, "p2", Date.now() - 1500), 800);
+  await sleep(1000);
+  x.voice.talk("p2", true); await sleep(600); stops(x, "p2"); /* a little more, then quiet */
+  const t0 = Date.now();
+  await until(() => answers(x.voice).length === 1, 4000);
+  assert.ok(Date.now() - t0 < 2500, "released by the gap, not when her words came");
+  await x.s.answering;
 });

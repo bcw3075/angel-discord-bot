@@ -81,18 +81,23 @@ export class Floor {
   }
   open(spell, at) { return spell.end === null && at - spell.start <= this.maxSpellMs; }
 
-  /* Each speaker's latest finished stretch at least `minMs` long (her own echo aside): userId → when it ended. Long
-     enough to become a line of transcript, so the caller can wait until it has been heard (review 4 of 0.1.3). */
-  lastEnds(minMs, at = this.now()) {
+  /* Each speaker's latest finished talk at least `minMs` long: userId → when it ended. Stretches with pauses shorter
+     than `joinMs` between them reach her as one piece of speech, so they are measured together ("Wait... wait.");
+     the length is measured from when the talk really began, and only talk that is all her own voice coming back is
+     left out (review 4 and 5 of 0.1.3: a "hold on" begun during her cut-in looked too short). For waiting until what
+     was said has been heard. */
+  lastEnds(minMs, joinMs = 0, at = this.now()) {
     const out = new Map();
     for (const [userId, list] of this.spells.entries()) {
-      for (let i = list.length - 1; i >= 0; i--) {
-        const spell = list[i];
-        if (this.open(spell, at)) continue;
-        const end = this.endOf(spell, at);
-        if (end - this.effectiveStart(spell, at) < minMs) continue;
-        out.set(userId, end);
-        break;
+      let i = list.length - 1;
+      while (i >= 0 && this.open(list[i], at)) i--;
+      for (; i >= 0; i--) {
+        const end = this.endOf(list[i], at);
+        let start = list[i].start, j = i;
+        while (j > 0 && start - this.endOf(list[j - 1], at) < joinMs) { j--; start = list[j].start; }
+        const allEcho = list.slice(j, i + 1).every(sp => this.effectiveStart(sp, at) > this.endOf(sp, at));
+        if (!allEcho && end - start >= minMs) { out.set(userId, end); break; }
+        i = j;
       }
     }
     return out;

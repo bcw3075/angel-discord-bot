@@ -125,7 +125,7 @@ export class Session {
     if (this.stillHearing(at)) return true;
     if (!this.floor) return false;
     const now = this.now();
-    for (const [uid, end] of this.floor.lastEnds(this.cfg.minUtteranceMs, now)) {
+    for (const [uid, end] of this.floor.lastEnds(this.cfg.minUtteranceMs, this.cfg.silenceMs, now)) {
       if (end <= at) continue;
       /* nobody listens to them (opted out, or not heard at all): nothing will come */
       try { if (this.voice.shouldListen && !this.voice.shouldListen(uid)) continue; } catch { continue; }
@@ -667,6 +667,8 @@ export class Session {
         return { text: r.text, clips };
       });
     ready.catch(() => {});
+    let readyDone = false;
+    ready.then(() => { readyDone = true; }, () => { readyDone = true; });
     try {
       /* 1. a moment for a natural pause */
       let r = h.mode === "invite" ? "wait" : await wait(pauseMs, { maxMs: Math.min(this.cfg.busyFirstWaitMs, left()), blocked: () => this.unheard(h.at) });
@@ -686,7 +688,8 @@ export class Session {
         clearTimeout(timer);
         if (h.signal || got?.late || this.ended || h.mode === "invite" || this.stoppedSince(qc.at)) return;
         if (got?.failed) { cutFailed = true; this.log.warn(`couldn't make her "I'm ready" (${got.failed.message}): waiting without it`); return; }
-        if (!f.busy()) return;
+        /* never over something said that isn't known yet, a "hold on" perhaps (review 5 of 0.1.3): tried again later */
+        if (!f.busy() || this.unheard(h.at)) return;
         cutDone = true;
         h.cutIn = qc.cutIn = got.text;
         this.readies.push(got.text);
@@ -726,7 +729,12 @@ export class Session {
         r = await wait(h.mode === "invite" ? Infinity : gapMs, { maxMs: left(), since, blocked: () => this.unheard(h.at), orBusy: canCut });
         if (r === "wait") { this.log.info(`told to hold on: ${who}'s answer waits for a go-ahead`); continue; }
         if (r === "quiet") { this.log.info(`a gap came: ${who}'s answer goes ahead`); return "go"; }
-        if (r === "busy") { await cutIn(); if (!cutDone && !cutFailed && !h.signal) await this.pauseBriefly(); continue; }
+        if (r === "busy") {
+          /* her words not ready yet: keep watching for a gap meanwhile, not just wait for them (review 5 of 0.1.3) */
+          if (readyDone) await cutIn();
+          if (!cutDone && !cutFailed && !h.signal) await this.pauseBriefly();
+          continue;
+        }
         if (r === "timeout") break;
       }
       if (h.signal) return this.held(h);
