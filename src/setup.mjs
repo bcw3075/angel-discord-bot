@@ -7,6 +7,7 @@ import { loadConfig, saveConfig, keyLooksWrong, keyCertainlyWrong, pasteSummary,
 
 export const INVITE_PERMISSIONS = new PermissionsBitField([
   "ViewChannel", "SendMessages", "EmbedLinks", "ReadMessageHistory", "AddReactions", "Connect", "Speak", "UseVAD",
+  "CreatePublicThreads", "SendMessagesInThreads", // one thread per session (2026-11-14)
 ]).bitfield;
 
 /* a promise that gives up after ms with a plain reason (Discord's login has no limit of its own) */

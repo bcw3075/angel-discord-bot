@@ -72,7 +72,7 @@ test("the invite link asks for the bot and slash commands with just the permissi
   assert.equal(u.searchParams.get("client_id"), "42");
   assert.equal(u.searchParams.get("scope"), "bot applications.commands");
   assert.equal(u.searchParams.get("permissions"), String(INVITE_PERMISSIONS));
-  assert.equal(INVITE_PERMISSIONS, 36785216n);
+  assert.equal(INVITE_PERMISSIONS, 309274430528n, "with Create Public Threads and Send Messages in Threads");
 });
 
 test('typed "Angel" needs a comma, colon or question mark after it (or "hey Angel")', () => {

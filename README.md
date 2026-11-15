@@ -52,8 +52,8 @@ port or tunnel is needed.
     "C:\AngelBot\Start Angel.cmd" (with the quotes), start in C:\AngelBot.
 
 ## At the table
-- Join your voice channel, then type `/angel join` in the text channel where answers should go. Angel joins, tells
-  everyone she's transcribing, and starts listening.
+- Join your voice channel, then type `/angel join` in the text channel where answers should go. Angel joins, starts a
+  thread for the session (everything she posts goes there), tells everyone she's transcribing, and starts listening.
 - Ask her by name: **"Angel, ..."**. Or type `@Angel ...`, `Angel, ...` (with the comma) or `/angel ask`.
 - She answers in voice and in the text channel. **"Angel, stop"** or `/angel stop` cuts her off.
 - `/angel iam` sets the character name the transcript uses for you. `/angel optout` stops her transcribing your
@@ -84,6 +84,7 @@ be read. The most useful:
 - `answerModel`: `claude-sonnet-5-5` by default; `claude-opus-5-5` is slower and costs about twice as much. This one
   isn't in the file until you add it: a new line such as `"answerModel": "claude-opus-5-5",` after the first `{`.
 - `replyWindowMs`: how long after she stops talking the person she answered can reply without saying her name (default 60000, a minute).
+- `sessionThread`: `false` makes her post in the channel itself instead of one thread per session.
 - `memoryMinutes`: how much of the conversation she's given with a question (default 15).
 - `answerCacheTtl`: how long Claude keeps her instructions and your house rules ready between questions: `"1h"`
   (default, cheapest when questions come more than 5 minutes apart) or `"5m"`.

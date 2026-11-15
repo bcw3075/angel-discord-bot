@@ -24,6 +24,11 @@ export function isIntentRefusal(e) {
 
 const today = () => { const d = new Date(), p = n => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
 
+/* "Angel · Sat, Nov 14" */
+export function threadName(at = Date.now()) {
+  return `Angel · ${new Date(at).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}`;
+}
+
 export class AngelBot {
   constructor({ cfg, log, services, dataDir = DATA_DIR, speakersFile = LOCAL_FILES.speakers, VoiceLinkClass = VoiceLink }) {
     Object.assign(this, { cfg, log, services, dataDir, speakersFile, VoiceLinkClass });
@@ -214,7 +219,15 @@ export class AngelBot {
       catch (e) { voice.leave(); return i.editReply(e.message); }
       await this.knowOwner(channel.guild);
       const startedAt = Date.now();
-      const post = { send: text => textChannel.send({ content: text, ...NO_PINGS }) };
+      /* one thread per session holds everything she posts, so the channel stays clean (Rhea, 2026-11-14); without
+         the thread permissions she falls back to the channel itself */
+      let thread = null;
+      if (cfg.sessionThread && textChannel.threads?.create) {
+        try { thread = await textChannel.threads.create({ name: threadName(startedAt), autoArchiveDuration: 1440, reason: "Angel's session" }); }
+        catch (e) { log.warn(`couldn't start a thread, posting in the channel instead: ${e.message}`); }
+      }
+      const home = thread ?? textChannel;
+      const post = { send: text => home.send({ content: text, ...NO_PINGS }) };
       const session = new Session({
         cfg, voice, post, log,
         stt: this.services.stt, tts: this.services.tts, gate: this.services.gate,
@@ -224,12 +237,15 @@ export class AngelBot {
         dailyOver: () => this.dailyOver(),
         transcript: new Transcript({ dir: cfg.saveTranscript ? path.join(this.dataDir, "sessions", folderName(startedAt)) : null, startedAt, title: channel.guild.name }),
       });
-      voice.on("lost", () => { textChannel.send("I lost the voice connection. `/angel join` brings me back.").catch(() => {}); this.end(i.guildId, "voice connection lost"); });
-      this.sessions.set(i.guildId, { session, voiceChannelId: channel.id, textChannel, emptyTimer: null });
+      voice.on("lost", () => { home.send("I lost the voice connection. `/angel join` brings me back.").catch(() => {}); this.end(i.guildId, "voice connection lost"); });
+      this.sessions.set(i.guildId, { session, voiceChannelId: channel.id, textChannel, home, thread, emptyTimer: null });
       await session.start();
-      await i.editReply(
-        `🎙️ I'm in **${channel.name}**, listening and transcribing so I can answer rules questions. Say "Angel, ..." or type \`@Angel ...\`. ` +
-        `Only text is kept, never audio, on the GM's computer. \`/angel optout\` if you'd rather I didn't transcribe you; \`/angel stop\` or "Angel, stop" cuts me off; \`/angel leave\` when you're done.`);
+      const notice = `🎙️ I'm in **${channel.name}**, listening and transcribing so I can answer rules questions. Say "Angel, ..." or type \`@Angel ...\`. ` +
+        `Only text is kept, never audio, on the GM's computer. \`/angel optout\` if you'd rather I didn't transcribe you; \`/angel stop\` or "Angel, stop" cuts me off; \`/angel leave\` when you're done.`;
+      if (thread) {
+        await thread.send({ content: notice, ...NO_PINGS }).catch(e => log.warn(`couldn't post in the thread: ${e.message}`));
+        await i.editReply(`🎙️ I'm in **${channel.name}**. Everything for this session is in ${thread.toString?.() ?? thread.name}.`);
+      } else await i.editReply(notice);
       log.info(`session started in ${channel.guild.name} / ${channel.name}`);
     } finally {
       this.joining.delete(i.guildId);
@@ -247,7 +263,7 @@ export class AngelBot {
     /* a check or an answer still running when it ended can add a few cents afterwards: book those too */
     live.session.answering.finally(() => this.addSpend(live.session.spent() - s.dollars));
     this.log.info(`session ended (${why}): ${JSON.stringify(s)}`);
-    try { await live.textChannel.send(summaryText(s)); } catch { /* channel gone */ }
+    try { await (live.home ?? live.textChannel).send(summaryText(s)); } catch { /* channel gone */ }
   }
 
   async endAll(why) {
@@ -264,10 +280,12 @@ export class AngelBot {
     const who = this.speakerOf(m.guild, m.author.id);
     if (!q.asked) {
       /* table chat in the session's channel is part of the conversation Angel remembers */
-      if (live && m.channelId === live.textChannel.id && m.content.trim()) live.session.transcript.add({ at: Date.now(), userId: m.author.id, speaker: who.name, role: who.role, text: m.content, kind: "text" });
+      if (live && (m.channelId === live.textChannel.id || m.channelId === live.thread?.id) && m.content.trim()) live.session.transcript.add({ at: Date.now(), userId: m.author.id, speaker: who.name, role: who.role, text: m.content, kind: "text" });
       return;
     }
-    const reply = { send: text => m.reply({ content: text, ...NO_PINGS }) };
+    /* asked in the channel while the session has a thread: answered in the thread, to keep the channel clean */
+    const toThread = live?.thread && m.channelId === live.textChannel.id;
+    const reply = toThread ? { send: text => live.thread.send({ content: text, ...NO_PINGS }) } : { send: text => m.reply({ content: text, ...NO_PINGS }) };
     if (live) return live.session.textQuestion({ userId: m.author.id, asker: who.name, role: who.role, text: q.question, reply });
     return this.answerAlone({ question: q.question, asker: who.name, reply, guild: m.guild });
   }

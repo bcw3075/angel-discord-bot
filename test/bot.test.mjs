@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { EventEmitter } from "node:events";
-import { AngelBot } from "../src/bot.mjs";
+import { AngelBot, threadName } from "../src/bot.mjs";
 import { DEFAULTS } from "../src/config.mjs";
 import { sleep } from "./helpers.mjs";
 
@@ -82,6 +82,36 @@ test("/angel join from a voice channel starts a session and tells the table she'
   const again = interaction(w, "join");
   await bot.onInteraction(again);
   assert.match(again.replies[0].content, /already listening/);
+});
+
+test("a session gets its own thread: the notice, typed answers and the summary go there, not in the channel (Rhea, 2026-11-14)", async () => {
+  const w = world(), { bot } = makeBot();
+  const inThread = [];
+  w.textChannel.threads = { create: async o => ({ id: "th1", name: o.name, toString: () => "<#th1>", send: async m => { const msg = { content: m.content ?? m, edit: async t => { msg.content = t; } }; inThread.push(msg); return msg; } }) };
+  const i = interaction(w, "join");
+  await bot.onInteraction(i);
+  assert.match(i.edits[0], /Everything for this session is in <#th1>/);
+  assert.match(inThread[0].content, /listening and transcribing/, "the notice is in the thread");
+  assert.equal(bot.sessions.get("g1").thread.name, threadName(Date.now()));
+  // typed in the channel: answered in the thread, nothing replied in the channel
+  const replies = [];
+  await bot.onMessage({ author: { id: "p1", bot: false }, guild: w.guild, channelId: "tc1", content: "Angel, flanking?", reply: async r => { replies.push(r); return { edit: async () => {} }; } });
+  await bot.sessions.get("g1").session.answering;
+  assert.equal(replies.length, 0, "no reply in the channel");
+  assert.ok(inThread.some(m => /flanking/.test(m.content)), "the answer is in the thread");
+  await bot.end("g1", "test");
+  assert.match(inThread.at(-1).content, /\$/, "the summary is in the thread");
+  assert.equal(w.sent.length, 0, "nothing at all in the channel");
+});
+
+test("with no thread permission she posts in the channel as before", async () => {
+  const w = world(), { bot } = makeBot();
+  w.textChannel.threads = { create: async () => { throw new Error("Missing Permissions"); } };
+  const i = interaction(w, "join");
+  await bot.onInteraction(i);
+  assert.match(i.edits[0], /listening and transcribing/, "the full notice in the reply");
+  assert.equal(bot.sessions.get("g1").thread, null);
+  await bot.end("g1", "test");
 });
 
 test("with saveTranscript off, no transcript folder is written (the conversation is still kept in memory)", async () => {

@@ -46,6 +46,7 @@ export const DEFAULTS = Object.freeze({
   /* "Angel?" with the question still to come: how long to wait for the rest */
   followUpMs: 12000,
   replyWindowMs: 60000,
+  sessionThread: true,
   /* Angel stops listening and answering for the rest of the session past this */
   maxSessionDollars: 5,
   /* and for the rest of the day past this, counting everything (sessions and typed questions outside one) */
