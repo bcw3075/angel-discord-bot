@@ -19,6 +19,15 @@ const fakeAon = {
   async get(ref) { this.calls.push(["get", ref]); return { id: ref, name: "Grabbed", url: "https://2e.aonprd.com/Conditions.aspx?ID=77", text: "You're held in place..." }; },
 };
 
+test("the answer counts every kind of token it used, over all its rounds (2026-11-15, for choosing what to cache)", async () => {
+  const claude = fakeClaude([
+    { content: [{ type: "tool_use", id: "t1", name: "aon_search", input: { query: "grabbed" } }], usage: { input_tokens: 100, cache_creation_input_tokens: 2000, cache_read_input_tokens: 0, output_tokens: 30 } },
+    { content: [{ type: "tool_use", id: "t2", name: "answer", input: { say: "Off-guard and immobilized." } }], usage: { input_tokens: 900, cache_creation_input_tokens: 0, cache_read_input_tokens: 2000, output_tokens: 50 } },
+  ]);
+  const r = await answerQuestion({ claude, aon: fakeAon, model: "m", system: "SYS", conversation: "", question: "What does grabbed do?", asker: "Mira", via: "voice" });
+  assert.deepEqual(r.tokens, { fresh: 1000, written: 2000, read: 2000, out: 80 });
+});
+
 test("Angel looks the rule up, then answers through the answer tool", async () => {
   const claude = fakeClaude([
     { content: [{ type: "tool_use", id: "t1", name: "aon_search", input: { query: "grabbed", category: "condition" } }], usage: {} },

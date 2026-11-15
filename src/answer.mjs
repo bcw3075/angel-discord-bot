@@ -139,6 +139,8 @@ export async function answerQuestion({ claude, aon, model, maxTokens = 1500, sys
   const looked = [];      /* what was looked up and what came back, for the log: a slow answer can be explained */
   let lookups = 0, dollars = 0;
   const cache = { written: 0, read: 0 };
+  /* every kind of token this answer used, so where the money goes can be seen (Rhea, 2026-11-15, on prompt caching) */
+  const tokens = { fresh: 0, written: 0, read: 0, out: 0 };
   const done = (input, rounds) => {
     const say = String(input?.say ?? "").trim() || "Sorry, I lost my train of thought there. Could you ask me again?";
     const details = String(input?.details ?? "").trim() || say;
@@ -147,7 +149,7 @@ export async function answerQuestion({ claude, aon, model, maxTokens = 1500, sys
       .map(s => ({ name: String(s.name || "Archives of Nethys").slice(0, 80), url: s.url }));
     if (!sources.length) sources = fetched.slice(0, 3);
     const unique = [...new Map(sources.map(s => [s.url, s])).values()].slice(0, 5);
-    return { say, details, sources: unique, rounds, lookups, failedLookups: failed.count, dollars, cache, fellBack, looked };
+    return { say, details, sources: unique, rounds, lookups, failedLookups: failed.count, dollars, cache, tokens, fellBack, looked };
   };
   let spoke = false;    /* some of `say` has been passed on (and may already be heard) */
   let roomy = false;    /* this round is being asked again with twice the room, after a reply cut off at its limit */
@@ -207,6 +209,10 @@ export async function answerQuestion({ claude, aon, model, maxTokens = 1500, sys
       dollars += claude.cost(model, res.usage);
       cache.written += res.usage?.cache_creation_input_tokens ?? 0;
       cache.read += res.usage?.cache_read_input_tokens ?? 0;
+      tokens.fresh += res.usage?.input_tokens ?? 0;
+      tokens.written += res.usage?.cache_creation_input_tokens ?? 0;
+      tokens.read += res.usage?.cache_read_input_tokens ?? 0;
+      tokens.out += res.usage?.output_tokens ?? 0;
       const content = res.content ?? [];
       const uses = content.filter(b => b.type === "tool_use");
       const final = uses.find(u => u.name === "answer");

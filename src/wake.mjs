@@ -63,7 +63,8 @@ export const FOLLOWUP_SYSTEM = `You watch the transcript of a tabletop game play
 Decide whether the LAST line is for Angel: a follow-up, a reaction, or another question for her. Lean to yes: people often follow up without saying her name ("Okay. What about stacking?", "And with a buckler?", "Can you access my notes?").
 Say no only when the line is plainly for someone else (the table or another player: narration, "roll initiative", "your turn, Sam", a player's name) or is nothing but an acknowledgement ("okay", "thanks", "got it").
 Reply with JSON only, no other text:
-{"to_angel": true or false, "complete": true, "stop": true or false, "chat": true or false, "question": "...", "ack": "..."}
+{"to_angel": true or false, "complete": true or false, "stop": true or false, "chat": true or false, "question": "...", "ack": "..."}
+- complete: false only when they announce a question without asking it yet ("Okay. So first question.", "One more thing.", "Oh, and another one"); true otherwise, even for a question that trails off ("Oh, and are there any differences"). (Live 2026-11-15: "Oh, that's funny. Okay. So first question." was answered as small talk while Rhea was already asking.)
 - stop: true only when they plainly tell her to stop talking or that they don't want the answer any more ("stop", "that's enough", "never mind", "forget it"). A remark about being cut off, interrupted or misheard is not a stop ("cut me off there", "you cut me off", "hold on, I wasn't done", "that's not what I said"): stop false.
 - chat: true when it's banter or small talk that needs no rules lookup; false for a rules question.
 - question: what they want from her in one sentence of at most 40 words, written to stand on its own using the earlier lines. Write it as the question itself, the way they would ask it ("Does that stack with cover?"), never as a report of it ("Asks whether it stacks").

@@ -25,6 +25,32 @@ export const CASES = [
     { say: "Do you like being a bot?", replying: true, chat: true, lookups: 0, never: [/(say|use|need) my name/i] },
     { say: "Fair enough, I get that.", replying: true, chat: true, lookups: 0, lastReply: true, want: [/\bname\b/i], never: [/say my name if you need me again/i] },
   ] },
+  /* from the live rounds of 2026-11-15 (each rule read on Archives of Nethys that day) */
+  /* an announced question is waited for, not answered as small talk */
+  { id: "announced-question", steps: [
+    { say: "Angel, how's it going?", chat: true, lookups: 0 },
+    { say: "Oh, that's funny. Okay. So first question.", replying: true, checkOnly: true, complete: false, stop: false },
+  ] },
+  /* two lines said close together reach her as one question: she answers the question, not just the first remark */
+  { id: "joined-remark-and-question", steps: [
+    { say: "Angel, does Reactive Strike count toward my multiple attack penalty?", want: [/doesn'?t|does not|no\b|never/i], never: [/takes? (the|your|a) (multiple attack )?penalty/i], lookups: 1 },
+    { say: "Interesting. How hard is it for you to search for these things?", replying: true, chat: true, lookups: 0, want: [/search|look|archives|nethys|find/i] },
+  ] },
+  { id: "joined-two-questions", steps: [
+    { say: "Angel, which is generally the stronger spellcaster, a wizard or a sorcerer, and why? Oh, and are there any differences in how their power works?", want: [/prepar/i, /spontaneous|repertoire/i], never: [/wizards? (is|are) (clearly|strictly|always) (stronger|better)|sorcerers? (is|are) (clearly|strictly|always) (stronger|better)/i], lookups: 1 },
+  ] },
+  /* the order of weakness and resistance, and once per effect (Player Core Step 3; Spring 2026 errata) */
+  { id: "weakness-then-resistance", steps: [
+    { say: "Angel, my cold iron axe hits for 10 slashing. The demon has weakness 5 to cold iron and resistance 3 to slashing. How much does it take?", want: [/12/], never: [/\b(7|8|13|15)\b damage/i], lookups: 1 },
+  ] },
+  /* the transcriber garbles a word: she says what she took it as */
+  { id: "garbled-rule-word", steps: [
+    { say: "Angel, tell me what role most often trips people up that they forget about.", lookups: 0, chat: "either", want: [/rule/i] },
+  ] },
+  /* a quiet table: "everything okay?" gets an answer */
+  { id: "are-you-there", steps: [
+    { say: "Angel, are you still there? Everything okay?", chat: true, lookups: 0 },
+  ] },
   /* remarks about being cut off are not stops (live 2026-11-15: "Cut me off there." stopped her answer); real stops are */
   { id: "cut-off-is-not-stop", steps: [
     { say: "Angel, which is the stronger spellcaster, a wizard or a sorcerer?", lookups: 1 },
@@ -226,7 +252,7 @@ async function runStep({ services, asker, role = "GM", step, lines, now, previou
       onSay: (piece, { end = false } = {}) => { if (piece) t.first ??= now(); if (cutter.push(piece).length) t.sentence ??= now(); if (end) { t.sentence ??= now(); t.said = now(); } },
     });
     r.answer = { ms: now() - t0, firstWordsMs: t.first ? t.first - t0 : null, firstSentenceMs: t.sentence ? t.sentence - t0 : null, sayDoneMs: t.said ? t.said - t0 : null,
-      rounds: a.rounds, lookups: a.lookups ?? 0, failedLookups: a.failedLookups ?? 0, fellBack: a.fellBack || "", say: a.say, details: a.details ?? "", sources: a.sources ?? [], dollars: a.dollars ?? 0 };
+      rounds: a.rounds, lookups: a.lookups ?? 0, failedLookups: a.failedLookups ?? 0, fellBack: a.fellBack || "", say: a.say, details: a.details ?? "", sources: a.sources ?? [], tokens: a.tokens ?? null, dollars: a.dollars ?? 0 };
     lines.push(`[${clock(now())}] Angel: ${a.say}`);
     const both = `${a.say}\n${a.details ?? ""}`;
     for (const re of step.want ?? []) if (!re.test(both)) r.notes.push(`a right answer should say ${re}`);
@@ -280,8 +306,11 @@ export async function runSelfTest({ services, asker = "The GM", cases = CASES, n
   const dollars = all.reduce((n, s) => n + (s.check?.dollars ?? 0) + (s.answer?.dollars ?? 0), 0);
   const answers = all.filter(s => s.answer && !s.answer.error);
   const avg = k => (answers.filter(s => s.answer[k] != null).length ? (answers.reduce((n, s) => n + (s.answer[k] ?? 0), 0) / answers.filter(s => s.answer[k] != null).length / 1000).toFixed(1) : "n/a");
+  /* where the tokens went, for choosing what to cache (2026-11-15) */
+  const tk = answers.reduce((t, s) => { for (const k of ["fresh", "written", "read", "out"]) t[k] += s.answer.tokens?.[k] ?? 0; return t; }, { fresh: 0, written: 0, read: 0, out: 0 });
+  const tokenLine = ` Answering tokens in all: ${tk.fresh} fresh input, ${tk.written} written to the cache, ${tk.read} read from it, ${tk.out} written out.`;
   const summary = `${all.length} steps in ${cases.length} cases: ${all.length - failed - look} fine, ${look} to look at, ${failed} FAILED. `
-    + `Answers on average: first sentence whole after ${avg("firstSentenceMs")} s, whole answer after ${avg("ms")} s, ${(answers.reduce((n, s) => n + (s.answer.rounds ?? 0), 0) / Math.max(1, answers.length)).toFixed(1)} rounds. Cost about $${dollars.toFixed(2)}.`;
+    + `Answers on average: first sentence whole after ${avg("firstSentenceMs")} s, whole answer after ${avg("ms")} s, ${(answers.reduce((n, s) => n + (s.answer.rounds ?? 0), 0) / Math.max(1, answers.length)).toFixed(1)} rounds. Cost about $${dollars.toFixed(2)}.` + tokenLine;
   print(`\n${summary}`);
   return { results, summary, failed, look, dollars };
 }
@@ -300,7 +329,7 @@ export function reportText({ results, summary }, { startedAt, version = "", mode
       const a = r.answer;
       if (a && !a.error) {
         out.push(`Times from when the question was taken up: first words written ${secs(a.firstWordsMs, 0)}, first sentence whole ${secs(a.firstSentenceMs, 0)}, all she says written ${secs(a.sayDoneMs, 0)}, whole answer ${(a.ms / 1000).toFixed(1)} s`);
-        out.push(`Rounds: ${a.rounds}, lookups: ${a.lookups}, failed lookups: ${a.failedLookups}; cost about $${a.dollars.toFixed(3)}`);
+        out.push(`Rounds: ${a.rounds}, lookups: ${a.lookups}, failed lookups: ${a.failedLookups}; cost about $${a.dollars.toFixed(3)}${a.tokens ? `; tokens: ${a.tokens.fresh} fresh, ${a.tokens.written} cache write, ${a.tokens.read} cache read, ${a.tokens.out} out` : ""}`);
         out.push(`She says: ${a.say}`, "She writes:", a.details, `Pages: ${a.sources.map(s => `${s.name} <${s.url}>`).join(" · ") || "(none)"}`);
       }
       out.push("");
