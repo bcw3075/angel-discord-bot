@@ -190,20 +190,29 @@ export class Session {
   async onLine(line, until = line.at, more = false, released = null) {
     if (isStopRequest(line.text)) { this.stop(line.at); this.log.info(`${line.speaker} said stop: she stops`); return; }
     const uid = line.userId;
-    /* she is holding an answer for a gap: every line said meanwhile, by anyone, may be a go-ahead, a "hold on", a stop
-       or a question (Rhea, d-7). A line still being put together (a long question, "Angel?" with the rest to come)
-       goes the usual way. */
+    /* She is holding an answer: every line said since the held question, by anyone and however it arrives (the end of
+       a long talk, the rest of an "Angel?", a line said while their earlier one is still being checked, the asker's
+       own), goes to the check while she waits (review 8 of 0.1.3: each of those went past it). The asker's own lines
+       from before the question are theirs and go the usual way. */
     const h = this.holding;
-    /* the end of someone else's long talk (its first 30 s held as the start of a question): judged while she waits,
-       all of it, not by the usual check (review 7 of 0.1.3: "...hold on, Angel" at its end never made her wait) */
-    const heldPart = this.pending.get(uid);
-    if (h && !more && !released && heldPart?.held && uid !== h.userId) {
-      this.pending.delete(uid);
-      clearTimeout(heldPart.timer);
-      return this.onHeldLine(h, { ...line, at: heldPart.firstAt, text: `${heldPart.text} ${line.text}` }, until);
+    if (h && Math.max(line.at, until ?? line.at) > h.at && !(uid === h.userId && line.at <= h.at)) {
+      const before = released ?? this.pending.get(uid);
+      if (more) {
+        /* still talking: kept, the rest to come; what is said so far may already be "hold on" */
+        if (before && !released) clearTimeout(before.timer);
+        const text = before?.held ? `${before.text} ${line.text}` : line.text;
+        const firstAt = before?.held ? before.firstAt : line.at;
+        const holdMs = this.cfg.maxUtteranceSeconds * 1000 + this.cfg.followUpMs;
+        const kept = { text, at: this.now(), holdMs, byName: mentionsAngel(line.text) || before?.byName === true, held: true, firstAt, line: { ...line, at: firstAt }, until };
+        kept.timer = setTimeout(() => this.releaseHold(uid, "the rest never came"), holdMs);
+        kept.timer.unref?.();
+        this.pending.set(uid, kept);
+        return this.onHeldLine(h, { ...line, at: firstAt, text }, until, { partial: true });
+      }
+      if (before && !released) { this.pending.delete(uid); clearTimeout(before.timer); }
+      const whole = before && !released ? { ...line, at: before.firstAt ?? line.at, text: `${before.text} ${line.text}` } : line;
+      return this.onHeldLine(h, whole, until);
     }
-    /* said after the held question, or begun before it and still going after it (review 3 of 0.1.3) */
-    if (h && !more && !released && Math.max(line.at, until ?? line.at) > h.at && !(uid === h.userId && line.at <= h.at) && !this.pending.has(uid) && !this.checking.has(uid)) return this.onHeldLine(h, line, until);
     /* the person she just answered may reply without her name for a little while after she stops talking (Rhea,
        2026-11-14: "you replied first but not when I replied to you"); the check still decides it was for her */
     const r = this.replyTo;
@@ -639,21 +648,30 @@ export class Session {
      Returns "go", "letgo", "stop", "merge" or "end". */
   async takeFloor(qc) {
     const f = this.floor;
-    if (!f || this.cfg.busyTable === false || !this.cfg.speak || this.ended || !f.busy()) return "go";
-    let signalled;
-    const h = { ...qc, since: this.now(), mode: "gap", cutIn: "", signal: null, waiter: null, signalled: new Promise(r => { signalled = r; }) };
-    /* "wait" changes how she waits; anything else ends the wait, and the first one stands */
+    if (!f || this.cfg.busyTable === false || !this.cfg.speak || this.ended) return "go";
+    /* a quiet table, and nothing said since the question still unheard: at once, nothing paid. Something just said
+       ("wait, hold on") and not heard yet is waited for (Rhea, 2026-11-15 afternoon, after review 8: "Wait to hear
+       it"; free, a second or two) */
+    const busyAtStart = f.busy();
+    if (!busyAtStart && !this.unheard(qc.at)) return "go";
+    let signalled, kicked;
+    const h = { ...qc, since: this.now(), mode: "gap", cutIn: "", signal: null, waiter: null, goAsked: false,
+      signalled: new Promise(r => { signalled = r; }), kicked: new Promise(r => { kicked = r; }) };
+    /* "wait" changes how she waits; "go" asks to go once nothing said is unheard (a later "wait" or stop still
+       counts, review 8 of 0.1.3); anything else ends the wait, and the first one stands */
     h.poke = reason => {
-      if (reason === "wait") { if (!h.signal) { h.mode = "invite"; h.waiter?.wake("wait"); } return; }
       if (h.signal) return;
+      if (reason === "wait") { h.mode = "invite"; h.goAsked = false; h.waiter?.wake("wait"); return; }
+      if (reason === "go") { h.goAsked = true; kicked("go"); h.waiter?.wake("go"); return; }
       h.signal = reason;
       signalled(reason);
+      kicked(reason);
       h.waiter?.wake(reason);
     };
     this.holding = h;
     this.counts.held++;
     const who = qc.asker;
-    this.log.info(`the table is busy as ${who}'s answer is ready: waiting for a gap`);
+    this.log.info(busyAtStart ? `the table is busy as ${who}'s answer is ready: waiting for a gap` : `something was just said as ${who}'s answer is ready: waiting to hear it`);
     const deadline = h.since + this.cfg.busyMaxHoldMs;
     /* a pause or gap is at least as long as it takes a piece of speech to reach her (it ends after silenceMs of
        silence), so what was said just before it is already being heard when it is judged (review 2 of 0.1.3) */
@@ -670,7 +688,9 @@ export class Session {
     };
     /* her words are written while she waits, so they are ready if she needs them; a pause that comes first leaves
        them unsaid (a fraction of a cent) */
-    const ready = !this.readyLine ? Promise.reject(new Error("nothing to write it")) : Promise.resolve()
+    /* written only when she may need it: the table busy now, or once it is (nothing is paid for a just-said line) */
+    let readyMade = null;
+    const makeReady = () => readyMade ??= (!this.readyLine ? Promise.reject(new Error("nothing to write it")) : Promise.resolve()
       .then(() => this.readyLine({ question: qc.meaning || qc.question, asker: who, earlier: this.readies.slice(-5) }))
       .then(async r => {
         this.costs.claude += r?.dollars ?? 0;
@@ -678,14 +698,25 @@ export class Session {
         const clips = await this.tts(r.text);
         this.costs.tts += this.ttsCost(r.text);
         return { text: r.text, clips };
-      });
-    ready.catch(() => {});
+      }));
     let readyDone = false;
-    ready.then(() => { readyDone = true; }, () => { readyDone = true; });
+    const ready = () => { const p = makeReady(); p.then(() => { readyDone = true; }, () => { readyDone = true; }); return p; };
+    if (busyAtStart) ready().catch(() => {});
+    /* a go-ahead came: she goes once nothing said is unheard; null when a "hold on" took it back or time ran out */
+    const goNow = async () => {
+      while (h.goAsked && !h.signal && !this.ended) {
+        if (!this.unheard(h.at)) { this.log.info(`a go-ahead: ${who}'s answer goes ahead`); return "go"; }
+        const r2 = await wait(0, { maxMs: left(), blocked: () => this.unheard(h.at) });
+        if (r2 === "timeout") return null;
+      }
+      return null;
+    };
     try {
       /* 1. a moment for a natural pause */
       let r = h.mode === "invite" ? "wait" : await wait(pauseMs, { maxMs: Math.min(this.cfg.busyFirstWaitMs, left()), blocked: () => this.unheard(h.at) });
       if (r === "quiet") { this.log.info(`a pause came: ${who}'s answer goes ahead`); return "go"; }
+      if (h.signal) return this.held(h);
+      if (h.goAsked && await goNow()) return "go";
       if (h.signal) return this.held(h);
       /* 2. still talking: she cuts in, unless told to hold on, or they stopped as the moment passed */
       let since = -Infinity;
@@ -700,9 +731,9 @@ export class Session {
       const cutIn = async () => {
         let timer;
         const late = new Promise(r => { timer = setTimeout(() => r({ late: true }), left()); });
-        const got = await Promise.race([ready.catch(e => ({ failed: e })), h.signalled, late]);
+        const got = await Promise.race([ready().catch(e => ({ failed: e })), h.kicked, late]);
         clearTimeout(timer);
-        if (h.signal || got?.late || this.ended || h.mode === "invite" || this.stoppedSince(qc.at)) return;
+        if (h.signal || h.goAsked || got?.late || this.ended || h.mode === "invite" || this.stoppedSince(qc.at)) return;
         if (got?.failed) { cutFailed = true; this.log.warn(`couldn't make her "I'm ready" (${got.failed.message}): waiting without it`); return; }
         /* only while someone is talking. Her "I'm ready" may land over words not heard yet (Rhea, 2026-11-15 15:0x,
            after review 6 showed that waiting to be sure meant she never cut in at a table that talks with breaths:
@@ -724,10 +755,13 @@ export class Session {
         /* while her words are written and voiced, a pause or the time limit still counts (review of 0.1.3) */
         const watch = f.waitForQuiet(pauseMs, { maxMs: left(), blocked: () => this.unheard(h.at) });
         h.waiter = watch;
-        const got = await Promise.race([ready.then(() => ({ ready: true }), () => ({ ready: true })), h.signalled, watch.promise.then(r => ({ floor: r }))]);
+        /* her words are only written while someone talks */
+        const readyP = f.busy() ? ready().then(() => ({ ready: true }), () => ({ ready: true })) : new Promise(() => {});
+        const got = await Promise.race([readyP, h.kicked, watch.promise.then(r => ({ floor: r }))]);
         watch.wake("done");
         if (h.waiter === watch) h.waiter = null;
         if (h.signal) return this.held(h);
+        if (h.goAsked) { if (await goNow()) return "go"; if (h.signal) return this.held(h); }
         if (got?.floor === "quiet") { this.log.info(`a pause came: ${who}'s answer goes ahead`); return "go"; }
         if (got?.floor === "timeout") { this.counts.letGo++; this.log.info(`no gap came in ${Math.round(this.cfg.busyMaxHoldMs / 1000)} s: ${who}'s spoken answer is let go (it is in the thread)`); return "letgo"; }
         if (got?.ready) {
@@ -742,14 +776,16 @@ export class Session {
       for (;;) {
         if (h.signal) return this.held(h);
         if (this.ended) return "end";
+        if (h.goAsked) { if (await goNow()) return "go"; continue; }
         if (left() <= 0) break;
         const canCut = !cutDone && !cutFailed && h.mode !== "invite" && !!this.readyLine;
         r = await wait(h.mode === "invite" ? Infinity : gapMs, { maxMs: left(), since, blocked: () => this.unheard(h.at), orBusy: canCut });
         if (r === "wait") { this.log.info(`told to hold on: ${who}'s answer waits for a go-ahead`); continue; }
+        if (r === "go") continue;
         if (r === "quiet") { this.log.info(`a gap came: ${who}'s answer goes ahead`); return "go"; }
         if (r === "busy") {
           /* her words not ready yet: keep watching for a gap meanwhile, not just wait for them (review 5 of 0.1.3) */
-          if (readyDone) await cutIn();
+          if (readyDone) await cutIn(); else ready().catch(() => {});
           if (!cutDone && !cutFailed && !h.signal) await this.pauseBriefly();
           continue;
         }
@@ -776,7 +812,7 @@ export class Session {
   }
 
   /* A line said while she holds an answer: a go-ahead, a "hold on", a stop, a question, or nothing for her. */
-  async onHeldLine(h, line, until) {
+  async onHeldLine(h, line, until, { partial = false } = {}) {
     const uid = line.userId;
     /* her own "I'm ready" coming back through a microphone */
     /* her own words for this question coming back through a microphone: the quick reaction or the "I'm ready" */
@@ -810,7 +846,8 @@ export class Session {
       return;
     }
     if (v.kind === "wait") { if (live) h.poke("wait"); return; }
-    if (v.kind !== "ask") return;
+    /* a long talk still going on: only a go-ahead, "hold on" or a stop counts yet; a question waits for the rest */
+    if (partial || v.kind !== "ask") return;
     /* the asker adds to their question: one fresh answer to all of it, in this one's place (Rhea, d-7 and d-6) */
     if (live && uid && uid === h.userId && h.via === "voice" && h.entry && !this.stoppedSince(h.at)) {
       this.counts.questions++;

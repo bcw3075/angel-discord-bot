@@ -745,9 +745,118 @@ test("(se-12) the end of someone else's talk over 30 s, its first part held beca
   x.voice.emit("speech", { userId: "p2", packets: tonePackets(1), startedAt: t, final: false }); /* cut at 30 s, still talking */
   await until(() => x.s.pending.get("p2")?.held);
   x.voice.emit("speech", { userId: "p2", packets: tonePackets(1), startedAt: t + 1000, final: true });
-  await until(() => x.holds.length === 1);
-  assert.match(x.holds[0].bareText, /long story and anyway hold on/, "all of it, to the check while she waits");
+  await until(() => x.holds.length === 2);
+  assert.match(x.holds[0].bareText, /long story$/, "what was said so far is judged as it comes (it may already be 'hold on')");
+  assert.match(x.holds[1].bareText, /long story and anyway hold on/, "then all of it, to the check while she waits");
   await until(() => x.s.holding?.mode === "invite");
   x.s.end();
+  await x.s.answering;
+});
+
+/* ---- the eighth review of 0.1.3: every line said while she waits reaches the check while she waits ---- */
+const holdOn = a => (/hold on|Hold on|never mind/i.test(a.bareText) ? { kind: /never mind/i.test(a.bareText) ? "stop" : "wait" } : /go ahead/i.test(a.bareText) ? { kind: "go" } : { kind: "none" });
+
+test("(se-12) a long talk cut at 30 s whose rest is too short to hear: all of it is judged while she waits", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Angel, hold on, before you answer I need to explain the grab"], hold: holdOn }));
+  x.voice.talk("p2", true, Date.now() - 500);
+  speech(x.voice, "p1");
+  await until(() => x.voice.spoken.length === 1);
+  const t = Date.now();
+  x.voice.emit("speech", { userId: "p2", packets: tonePackets(1), startedAt: t, final: false });
+  await until(() => x.s.holding?.mode === "invite");
+  x.voice.emit("speech", { userId: "p2", packets: tonePackets(0.2), startedAt: t + 1000, final: true }); /* the rest: too short */
+  await sleep(100);
+  stops(x, "p2");
+  await sleep(400);
+  assert.deepEqual(answers(x.voice), []);
+  x.s.end(); await x.s.answering;
+});
+
+test("(se-12) the asker's own long talk while she waits ('actually hold on...') is judged while she waits", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Angel, actually hold on, let me read you the whole ability text first"], hold: holdOn }));
+  x.voice.talk("p2", true, Date.now() - 500);
+  speech(x.voice, "p1");
+  await until(() => x.voice.spoken.length === 1);
+  x.voice.emit("speech", { userId: "p1", packets: tonePackets(1), startedAt: Date.now(), final: false });
+  await until(() => x.s.holding?.mode === "invite");
+  assert.equal(x.holds.at(-1).bareText, "Angel, actually hold on, let me read you the whole ability text first");
+  x.s.end(); await x.s.answering;
+});
+
+test("(se-12) 'hold on' in the first 30 s of an unnamed long talk counts", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Hold on, hold on, I want to explain what happened"], hold: holdOn }));
+  x.voice.talk("p2", true, Date.now() - 500);
+  speech(x.voice, "p1");
+  await until(() => x.voice.spoken.length === 1);
+  x.voice.emit("speech", { userId: "p3", packets: tonePackets(1), startedAt: Date.now(), final: false });
+  await until(() => x.s.holding?.mode === "invite");
+  x.s.end(); await x.s.answering;
+});
+
+test("(se-12) a line said while that speaker's earlier line is still at the usual check is judged on its own while she waits", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Angel, I think we already used it.", "Hold on."], hold: holdOn }));
+  let release; const slow = new Promise(r => { release = r; });
+  const gate = x.s.gate;
+  x.s.gate = async a => { if (/already used/.test(a.bareText)) await slow; return gate(a); };
+  x.voice.talk("p2", true, Date.now() - 500);
+  speech(x.voice, "p1");
+  await until(() => x.s.counts.gateChecks === 1);
+  speech(x.voice, "p2"); /* its usual check hangs */
+  await until(() => x.voice.spoken.length === 1);
+  speech(x.voice, "p2");
+  await until(() => x.s.holding?.mode === "invite");
+  assert.equal(x.holds.at(-1).bareText, "Hold on.");
+  release();
+  x.s.end(); await x.s.answering;
+});
+
+test("(se-12) something just said when her answer is ready, nobody talking: she waits to hear it (Rhea: 'Wait to hear it'); a quiet table is unchanged", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Wait, hold on."], hold: holdOn, cfg: LIVE }));
+  let release; const later = new Promise(r => { release = r; });
+  x.s.answer = async q => { await later; return { say: `Answer to: ${q.question}`, sources: [], lookups: 1, dollars: 0.02 }; };
+  speech(x.voice, "p1");
+  await until(() => x.s.counts.questions === 1);
+  x.voice.talk("p2", true, Date.now() - 600);
+  x.voice.talk("p2", false); /* "Wait, hold on." just said; its piece comes 0.8 s later */
+  setTimeout(() => speech(x.voice, "p2", Date.now() - 1400), 800);
+  await sleep(500);
+  release();                 /* her answer is ready now, nobody talking (past the breath window), the piece not come */
+  await sleep(1600);
+  assert.deepEqual(x.voice.spoken, [], "no answer, and no 'I'm ready' (nobody is talking)");
+  assert.equal(x.s.holding?.mode, "invite");
+  assert.equal(x.readies.length, 0, "nothing written for a cut-in");
+  x.s.end(); await x.s.answering;
+});
+
+test("(se-12) a go-ahead while someone else's 'never mind' is still being heard: she waits for it, and it wins", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Go ahead, Angel.", "Wait, never mind that."], hold: holdOn, cfg: LIVE }));
+  x.voice.talk("p2", true, Date.now() - 800);
+  speech(x.voice, "p1");
+  await until(() => x.voice.spoken.length === 1, 3000);
+  const stt = x.s.stt;
+  let n = 0;
+  x.s.stt = async w => { if (++n === 2) await sleep(600); return stt(w); }; /* the second line is slower to hear */
+  x.voice.talk("p3", true, Date.now() - 900); x.voice.talk("p3", false);
+  speech(x.voice, "gm");      /* "Go ahead, Angel." */
+  speech(x.voice, "p3");      /* "Wait, never mind that.", still being heard */
+  await sleep(1200);
+  assert.deepEqual(answers(x.voice), [], "the 'never mind' was heard and won");
+  assert.equal(x.s.holding, null);
+  x.s.end(); await x.s.answering;
+});
+
+test("(se-12) a long talk cut at 30 s that is a question, whose rest is too short to hear: asked in turn after the held answer", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Angel, how does flanking work with a reach weapon"], hold: a => (/flanking/.test(a.bareText) ? { kind: "ask", question: "How does flanking work with reach?" } : { kind: "none" }) }));
+  x.voice.talk("p2", true, Date.now() - 500);
+  speech(x.voice, "p1");
+  await until(() => x.voice.spoken.length === 1);
+  const t = Date.now();
+  x.voice.emit("speech", { userId: "p3", packets: tonePackets(1), startedAt: t, final: false });
+  await until(() => x.holds.length === 1);
+  x.voice.emit("speech", { userId: "p3", packets: tonePackets(0.2), startedAt: t + 1000, final: true }); /* the rest: too short */
+  await until(() => answers(x.voice).length === 1, 3000);
+  stops(x, "p2");
+  await until(() => answers(x.voice).length === 2, 4000);
+  assert.equal(answers(x.voice)[1], "clip:Answer to: Angel, how does flanking work with a reach weapon");
   await x.s.answering;
 });
