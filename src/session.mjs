@@ -49,6 +49,7 @@ export class Session {
     this.readies = [];           /* her last few "I'm ready" lines, so the next one is different */
     this.hearingNow = new Map(); /* pieces of speech still being heard or judged (review 2 of 0.1.3) */
     this.lastArrived = new Map(); /* userId → when their latest piece of speech reached her */
+    this.unheardCapMs = 10000;    /* longer unbroken talk than this isn't waited for (see `unheard`) */
     this.pieceNo = 0;
   }
 
@@ -125,12 +126,16 @@ export class Session {
     if (this.stillHearing(at)) return true;
     if (!this.floor) return false;
     const now = this.now();
-    for (const [uid, end] of this.floor.lastEnds(this.cfg.minUtteranceMs, this.cfg.silenceMs, now)) {
+    for (const [uid, { start, end }] of this.floor.lastEnds(this.cfg.minUtteranceMs, this.cfg.silenceMs, now)) {
       if (end <= at) continue;
+      /* talk that ran on for a long time without the pause that ends a piece (a trickle of clicks, a mic left open):
+         its piece may not come for 30 s, so it stops holding her up; once it does reach her it is still judged
+         (review 6 of 0.1.3) */
+      if (end - start > this.unheardCapMs) continue;
       /* nobody listens to them (opted out, or not heard at all): nothing will come */
       try { if (this.voice.shouldListen && !this.voice.shouldListen(uid)) continue; } catch { continue; }
       const arrived = this.lastArrived.get(uid) ?? -Infinity;
-      if (arrived >= end + this.cfg.silenceMs - 150) continue; /* its piece has come */
+      if (arrived >= end + this.cfg.silenceMs - 300) continue; /* its piece has come (review 6: 50 ms of slack was tight) */
       if (now < end + this.cfg.silenceMs + 1500) return true;  /* still on its way */
     }
     return false;
@@ -688,8 +693,10 @@ export class Session {
         clearTimeout(timer);
         if (h.signal || got?.late || this.ended || h.mode === "invite" || this.stoppedSince(qc.at)) return;
         if (got?.failed) { cutFailed = true; this.log.warn(`couldn't make her "I'm ready" (${got.failed.message}): waiting without it`); return; }
-        /* never over something said that isn't known yet, a "hold on" perhaps (review 5 of 0.1.3): tried again later */
-        if (!f.busy() || this.unheard(h.at)) return;
+        /* only while someone is talking. Her "I'm ready" may land over words not heard yet (Rhea, 2026-11-15 15:0x,
+           after review 6 showed that waiting to be sure meant she never cut in at a table that talks with breaths:
+           "Yes, cut in anyway"); her answer itself never goes over an unheard line. */
+        if (!f.busy()) return;
         cutDone = true;
         h.cutIn = qc.cutIn = got.text;
         this.readies.push(got.text);
@@ -838,6 +845,7 @@ export class Session {
     this.ended = true;
     this.replyTo = null;
     this.holding?.poke("end");
+    this.lastArrived.clear();
     for (const p of this.pending.values()) clearTimeout(p.timer);
     this.pending.clear();
     this.voice.leave();

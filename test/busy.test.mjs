@@ -636,7 +636,7 @@ test("(se-12) a 'hold on' begun during her 'I'm ready' is waited for, not talked
   await x.s.answering;
 });
 
-test("(se-12) no 'I'm ready' over a line just said and not yet heard (a breath after 'hold on')", async () => {
+test("(se-12) a line just said and not yet heard: her 'I'm ready' may land on it (Rhea's choice), her answer never does", async () => {
   const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Hold on Angel."], hold: a => (/Hold on/.test(a.bareText) ? { kind: "wait" } : { kind: "none" }), cfg: LIVE }));
   x.voice.talk("p2", true, Date.now() - 800);
   speech(x.voice, "p1");
@@ -645,7 +645,7 @@ test("(se-12) no 'I'm ready' over a line just said and not yet heard (a breath a
   x.voice.talk("p2", false);   /* 0.2 s before the first wait ends: still "talking" then, but just said */
   setTimeout(() => speech(x.voice, "p2", Date.now() - 1800), 800);
   await sleep(1500);
-  assert.deepEqual(x.voice.spoken, [], "no cut-in, no answer");
+  assert.deepEqual(answers(x.voice), [], "no answer over it");
   assert.equal(x.s.holding?.mode, "invite");
   x.s.end();
   await x.s.answering;
@@ -683,5 +683,34 @@ test("(se-12) talk that comes back while her words are still being written: a ga
   const t0 = Date.now();
   await until(() => answers(x.voice).length === 1, 4000);
   assert.ok(Date.now() - t0 < 2500, "released by the gap, not when her words came");
+  await x.s.answering;
+});
+
+/* ---- the sixth review of 0.1.3 ---- */
+test("(se-12) talk with ordinary breaths (shorter than a piece's silence): she still cuts in while they talk (Rhea: 'Yes, cut in anyway')", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?"], cfg: LIVE }));
+  x.voice.talk("p2", true, Date.now() - 800);
+  speech(x.voice, "p1");
+  let on = true;
+  /* a breath before the first wait ends, then 0.7 s of talk and 0.6 s breaths: never a pause that ends a piece */
+  (async () => { await sleep(200); while (on) { x.voice.talk("p2", false); await sleep(600); x.voice.talk("p2", true); await sleep(700); } })();
+  try {
+    await until(() => x.voice.spoken.length === 1, 6000);
+    assert.deepEqual(x.voice.spoken, ["clip:Got it, whenever you're ready."]);
+  } finally { on = false; }
+  x.s.end();
+  await x.s.answering;
+});
+
+test("(se-12) a trickle of clicks with live timing (joined into one never-ending piece) stops holding her up after the cap", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?"], cfg: { ...LIVE, busyMaxHoldMs: 8000 } }));
+  x.s.unheardCapMs = 1500;
+  x.voice.talk("p2", true, Date.now() - 800);
+  speech(x.voice, "p1");
+  await until(() => x.voice.spoken.length === 1, 3000);
+  stops(x, "p2");
+  let on = true;
+  (async () => { while (on) { x.voice.talk("p3", true); await sleep(100); x.voice.talk("p3", false); await sleep(450); } })();
+  try { await until(() => answers(x.voice).length === 1, 6000); } finally { on = false; }
   await x.s.answering;
 });

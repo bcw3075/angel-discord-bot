@@ -81,7 +81,7 @@ export class Floor {
   }
   open(spell, at) { return spell.end === null && at - spell.start <= this.maxSpellMs; }
 
-  /* Each speaker's latest finished talk at least `minMs` long: userId → when it ended. Stretches with pauses shorter
+  /* Each speaker's latest finished talk at least `minMs` long: userId → { start, end }. Stretches with pauses shorter
      than `joinMs` between them reach her as one piece of speech, so they are measured together ("Wait... wait.");
      the length is measured from when the talk really began, and only talk that is all her own voice coming back is
      left out (review 4 and 5 of 0.1.3: a "hold on" begun during her cut-in looked too short). For waiting until what
@@ -96,7 +96,7 @@ export class Floor {
         let start = list[i].start, j = i;
         while (j > 0 && start - this.endOf(list[j - 1], at) < joinMs) { j--; start = list[j].start; }
         const allEcho = list.slice(j, i + 1).every(sp => this.effectiveStart(sp, at) > this.endOf(sp, at));
-        if (!allEcho && end - start >= minMs) { out.set(userId, end); break; }
+        if (!allEcho && end - start >= minMs) { out.set(userId, { start, end }); break; }
         i = j;
       }
     }

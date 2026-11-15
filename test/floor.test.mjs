@@ -96,5 +96,5 @@ test("each speaker's latest stretch long enough to be words, for waiting until i
   f.talk("d", true); step(100);                               /* still talking: not finished */
   const ends = f.lastEnds(400);
   assert.deepEqual([...ends.keys()], ["a"]);
-  assert.equal(ends.get("a"), 1_000_000 + 1000);
+  assert.deepEqual(ends.get("a"), { start: 1_000_000, end: 1_000_000 + 1000 });
 });
