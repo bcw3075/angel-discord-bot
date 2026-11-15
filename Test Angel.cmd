@@ -6,7 +6,7 @@ if not exist "node_modules\discord.js\package.json" (
   pause
   exit /b
 )
-echo Asking Angel about thirty-five test questions with your own keys (two or three minutes, about a dollar).
+echo Asking Angel about seventy test questions with your own keys (four or five minutes, about a dollar).
 echo No Discord and no talking needed. Angel can be running or not.
 node src\check.mjs --selftest
 if errorlevel 1 (
