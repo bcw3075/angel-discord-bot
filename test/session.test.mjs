@@ -1,9 +1,9 @@
 /* The whole flow of a session with stand-ins for Discord's voice channel, Deepgram and Claude: real Opus packets go
    in, and what Angel types and says comes out. */
-import { test } from "node:test";
+import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { Session, echoOf, ACKS, summaryText } from "../src/session.mjs";
+import { Session, echoOf, ACKS, summaryText, REPLY_LIMIT_NUDGE } from "../src/session.mjs";
 import { DEFAULTS } from "../src/config.mjs";
 import { tonePackets, sleep } from "./helpers.mjs";
 
@@ -15,6 +15,11 @@ class FakeVoice extends EventEmitter {
   ignore(id) { this.ignored.push(id); }
   leave() { this.left = true; }
 }
+
+/* every session a test makes is ended after it, which frees its Opus decoders: opusscript's memory grows with each one
+   kept, and past a point decoding fails quietly and speech counts as silence (2026-11-15, two later tests failing) */
+const made = [];
+afterEach(() => { for (const x of made.splice(0)) { try { x.end(); } catch { /* already ended */ } } });
 
 function setup({ heard = [], gate = () => ({ toAngel: true, complete: true, stop: false, question: "" }), cfg = {} } = {}) {
   const voice = new FakeVoice();
@@ -31,6 +36,7 @@ function setup({ heard = [], gate = () => ({ toAngel: true, complete: true, stop
     speakerOf: id => ({ name: id === "gm" ? "Dana" : "Mira", role: id === "gm" ? "GM" : "player" }),
     log: { info() {}, warn() {}, error() {}, debug() {} },
   });
+  made.push(s);
   return { s, voice, posted, gates, asked };
 }
 
@@ -102,6 +108,75 @@ test("the person she just answered can reply without her name for a while; bante
   s.replyTo = { userId: "p1", from: Date.now(), turn: 0 };
   s.stop();
   assert.equal(s.replyTo, null);
+});
+
+test("rules follow-ups without her name never use up the reply window; only small talk counts (Rhea, 2026-11-15)", async () => {
+  // her live round: a named question, then "Okay. How does weakness...", "Can you elaborate?", "Yes please", then
+  // "How hard was it to look all that up?" (small talk) was left unanswered under the old count of three
+  const heard = ["Angel, does leftover resistance carry over?", "And weakness?", "Can you elaborate?", "Yes please", "How hard was that to look up?", "Ha, fair.", "One more.", "Too many."];
+  const { s, voice, gates } = setup({ heard, gate: a => (/look up|Ha|more|many/.test(a.lastText) ? { toAngel: true, complete: true, stop: false, chat: true, question: a.bareText } : { toAngel: true, complete: true, stop: false, question: a.bareText }) });
+  s.answer = async q => ({ say: `Answer to: ${q.question}`, sources: [], lookups: /look up|Ha|more|many/.test(q.question) ? 0 : 1, dollars: 0.01 });
+  await s.start();
+  for (let i = 0; i < 8; i++) { speech(voice, "p1"); await settle(); await s.answering; await settle(); }
+  assert.equal(gates.length, 7, "the named question, three rules follow-ups and three small-talk replies are checked; the eighth line is not");
+  assert.equal(voice.spoken.filter(c => String(c).startsWith("clip:Answer to: How hard")).length, 1, "the small-talk question after three rules follow-ups is answered");
+  assert.equal(s.replyTo, null, "three small-talk replies in a row close the window");
+  assert.equal(String(voice.spoken.at(-1)), `clip:${REPLY_LIMIT_NUDGE}`, "and she says so instead of going quiet");
+  assert.equal(voice.spoken.filter(c => String(c) === `clip:${REPLY_LIMIT_NUDGE}`).length, 1, "only once, when it closes");
+  assert.match(s.transcript.lines.filter(l => l.kind === "angel").at(-1).text, /Answer to: .*One more.* Say my name/, "the transcript has it after her answer");
+});
+
+test("review 8: a named question in two parts counts as named, with its own count; a failed small-talk answer doesn't count", async () => {
+  // another player's window is open at two small-talk replies; Mira names her in a first part the check calls unfinished
+  const { s, voice, gates } = setup({ heard: ["Angel, um", "how are you doing today?"], gate: a => (/um$/.test(a.lastText) ? { toAngel: true, complete: false, stop: false, question: "" } : { toAngel: true, complete: true, stop: false, chat: true, question: "how are you?" }) });
+  s.answer = async q => ({ say: `Answer to: ${q.question}`, sources: [], lookups: 0, dollars: 0.01 });
+  await s.start();
+  s.replyTo = { userId: "p9", from: Date.now(), turn: 2 };
+  speech(voice, "p1"); await settle();
+  speech(voice, "p1"); await settle(); await s.answering; await settle();
+  assert.equal(gates.length, 2);
+  assert.equal(gates[1].replying, false, "told it is a named question, not a reply");
+  assert.equal(voice.spoken.filter(c => String(c) === `clip:${REPLY_LIMIT_NUDGE}`).length, 0, "no 'say my name': she was named");
+  assert.equal(s.replyTo?.userId, "p1", "and her own reply window opens");
+  assert.equal(s.replyTo.turn, 0, "with the count started again");
+  // an unnamed line taken as the rest of this speaker's waiting line counts from their own window, not another player's
+  const c = setup({ heard: ["how are you doing?"], gate: () => ({ toAngel: true, complete: true, stop: false, chat: true, question: "how are you?" }) });
+  c.s.answer = async q => ({ say: `Answer to: ${q.question}`, sources: [], lookups: 0, dollars: 0.01 });
+  await c.s.start();
+  c.s.replyTo = { userId: "p9", from: Date.now(), turn: 2 };
+  c.s.pending.set("p1", { text: "so", at: Date.now(), timer: null, byName: false });
+  speech(c.voice, "p1"); await settle(); await c.s.answering; await settle();
+  assert.equal(c.voice.spoken.filter(x => String(x) === `clip:${REPLY_LIMIT_NUDGE}`).length, 0, "another player's count isn't hers");
+  assert.equal(c.s.replyTo?.userId, "p1");
+  // a small-talk reply whose answer fails doesn't use one up, so the window doesn't close silently on it
+  const b = setup({ heard: ["one more thing"], gate: () => ({ toAngel: true, complete: true, stop: false, chat: true, question: "one more thing" }) });
+  b.s.answer = async () => { throw new Error("overloaded"); };
+  await b.s.start();
+  b.s.replyTo = { userId: "p1", from: Date.now() - 10, turn: 2 };
+  speech(b.voice, "p1", 1, Date.now()); await settle(); await b.s.answering; await settle();
+  assert.equal(b.s.replyTo?.turn, 2, "the failed answer isn't counted");
+  assert.equal(b.voice.spoken.filter(c => String(c) === `clip:${REPLY_LIMIT_NUDGE}`).length, 0);
+});
+
+test("the log gives the gaps between the clips of a spoken answer (Rhea, 2026-11-15: a choppy-sounding answer)", async () => {
+  const lines = [];
+  const { s, voice } = setup({ heard: ["Angel, can I grapple?"], gate: () => ({ toAngel: true, complete: true, stop: false, question: "Can I grapple?" }) });
+  s.log = { info: m => lines.push(m), warn() {}, error() {}, debug() {} };
+  // only the answer's own clips (the ones with onStart) are timed here; each lasts 1 s and the next starts 0.25 s later
+  voice.periods = [];
+  let clock = 0;
+  voice.speak = (clips, { onStart } = {}) => {
+    if (onStart) { onStart(); clock = Math.max(clock, Date.now()); voice.periods.push([clock, clock + 1000]); clock += 1250; }
+    // the next answer's first clip, already playing when this answer's timing line is written (review 8)
+    if (voice.periods.length === 2) voice.periods.push([clock + 5000, clock + 6000]);
+    return Promise.resolve();
+  };
+  s.answer = async ({ onSay }) => { onSay?.("First sentence here. "); onSay?.("Second one.", { end: true }); return { say: "First sentence here. Second one.", sources: [], lookups: 1, dollars: 0.01 }; };
+  await s.start();
+  speech(voice, "p1");
+  await settle(); await s.answering; await settle();
+  const timing = lines.find(m => m.startsWith("timing for"));
+  assert.match(timing ?? "", /2 clips, gaps between them 0\.25 s(?!, )/, "the timing line lists the gap");
 });
 
 test("small talk that looked something up, or wasn't spoken, is posted after all", async () => {

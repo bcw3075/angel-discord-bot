@@ -54,6 +54,12 @@ code, comments, tests, fixtures or docs (the privacy scan checks against a priva
   run `<scratch>/node_modules/.bin/eslint --no-config-lookup -c <scratch>/eslint.config.mjs "src/*.mjs" "test/*.mjs"`
   from this repo, with a flat config that sets `globals.node` and turns on `no-undef` and `no-unused-vars`. The
   Discord handlers had an undefined name that no test reached before `test/bot.test.mjs` existed.
+- opusscript's memory grows with every encoder and decoder kept, and past a point it breaks: an encode throws
+  "offset is out of bounds", and a decode fails quietly, so test speech counts as silence and is skipped
+  (2026-11-15: one new session test made three unrelated ones fail, then two). So make test audio with
+  `tonePackets` (each tone made once, copies handed out), and end every test session (`setup` in
+  test/session.test.mjs ends them after each test, which frees their decoders). The bot itself ends each
+  session's decoders at `/angel leave`.
 
 ## Releasing
 The build protocol of `bcw3075/foundry-mod-tools` (its README): `guide start <version> "<title>" --plan <private plan>`,
@@ -74,7 +80,7 @@ nothing from her: defaults fill the gap.
 | answering | `docs/features/answering.md` | src/answer.mjs, src/claude.mjs, src/aon.mjs | 12 |
 | deepgram | `docs/features/deepgram.md` | Choose Voice.cmd, src/stt.mjs, src/tts.mjs, src/speech.mjs | 5 |
 | discord | `docs/features/discord.md` | src/bot.mjs, src/commands.mjs | 9 |
-| session | `docs/features/session.md` | src/session.mjs | 7 |
+| session | `docs/features/session.md` | src/session.mjs | 8 |
 | setup | `docs/features/setup.md` | Install Angel.cmd, Test Angel.cmd, src/selftest.mjs, src/config.mjs, src/log.mjs, src/setup.mjs, src/check.mjs, src/services.mjs, src/main.mjs | 9 |
 | transcript | `docs/features/transcript.md` | src/transcript.mjs | 3 |
 | voice | `docs/features/voice.md` | src/voice.mjs, src/capture.mjs, src/audio.mjs | 5 |

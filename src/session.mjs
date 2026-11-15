@@ -20,6 +20,9 @@ export function echoOf(heard, said = "") {
   return h.filter(w => mine.has(w)).length / h.length >= 0.7;
 }
 
+/* said when three small-talk replies in a row close the reply window */
+export const REPLY_LIMIT_NUDGE = "Say my name if you need me again.";
+
 export class Session {
   constructor({ cfg, voice, post, stt, tts, gate, answer, speakerOf, transcript = new Transcript(), keytermCount = 1, log, now = Date.now, newDecoder = createDecoder, dailyOver = () => false }) {
     Object.assign(this, { cfg, voice, post, stt, tts, gate, answer, speakerOf, transcript, keytermCount, log, now, newDecoder, dailyOver });
@@ -199,16 +202,19 @@ export class Session {
     }
     /* what they said while the check ran is the rest of the question, finished or not */
     const rest = later.length ? ` ${later.join(" ")}` : "";
+    /* the small-talk count is this speaker's own, from their open reply window; a named question starts it again */
+    const count = { turn: wasNamed ? 0 : (r?.userId === uid ? r.turn : 0), unnamed: !wasNamed };
     if (!decision.complete) {
-      if (rest) { this.ask({ question: `${text}${rest}`, meaning: "", asker: line.speaker, role: line.role, via: "voice", at, userId: uid, until }); return; }
+      if (rest) { this.ask({ question: `${text}${rest}`, meaning: "", asker: line.speaker, role: line.role, via: "voice", at, userId: uid, until, chat: decision.chat === true, ...count }); return; }
       const timer = setTimeout(() => this.pending.delete(uid), this.cfg.followUpMs);
       timer.unref?.();
-      this.pending.set(uid, { text, at: this.now(), timer });
+      /* her name in this first part still makes the whole a named question (review 8) */
+      this.pending.set(uid, { text, at: this.now(), timer, byName: wasNamed });
       return;
     }
     /* the answer is worked out from their own words; the check's reading of them (a paraphrase by a small model, which
        can drop or bend a detail) goes along as a hint only, and is what the post shows as the question */
-    this.ask({ question: `${asked}${rest}`, meaning: decision.question ? `${decision.question}${rest}` : "", asker: line.speaker, role: line.role, via: "voice", at, userId: uid, until, chat: decision.chat === true, ack: decision.ack || "", turn: wasNamed ? 0 : (r?.turn ?? 0) + 1 });
+    this.ask({ question: `${asked}${rest}`, meaning: decision.question ? `${decision.question}${rest}` : "", asker: line.speaker, role: line.role, via: "voice", at, userId: uid, until, chat: decision.chat === true, ack: decision.ack || "", ...count });
   }
 
   /* a held piece of a long question whose rest didn't come as a line: checked and answered as it stands */
@@ -242,7 +248,7 @@ export class Session {
     return this.answering;
   }
 
-  async runAsk({ question, meaning = "", asker, via, reply, at, userId = null, until = null, chat = false, turn = 0, ack = "" }) {
+  async runAsk({ question, meaning = "", asker, via, reply, at, userId = null, until = null, chat = false, turn = 0, unnamed = false, ack = "" }) {
     const target = reply ?? this.post;
     const shown = meaning || question; /* the question as the channel shows it */
     if (this.ended) {
@@ -281,6 +287,7 @@ export class Session {
     const said = [];       /* the pieces given to the voice so far */
     const times = {};      /* for the log: when the first words were written, when her voice started */
     let lastPlayed = null; /* resolves when the last piece has played (or was stopped) */
+    let clipCount = 0;      /* clips of this answer handed to the voice, for the gaps in the timing line */
     const sayPiece = text => {
       const spoken = speakable(text);
       /* the cap is asked before she begins an answer, not in the middle of one: a sentence of voice costs a
@@ -296,7 +303,7 @@ export class Session {
         try { clips = await made; this.costs.tts += this.ttsCost(spoken); }
         catch (e) { this.log.warn(`couldn't speak the answer: ${e.message}`); return; }
         if (this.ended || this.stoppedSince(at)) return;
-        try { lastPlayed = this.voice.speak(clips, { onStart: () => { times.voice ??= this.now(); } }); }
+        try { lastPlayed = this.voice.speak(clips, { onStart: () => { times.voice ??= this.now(); } }); clipCount += clips.length; }
         catch (e) { this.log.warn(`couldn't speak the answer: ${e.message}`); }
       });
     };
@@ -347,7 +354,19 @@ export class Session {
     else if (rest) sayPiece(rest);
     if (result.detailsLost && !result.failed && !result.cut) result = { ...result, details: `${result.say}\n-# (I lost the written details for this one. Ask again if you want them.)` };
     if (cutNote) { sayPiece(cutNote); result = { ...result, say: `${result.say} … ${cutNote}`, details: `${result.say} …\n-# (I got cut off part way through this answer. Ask me again.)` }; }
-    const heard = result.failed && early && !result.saidAll ? `${early} ${result.say}` : result.say;
+    /* only small talk counts toward the limit of three unnamed replies in a row, so banter can't run on at the
+       table's expense; rules follow-ups ("can you elaborate?", "yes please") never use it up (Rhea, 2026-11-15:
+       her fourth reply in a row, a question after three rules answers, was left unanswered) */
+    /* a failed or cut-off answer doesn't count: she has already asked them to try again (review 8) */
+    const smallTalk = chat && !(result.lookups > 0) && !result.failed && !result.cut;
+    const run = unnamed && smallTalk ? turn + 1 : turn;
+    /* and when that limit closes the window she says so instead of going quiet (Rhea, 2026-11-15: "I also would
+       like her to not just go silent") */
+    /* only after an answer that reached the voice: never the nudge alone (review 8) */
+    const nudge = via === "voice" && userId && run >= 3 && said.length ? REPLY_LIMIT_NUDGE : "";
+    if (nudge) sayPiece(nudge);
+    const heard0 = result.failed && early && !result.saidAll ? `${early} ${result.say}` : result.say;
+    const heard = nudge && said.includes(nudge) ? `${heard0} ${nudge}` : heard0;
 
     /* the check may call a rules question small talk: one that looked something up is posted anyway */
     let posted = false;
@@ -367,8 +386,17 @@ export class Session {
     this.lastSaid = heard;
     await line.catch(e => this.log.warn(`speaking failed: ${e.message}`));
     const since = t => (t == null ? "n/a" : `${((t - began) / 1000).toFixed(1)} s`);
+    /* the silences between the clips of this answer, so a choppy-sounding one can be told apart: a long gap is a
+       sentence whose voice wasn't ready yet, a short one is the join between clips (Rhea, 2026-11-15) */
+    const gaps = () => {
+      /* this answer's own clips only: the first `clipCount` from when her voice began (the next answer's may follow) */
+      const p = (this.voice.periods ?? []).filter(([start]) => times.voice != null && start >= times.voice).slice(0, clipCount);
+      if (p.length < 2) return "";
+      const g = p.slice(1).map(([start], i) => ((start - p[i][1]) / 1000).toFixed(2));
+      return `; ${p.length} clips, gaps between them ${g.join(", ")} s${p.length < clipCount ? ` (${clipCount} clips, the rest not kept)` : ""}`;
+    };
     const startLog = () => this.log.info(`timing for ${asker}'s question: first words written ${since(times.written)}, her answer began aloud ${since(times.voice)}, whole answer written ${since(times.answered)} after it was taken up`
-      + `${until ? ` (taken up ${((began - until) / 1000).toFixed(1)} s after they stopped talking)` : ""}; ${result.rounds ?? "?"} round(s), ${result.lookups ?? 0} lookup(s)${early ? "" : ", not spoken as written"}`);
+      + `${until ? ` (taken up ${((began - until) / 1000).toFixed(1)} s after they stopped talking)` : ""}; ${result.rounds ?? "?"} round(s), ${result.lookups ?? 0} lookup(s)${early ? "" : ", not spoken as written"}${gaps()}`);
     /* nothing of the answer reached the voice (told to stop, the session ended, a cap, or the voice failed): a
        small-talk reply that was only going to be spoken is typed instead, unless she was told to stop */
     if (!lastPlayed) {
@@ -376,14 +404,13 @@ export class Session {
       if (quiet && !this.stoppedSince(at)) await post();
       return;
     }
-    /* the person she answered may reply without her name, from when this answer ends; at most three such replies
-       in a row, so small talk can't run on and on at the table's expense */
-    if (via === "voice" && userId && turn >= 3 && this.replyTo?.userId === userId) this.replyTo = null;
+    /* the person she answered may reply without her name, from when this answer ends (the limit is set above) */
+    if (via === "voice" && userId && run >= 3 && this.replyTo?.userId === userId) this.replyTo = null;
     Promise.resolve(lastPlayed).then(() => {
       startLog();
       if (this.ended || this.stoppedSince(at)) return;
-      if (via === "voice" && userId && turn < 3) {
-        this.replyTo = { userId, from: this.now(), turn };
+      if (via === "voice" && userId && run < 3) {
+        this.replyTo = { userId, from: this.now(), turn: run };
         this.log.info(`${asker} can reply without her name for ${Math.round(this.cfg.replyWindowMs / 1000)} s`);
       }
     }).catch(() => {});
