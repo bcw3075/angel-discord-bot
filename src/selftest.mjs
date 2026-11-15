@@ -13,9 +13,16 @@ import { SentenceCutter } from "./speech.mjs";
    - `want` are things a right answer says and `never` things it must not say (patterns over what she says and
      writes together); `lookups` is the least number of lookups a rules answer needs (0 for small talk);
    - `typed` asks it as a typed question (no check);
-   - `stop` (true or false) is whether the check should read the line as "stop".
+   - `stop` (true or false) is whether the check should read the line as "stop";
+   - `holdKind` runs the check for a line said while she holds an answer at a busy table (the case's `waiting` says
+     whose answer and what she said) and says which verdict it should give: go, wait, stop, ask or none (0.1.3);
+   - `ready` has her write her quick "I'm ready" for the case's question three times: each short, each different,
+     never the answer (0.1.3, Rhea: never a stock line).
    The patterns mark an answer "to look at": they are a first sieve, not the judge. The rules facts in them were
    checked against Archives of Nethys (Remaster) when they were written, 2026-11-14. */
+/* the answer she holds in the busy-table cases */
+const WAIT = { asker: "Mira", question: "What does the grabbed condition do?", cutIn: "Got it, whenever you're ready." };
+
 export const CASES = [
   /* three bits of chat without her name: on the third she tells them, in her own words, to use her name again
      (Rhea, 2026-11-15: never silence, never a stock line). `lastReply` is what the session passes on that reply. */
@@ -216,6 +223,31 @@ export const CASES = [
     { say: "Thanks.", replying: true, forHer: false, checkOnly: true },
     { say: "Okay Sam, it's your turn, roll initiative.", replying: true, forHer: false, checkOnly: true },
   ] },
+  /* ---- a busy table (0.1.3, Rhea's d-7): what a line said while she waits to give her answer means, and her own
+     "I'm ready" words ---- */
+  { id: "hold-go-aheads", waiting: WAIT, steps: [
+    { say: "Yeah, go ahead Angel.", holdKind: "go" },
+    { say: "Okay, what'd you find?", holdKind: "go" },
+    { say: "Angel?", holdKind: "go" },
+    { say: "Sure, let's hear it.", holdKind: "go" },
+  ] },
+  { id: "hold-hold-ons", waiting: WAIT, steps: [
+    { say: "Hold on Angel, one sec.", holdKind: "wait" },
+    { say: "Not now, let's finish this fight first.", holdKind: "wait" },
+  ] },
+  { id: "hold-stops", waiting: WAIT, steps: [
+    { say: "Never mind, we figured it out.", holdKind: "stop" },
+    { say: "Forget it Angel, it doesn't matter.", holdKind: "stop" },
+  ] },
+  { id: "hold-asker-adds-more", as: { name: "Mira", role: "player" }, waiting: WAIT, steps: [{ say: "Oh, and what if I have a shield raised?", holdKind: "ask" }] },
+  { id: "hold-another-question", as: { name: "Sam", role: "player" }, waiting: WAIT, steps: [{ say: "Angel, how does flanking work?", holdKind: "ask" }] },
+  { id: "hold-table-talk", waiting: WAIT, before: ["Sam: I think I'll move up behind the ogre."], steps: [
+    { say: "So I move ten feet to the left and Strike the ogre.", holdKind: "none" },
+    { say: "The angel statue in the corner starts to glow.", holdKind: "none" },
+    { say: "Sam, it's your turn.", holdKind: "none" },
+    { say: "Angel was right about that earlier.", holdKind: "none" },
+  ] },
+  { id: "ready-words", steps: [{ say: "Angel, what does grabbed do?", ready: true }] },
 ];
 
 const clock = ms => { const d = new Date(ms); return [d.getHours(), d.getMinutes(), d.getSeconds()].map(n => String(n).padStart(2, "0")).join(":"); };
@@ -224,8 +256,37 @@ const secs = (ms, from) => (ms == null ? "n/a" : `${((ms - from) / 1000).toFixed
 /* one step of a case: the check, then the answer read as it is written */
 const plain = t => String(t).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
-async function runStep({ services, asker, role = "GM", step, lines, now, previous = "" }) {
+async function runStep({ services, asker, role = "GM", step, lines, now, previous = "", waiting = null }) {
   const r = { said: step.say, notes: [] };
+  /* her "I'm ready" words, written three times as at a table where it keeps happening */
+  if (step.ready) {
+    const t0 = now(), texts = [];
+    let dollars = 0;
+    try {
+      for (let i = 0; i < 3; i++) { const w = await services.readyLine({ question: step.say, asker, earlier: texts.slice() }); dollars += w.dollars ?? 0; texts.push(w.text); }
+    } catch (e) { r.failed = `her "I'm ready": ${e.message}`; }
+    r.ready = { ms: now() - t0, texts, dollars };
+    if (!r.failed) {
+      if (texts.some(t => !t)) r.notes.push("an empty or unusable line came back");
+      if (new Set(texts.map(plain)).size < texts.length) r.notes.push("the same words twice");
+      if (texts.some(t => t.split(/\s+/).length > 10)) r.notes.push("too long for a quick cut-in");
+      if (texts.some(t => /off-guard|immobili[sz]ed|penalty|\d/i.test(t))) r.notes.push("it gives away part of the answer");
+    }
+    return r;
+  }
+  /* a line said while she holds an answer for a gap */
+  if (step.holdKind) {
+    const t0 = now();
+    try {
+      const v = await services.hold({ contextText: lines.slice(-7).join("\n"), lastText: `${asker}: ${step.say}`, bareText: step.say, asker: waiting?.asker ?? "someone", question: waiting?.question ?? "", cutIn: waiting?.cutIn ?? "" });
+      r.hold = { ms: now() - t0, kind: v.kind, question: v.question ?? "", error: v.error ?? "", dollars: v.dollars ?? 0 };
+      if (/^Claude answered 4/.test(v.error ?? "")) r.failed = `the check while she waits: ${v.error}`;
+      else if (v.error) r.notes.push(`the check while she waits failed and the plain rule decided: ${v.error}`);
+      if (v.kind !== step.holdKind) r.notes.push(`the check while she waits said "${v.kind}", expected "${step.holdKind}"`);
+    } catch (e) { r.hold = { ms: now() - t0, error: e.message, dollars: 0 }; r.failed = `the check while she waits: ${e.message}`; }
+    lines.push(`[${clock(now())}] ${asker}${role === "GM" ? " (GM)" : ""}: ${step.say}`);
+    return r;
+  }
   const wantForHer = step.forHer !== false;
   if (!step.typed) {
     const g0 = now();
@@ -292,7 +353,7 @@ export async function runSelfTest({ services, asker = "The GM", cases = CASES, n
       const c = cases[i];
       const lines = (c.before ?? []).map(l => `[${clock(now())}] ${l}`);
       const steps = [];
-      for (const step of c.steps) steps.push(await runStep({ services, asker: c.as?.name ?? asker, role: c.as?.role ?? "GM", step, lines, now, previous: steps.at(-1)?.answer?.say ?? "" }));
+      for (const step of c.steps) steps.push(await runStep({ services, asker: c.as?.name ?? asker, role: c.as?.role ?? "GM", step, lines, now, previous: steps.at(-1)?.answer?.say ?? "", waiting: c.waiting ?? null }));
       results[i] = { id: c.id, steps };
       const bad = steps.filter(s => s.failed).length, look = steps.filter(s => !s.failed && s.notes.length).length;
       /* how far along, at a glance: "[12/74]" before each line as its case finishes (Rhea, 2026-11-14) */
@@ -304,7 +365,7 @@ export async function runSelfTest({ services, asker = "The GM", cases = CASES, n
   await Promise.all(Array.from({ length: Math.max(1, Math.min(together, cases.length)) }, worker));
   const all = results.flatMap(r => r.steps);
   const failed = all.filter(s => s.failed).length, look = all.filter(s => !s.failed && s.notes.length).length;
-  const dollars = all.reduce((n, s) => n + (s.check?.dollars ?? 0) + (s.answer?.dollars ?? 0), 0);
+  const dollars = all.reduce((n, s) => n + (s.check?.dollars ?? 0) + (s.answer?.dollars ?? 0) + (s.hold?.dollars ?? 0) + (s.ready?.dollars ?? 0), 0);
   const answers = all.filter(s => s.answer && !s.answer.error);
   const avg = k => (answers.filter(s => s.answer[k] != null).length ? (answers.reduce((n, s) => n + (s.answer[k] ?? 0), 0) / answers.filter(s => s.answer[k] != null).length / 1000).toFixed(1) : "n/a");
   /* where the tokens went, for choosing what to cache (2026-11-15) */
@@ -327,6 +388,8 @@ export function reportText({ results, summary }, { startedAt, version = "", mode
       for (const n of r.notes) out.push(`LOOK AT: ${n}`);
       const k = r.check;
       if (k && !k.threw) out.push(`Check: ${k.toAngel ? (k.complete ? (k.chat ? "for Angel, small talk" : "for Angel") : "for Angel, waiting for the rest") : "not for Angel"} in ${(k.ms / 1000).toFixed(1)} s${k.question ? `; read as: ${k.question}` : ""}${k.ack ? `; her quick reaction: ${k.ack}` : ""}`);
+      if (r.hold && !r.hold.error) out.push(`Check while she waits: ${r.hold.kind} in ${(r.hold.ms / 1000).toFixed(1)} s${r.hold.question ? `; read as: ${r.hold.question}` : ""}`);
+      if (r.ready) out.push(`Her "I'm ready" lines: ${r.ready.texts.map(t => `"${t}"`).join(", ")} (${(r.ready.ms / 1000).toFixed(1)} s for three)`);
       const a = r.answer;
       if (a && !a.error) {
         out.push(`Times from when the question was taken up: first words written ${secs(a.firstWordsMs, 0)}, first sentence whole ${secs(a.firstSentenceMs, 0)}, all she says written ${secs(a.sayDoneMs, 0)}, whole answer ${(a.ms / 1000).toFixed(1)} s`);

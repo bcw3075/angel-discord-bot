@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { GATE_SYSTEM, FOLLOWUP_SYSTEM, mentionsAngel, isStopRequest, parseGate, gate, gateUser, afterStop } from "../src/wake.mjs";
+import { GATE_SYSTEM, FOLLOWUP_SYSTEM, mentionsAngel, isStopRequest, parseGate, gate, gateUser, afterStop, parseHold, holdCheck, holdUser, HOLD_SYSTEM, cleanReady, readyLine, READY_SYSTEM } from "../src/wake.mjs";
 import { Claude } from "../src/claude.mjs";
 import { scriptedFetch } from "./helpers.mjs";
 
@@ -75,7 +75,7 @@ test("no text, however odd, makes the readers slow (a slow regex would freeze ev
   const odd = [" ".repeat(n), ",".repeat(n), "angel ".repeat(n / 6), "angel,".repeat(n / 6), "hey ".repeat(n / 4), "hey angel ".repeat(n / 10),
     "{".repeat(n), "[".repeat(n), "[a](".repeat(n / 4), "\n".repeat(n), " \n".repeat(n / 2), "-".repeat(n), "+".repeat(n),
     "angel " + "please ".repeat(n / 7), "Angel," + " ".repeat(n) + "x", "!".repeat(n) + "angel"];
-  const readers = { isStopRequest, mentionsAngel, parseGate: t => parseGate(t, t), typedQuestion: t => typedQuestion(t, "123"), speakable };
+  const readers = { isStopRequest, mentionsAngel, parseGate: t => parseGate(t, t), parseHold: t => parseHold(t, t), cleanReady, typedQuestion: t => typedQuestion(t, "123"), speakable };
   for (const [name, read] of Object.entries(readers)) {
     for (const [i, text] of odd.entries()) {
       const t0 = performance.now();
@@ -126,4 +126,52 @@ test("their own words after a stop are cut out for the question that follows it"
   const t0 = performance.now();
   afterStop("Angel, stop " + "'".repeat(50000));
   assert.ok(performance.now() - t0 < 100);
+});
+
+test("(wk-11) while she waits: the check's verdict is read; an unreadable one falls back to the plain rule", () => {
+  assert.deepEqual(parseHold('```json\n{"kind": "go", "chat": false, "question": ""}\n```'), { kind: "go", chat: false, question: "", fallback: false });
+  assert.equal(parseHold('{"kind": "ask", "chat": true, "question": "How are you?"}').question, "How are you?");
+  assert.equal(parseHold('{"kind": "maybe"}', "hm").kind, "none", "an unknown kind is not trusted");
+  assert.equal(parseHold("", "Angel, stop.").kind, "stop");
+  assert.equal(parseHold("", "Angel, what about flanking?").kind, "ask");
+  assert.equal(parseHold("", "Okay Angel.").kind, "go", "her name alone invites her");
+  assert.equal(parseHold("", "So I move ten feet.").kind, "none");
+});
+
+test("(wk-11) the check while she waits is told whose answer she holds and what she said; it counts its own cost", async () => {
+  const seen = [];
+  const claude = { create: async (r, o) => { seen.push({ r, o }); return { content: [{ type: "text", text: '{"kind": "wait"}' }], usage: { input_tokens: 10 } }; }, cost: () => 0.0002 };
+  const v = await holdCheck({ claude, model: "m", contextText: "[x] Sam: hi", lastText: "Dana: hold on Angel", bareText: "hold on Angel", asker: "Mira", question: "What does grabbed do?", cutIn: "Got it, whenever." });
+  assert.deepEqual([v.kind, v.dollars], ["wait", 0.0002]);
+  assert.equal(seen[0].r.system[0].text, HOLD_SYSTEM);
+  assert.match(seen[0].r.messages[0].content, /LAST line:\nDana: hold on Angel/);
+  assert.match(seen[0].r.messages[0].content, /Mira's question: "What does grabbed do\?"\. She said: "Got it, whenever\."/);
+  assert.equal(seen[0].o.timeoutMs, 8000, "the table is waiting: a short limit");
+  const down = { create: async () => { throw new Error("overloaded"); }, cost: () => 0 };
+  const f = await holdCheck({ claude: down, model: "m", lastText: "Dana: go ahead Angel", bareText: "go ahead Angel" });
+  assert.equal(f.kind, "go");
+  assert.equal(f.error, "overloaded");
+  assert.match(holdUser("", "x"), /holding her answer to someone's question/);
+});
+
+test("(wk-12) her 'I'm ready' words: written by one short call, told her last few, cleaned; nothing usable is empty, never a stock line", async () => {
+  let req;
+  const claude = { create: async r => { req = r; return { content: [{ type: "text", text: '"Got it, whenever you\'re ready."' }], usage: {} }; }, cost: () => 0.0001 };
+  const r = await readyLine({ claude, model: "m", question: "What does grabbed do?", asker: "Mira", earlier: ["Ready when you are."] });
+  assert.deepEqual(r, { text: "Got it, whenever you're ready.", dollars: 0.0001 });
+  assert.equal(req.system, READY_SYSTEM);
+  assert.match(req.messages[0].content, /Mira's question: What does grabbed do\?[\s\S]*"Ready when you are\."/);
+  assert.ok(req.max_tokens <= 60);
+  assert.equal(cleanReady(""), "");
+  assert.equal(cleanReady("word ".repeat(20)), "", "too long to be a quick cut-in");
+  assert.equal(cleanReady("  “Okay, I’ve got it.”  "), "Okay, I’ve got it.");
+});
+
+test("(wk-11) the plain rule while she waits: 'hold on' is a wait, her name alone is a go-ahead (review of 0.1.3)", () => {
+  assert.equal(parseHold("", "Hold on Angel.").kind, "wait");
+  assert.equal(parseHold("", "Angel, hold on?").kind, "wait");
+  assert.equal(parseHold("", "Angel?").kind, "go");
+  assert.equal(parseHold("", "Okay Angel, go ahead.").kind, "go");
+  assert.equal(parseHold("", "Angel, what about flanking?").kind, "ask");
+  assert.equal(parseHold("", "wait, so I move here").kind, "none", "not to her");
 });

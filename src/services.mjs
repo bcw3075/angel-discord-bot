@@ -6,7 +6,7 @@ import { Claude } from "./claude.mjs";
 import { Aon } from "./aon.mjs";
 import { transcribe } from "./stt.mjs";
 import { synthesize, chunkText } from "./tts.mjs";
-import { gate } from "./wake.mjs";
+import { gate, holdCheck, readyLine } from "./wake.mjs";
 import { answerQuestion, systemPrompt } from "./answer.mjs";
 
 export function buildServices(cfg, { fetchImpl = fetch, dataDir = DATA_DIR } = {}) {
@@ -23,6 +23,9 @@ export function buildServices(cfg, { fetchImpl = fetch, dataDir = DATA_DIR } = {
       return clips;
     },
     gate: ({ contextText, lastText, bareText, replying }) => gate({ claude, model: cfg.gateModel, contextText, lastText, bareText, replying }),
+    /* a busy table (0.1.3): what a line said while she holds an answer means, and her own "I'm ready" words */
+    hold: ({ contextText, lastText, bareText, asker, question, cutIn }) => holdCheck({ claude, model: cfg.gateModel, contextText, lastText, bareText, asker, question, cutIn }),
+    readyLine: ({ question, asker, earlier }) => readyLine({ claude, model: cfg.gateModel, question, asker, earlier }),
     /* house rules are read for each question, so an edit to house-rules.md counts at once */
     answer: ({ conversation, question, asker, via, gmName, onSay, meaning, lastReply }) => answerQuestion({
       /* at least 3,000: her thinking counts toward the limit, and 1,500 (the default until 0.1.2, still in saved configs)

@@ -7,7 +7,7 @@ code, comments, tests, fixtures or docs (the privacy scan checks against a priva
 ## Layout
 - `src/main.mjs` starts the bot; `src/services.mjs` builds the shared wiring from `config.json`.
 - `src/bot.mjs` (Discord) → `src/session.mjs` (one session) → `src/voice.mjs` (the voice channel), `src/stt.mjs` /
-  `src/tts.mjs` (Deepgram), `src/wake.mjs` (was that for me?), `src/answer.mjs` (Claude + `src/aon.mjs`).
+  `src/tts.mjs` (Deepgram), `src/wake.mjs` (was that for me?, and the checks while she waits at a busy table), `src/answer.mjs` (Claude + `src/aon.mjs`), `src/floor.mjs` (who is talking, from Discord's speaking signal, and the wait for a gap; 0.1.3).
 - `src/setup.mjs` and `src/check.mjs` are the owner's setup and check scripts.
 - `test/*.test.mjs` run with `npm test` (Node's own test runner, no packages); `test/live/aon-live.mjs` is the live
   Archives of Nethys check (`npm run test:aon`).
@@ -79,10 +79,11 @@ nothing from her: defaults fill the gap.
 |---|---|---|---|
 | answering | `docs/features/answering.md` | src/answer.mjs, src/claude.mjs, src/aon.mjs | 14 |
 | deepgram | `docs/features/deepgram.md` | Choose Voice.cmd, src/stt.mjs, src/tts.mjs, src/speech.mjs | 5 |
-| discord | `docs/features/discord.md` | src/bot.mjs, src/commands.mjs | 9 |
-| session | `docs/features/session.md` | src/session.mjs | 10 |
-| setup | `docs/features/setup.md` | Install Angel.cmd, Test Angel.cmd, src/selftest.mjs, src/config.mjs, src/log.mjs, src/setup.mjs, src/check.mjs, src/services.mjs, src/main.mjs | 9 |
+| discord | `docs/features/discord.md` | src/bot.mjs, src/commands.mjs | 10 |
+| floor | `docs/features/floor.md` | src/floor.mjs | 2 |
+| session | `docs/features/session.md` | src/session.mjs | 14 |
+| setup | `docs/features/setup.md` | Install Angel.cmd, Test Angel.cmd, src/selftest.mjs, src/config.mjs, src/log.mjs, src/setup.mjs, src/check.mjs, src/services.mjs, src/main.mjs | 10 |
 | transcript | `docs/features/transcript.md` | src/transcript.mjs | 3 |
-| voice | `docs/features/voice.md` | src/voice.mjs, src/capture.mjs, src/audio.mjs | 5 |
-| wake | `docs/features/wake.md` | src/wake.mjs | 5 |
+| voice | `docs/features/voice.md` | src/voice.mjs, src/capture.mjs, src/audio.mjs | 6 |
+| wake | `docs/features/wake.md` | src/wake.mjs | 8 |
 <!-- feature-index:end -->

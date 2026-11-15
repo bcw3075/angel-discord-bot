@@ -368,3 +368,30 @@ test("the self-test runs every case through the check and the answering, marks w
   for (const c of CASES) for (const s of c.steps) for (const re of [...(s.want ?? []), ...(s.never ?? [])]) re.test(odd);
   assert.ok(performance.now() - t0 < 500);
 });
+
+test("(st-12) the self-test's busy-table cases: the check while she waits against its expected verdict, and her 'I'm ready' words", async () => {
+  const { runSelfTest, reportText, CASES } = await import("../src/selftest.mjs");
+  const holdCases = CASES.filter(c => c.steps.some(s => s.holdKind));
+  assert.deepEqual([...new Set(holdCases.flatMap(c => c.steps.map(s => s.holdKind)))].sort(), ["ask", "go", "none", "stop", "wait"], "every verdict is tried");
+  assert.ok(CASES.some(c => c.steps.some(s => s.ready)), "and her words");
+  const seen = [];
+  const services = {
+    hold: async a => { seen.push(a); return { kind: /go ahead/.test(a.bareText) ? "go" : "none", dollars: 0.001 }; },
+    readyLine: async ({ earlier }) => ({ text: ["Got it when you're ready.", "Got it when you're ready.", "Ready, off-guard is -2."][earlier.length], dollars: 0.0005 }),
+  };
+  const run = await runSelfTest({ services, cases: [
+    { id: "h", waiting: { asker: "Mira", question: "Q?", cutIn: "Ready." }, before: ["Sam: earlier"], steps: [{ say: "Yeah, go ahead Angel.", holdKind: "go" }, { say: "Hold on.", holdKind: "wait" }] },
+    { id: "r", steps: [{ say: "Angel, what does off-guard do?", ready: true }] },
+  ] });
+  assert.equal(seen[0].asker, "Mira");
+  assert.equal(seen[0].cutIn, "Ready.");
+  assert.match(seen[0].contextText, /Sam: earlier/);
+  assert.match(seen[1].contextText, /go ahead/, "a case's lines are said one after another");
+  assert.deepEqual(run.results[0].steps.map(s => s.notes.length), [0, 1]);
+  assert.match(run.results[0].steps[1].notes[0], /said "none", expected "wait"/);
+  assert.match(run.results[1].steps[0].notes.join("|"), /same words twice.*gives away part of the answer/);
+  assert.ok(Math.abs(run.dollars - 0.0035) < 1e-9, "their cost is counted");
+  const text = reportText(run, { startedAt: Date.now() });
+  assert.match(text, /Check while she waits: go/);
+  assert.match(text, /Her "I'm ready" lines: "Got it/);
+});

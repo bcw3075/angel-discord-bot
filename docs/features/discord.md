@@ -8,6 +8,7 @@ since: 0.1.0
 The Discord side: logging in, the /angel commands, typed questions, a session per server, leaving an empty channel.
 
 ## Decisions
+- **The busy table (0.1.3)**: `/angel join` gives the voice link `isPerson` (not a bot, opted out or not) and the session the services' `hold` and `readyLine`.
 - **One thread a day** (Rhea, 2026-11-14 22:0x, after an evening of test joins left six threads all named "Angel · Sat, Nov 14"; she chose "One thread per day" over the time in the name or leaving it): a join looks for her own open thread of today's name in that channel (`threads.fetchActive`, read in discord.js: it lists the server's active threads and keeps this channel's) and goes on in the newest; when there is none open it looks through the channel's closed public threads (`threads.fetchArchived`, 25 newest) and opens today's again (`setArchived(false)`), because a session's thread is archived when it ends and Discord's active list leaves archived threads out (review 7: the first version made a new thread at every second join). A locked one, another day's, or someone else's of the same name is not used; if the look or the reopening fails or takes over 5 s a new thread is made as before.
 - **The spend file can't stop her** (full code check, 2026-11-14): it is written whole beside itself and swapped in, so a crash mid-write can't leave half a file; a write that fails (a locked file, a full disk) is said once in the log, kept in memory and tried again. Before, a failed write on the one-minute timer ended the program. A total that isn't a number counts as over the cap.
 - Typed questions outside a session are answered one at a time, so each is checked against the day's cap after the one before it was counted.
@@ -36,6 +37,7 @@ The Discord side: logging in, the /angel commands, typed questions, a session pe
 - A typed stop is read with the bot's mention replaced by "Angel", so "@Angel stop" stops her like "Angel, stop".
 
 ## Checks
+- (dc-12) {unit} the voice link is told who is a person (not a bot) for the busy table, an opted-out player included; the session gets the check while she waits and her "I'm ready" writer (`test/bot.test.mjs`).
 - (dc-10) {live} a second /angel join on the same day posts in the thread the first one made.
 - (dc-11) {unit} today's open thread reused, today's closed one opened again after a leave, a new one when there is none or the look fails, and a failed join never deletes a reused thread (`test/bot.test.mjs`).
 - (dc-9) {unit} a spend file that can't be written, a total that isn't a number, typed questions one at a time (`test/bot.test.mjs`).

@@ -48,6 +48,16 @@ export const DEFAULTS = Object.freeze({
   replyWindowMs: 60000,
   /* she starts speaking as soon as her first spoken sentence is written, instead of when the whole answer is */
   speakAsWritten: true,
+  /* a busy table (0.1.3, Rhea's d-7): when people are talking as her answer is ready she waits up to busyFirstWaitMs
+     for a pause of busyPauseMs; if none comes she says a quick "I'm ready" in her own words, then waits for
+     busyGapMs of quiet or a go-ahead, and lets the spoken answer go after busyMaxHoldMs. Talk shorter than
+     busyBlipMs (a cough) doesn't count. false: she speaks at once, as before 0.1.3. */
+  busyTable: true,
+  busyBlipMs: 500,
+  busyPauseMs: 800,
+  busyFirstWaitMs: 2000,
+  busyGapMs: 1500,
+  busyMaxHoldMs: 60000,
   sessionThread: true,
   /* Angel stops listening and answering for the rest of the session past this */
   maxSessionDollars: 5,
@@ -133,7 +143,7 @@ export function loadConfig(file = CONFIG_PATH) {
     }
   }
   /* settings that only make sense above a floor: below it the default is used and named */
-  for (const [k, min] of Object.entries({ maxSessionDollars: 0, maxDailyDollars: 0, memoryMinutes: 1, maxAnswerTokens: 300, silenceMs: 200, maxUtteranceSeconds: 5, replyWindowMs: 0, followUpMs: 1000 })) {
+  for (const [k, min] of Object.entries({ maxSessionDollars: 0, maxDailyDollars: 0, memoryMinutes: 1, maxAnswerTokens: 300, silenceMs: 200, maxUtteranceSeconds: 5, replyWindowMs: 0, followUpMs: 1000, busyBlipMs: 0, busyPauseMs: 100, busyFirstWaitMs: 0, busyGapMs: 300, busyMaxHoldMs: 1000 })) {
     if (!(cfg[k] >= min)) { problems.push(`"${k}" should be ${min} or more, not ${JSON.stringify(cfg[k])}, so ${DEFAULTS[k]} is used`); cfg[k] = DEFAULTS[k]; }
   }
   for (const model of new Set([cfg.answerModel, cfg.gateModel])) {

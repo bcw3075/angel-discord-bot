@@ -213,11 +213,14 @@ export class AngelBot {
       /* the text channel first: if it can't be had, no voice connection is left open */
       const textChannel = i.channel ?? await i.client.channels.fetch(i.channelId).catch(() => null);
       if (!textChannel?.send) return i.editReply("I can't post in this channel. Check that I may View Channel and Send Messages here.");
+      const isBot = id => channel.guild.members.cache.get(id)?.user.bot ?? this.client?.users?.cache?.get(id)?.bot ?? false;
       const voice = new this.VoiceLinkClass({
         channel, log,
         silenceMs: cfg.silenceMs, maxUtteranceSeconds: cfg.maxUtteranceSeconds, echoGuardMs: cfg.echoGuardMs,
         /* other bots (Archivist, music bots) are never transcribed; a member not cached yet is checked by the user cache */
-        shouldListen: id => !this.optout.has(id) && !(channel.guild.members.cache.get(id)?.user.bot ?? this.client?.users?.cache?.get(id)?.bot ?? false),
+        shouldListen: id => !this.optout.has(id) && !isBot(id),
+        /* who counts for "is the table busy": people, opted out or not (only that they talk is used) */
+        isPerson: id => !isBot(id),
       });
       try { await voice.join(); }
       catch (e) { voice.leave(); return i.editReply(e.message); }
@@ -264,6 +267,7 @@ export class AngelBot {
         const session = new Session({
           cfg, voice, post, log,
           stt: this.services.stt, tts: this.services.tts, gate: this.services.gate,
+          hold: this.services.hold, readyLine: this.services.readyLine,
           answer: q => this.services.answer({ ...q, gmName: this.gmName(channel.guild) }),
           speakerOf: id => this.speakerOf(channel.guild, id),
           keytermCount: this.services.keytermCount,

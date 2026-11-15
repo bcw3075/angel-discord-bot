@@ -151,3 +151,46 @@ test("a connection that leaves Ready and doesn't come back, or is destroyed, tel
   await sleep(40);
   assert.equal(lost, 3, "nothing after our own leave");
 });
+
+test("(vo-6) who is talking goes to the floor, people only; her own speech is given with the clip playing now", async () => {
+  const lib = fakeLib();
+  let t = 1000;
+  const v = new VoiceLink({ channel, lib, log: quiet, now: () => t, shouldListen: id => id !== "out", isPerson: id => id !== "bot" });
+  await v.join();
+  const seen = [];
+  v.on("talking", e => seen.push(e));
+  lib.receiver.speaking.emit("start", "p1");
+  lib.receiver.speaking.emit("start", "bot");
+  lib.receiver.speaking.emit("start", "out");
+  t = 1500;
+  lib.receiver.speaking.emit("end", "p1");
+  assert.deepEqual(seen, [{ userId: "p1", speaking: true, at: 1000 }, { userId: "out", speaking: true, at: 1000 }, { userId: "p1", speaking: false, at: 1500 }],
+    "another bot isn't the table talking; a player who opted out still counts (nothing of theirs is heard)");
+  assert.ok(!lib.receiver.subscriptions.has("out"), "and isn't listened to");
+  assert.deepEqual(v.ownSpeech(), []);
+  v.speak([Buffer.from("a")]);
+  await sleep(1);
+  assert.deepEqual(v.ownSpeech(), [[1500, null]], "the clip playing now");
+  t = 2500; lib.player.setStatus("idle");
+  await sleep(1);
+  assert.deepEqual(v.ownSpeech(), [[1500, 2500]]);
+  v.leave();
+  lib.receiver.speaking.emit("start", "p1");
+  assert.equal(seen.length, 3, "nothing after leaving");
+});
+
+test("(vo-6) a start that counted always gets its end, even if who is a person changes in between (review of 0.1.3)", async () => {
+  const lib = fakeLib();
+  let bot = false;
+  const v = new VoiceLink({ channel, lib, log: quiet, isPerson: () => !bot });
+  await v.join();
+  const seen = [];
+  v.on("talking", e => seen.push([e.userId, e.speaking]));
+  lib.receiver.speaking.emit("start", "x");
+  bot = true;
+  lib.receiver.speaking.emit("end", "x");
+  lib.receiver.speaking.emit("start", "x");
+  lib.receiver.speaking.emit("end", "x");
+  assert.deepEqual(seen, [["x", true], ["x", false]]);
+  v.leave();
+});

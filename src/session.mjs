@@ -5,7 +5,8 @@
    the text channel) are passed in, so the whole flow runs in tests without Discord. */
 import { packetsToWav, createDecoder } from "./audio.mjs";
 import { Transcript } from "./transcript.mjs";
-import { mentionsAngel, isStopRequest, afterStop } from "./wake.mjs";
+import { mentionsAngel, isStopRequest, afterStop, parseHold } from "./wake.mjs";
+import { Floor } from "./floor.mjs";
 import { typedAnswer, shortQuestion } from "./answer.mjs";
 import { speakable, SentenceCutter } from "./speech.mjs";
 
@@ -24,14 +25,14 @@ export function echoOf(heard, said = "") {
 const DROPPED = Symbol("dropped");
 
 export class Session {
-  constructor({ cfg, voice, post, stt, tts, gate, answer, speakerOf, transcript = new Transcript(), keytermCount = 1, log, now = Date.now, newDecoder = createDecoder, dailyOver = () => false }) {
-    Object.assign(this, { cfg, voice, post, stt, tts, gate, answer, speakerOf, transcript, keytermCount, log, now, newDecoder, dailyOver });
+  constructor({ cfg, voice, post, stt, tts, gate, answer, speakerOf, hold = null, readyLine = null, transcript = new Transcript(), keytermCount = 1, log, now = Date.now, newDecoder = createDecoder, dailyOver = () => false }) {
+    Object.assign(this, { cfg, voice, post, stt, tts, gate, answer, speakerOf, hold, readyLine, transcript, keytermCount, log, now, newDecoder, dailyOver });
     this.startedAt = now();
     this.decoders = new Map();
     this.pending = new Map();   /* userId → { text, at, timer }: "Angel?" with the question still to come */
     this.checking = new Map();  /* userId → lines said while the check on their last line is still running */
     this.costs = { claude: 0, stt: 0, tts: 0 };
-    this.counts = { pieces: 0, skipped: 0, questions: 0, gateChecks: 0, merged: 0 };
+    this.counts = { pieces: 0, skipped: 0, questions: 0, gateChecks: 0, merged: 0, held: 0, letGo: 0 };
     /* each speaker's reply not yet begun, so a line they add can be answered with it (see `ask`) */
     this.open = new Map();
     this.capped = false;
@@ -41,10 +42,19 @@ export class Session {
     this.ackClips = null;
     this.heardOrder = new Map(); /* userId → the hand-over of their last piece of speech, so their lines are taken in the order said */
     this.lastWritten = null;     /* { at, text }: her last written answer, which the table can see and may ask about */
+    /* a busy table (Rhea, 2026-11-15, d-7): who is talking, from Discord's speaking signal; and the answer she is
+       holding for a gap, if any (answers are spoken one at a time, so at most one) */
+    this.floor = null;
+    this.holding = null;
+    this.readies = [];           /* her last few "I'm ready" lines, so the next one is different */
   }
 
   async start() {
     this.voice.on("speech", seg => { this.onSpeech(seg).catch(e => this.log.warn(`a piece of speech was lost: ${e.message}`)); });
+    if (this.cfg.busyTable !== false) {
+      this.floor = new Floor({ now: this.now, blipMs: this.cfg.busyBlipMs, ownSpeech: () => this.voice.ownSpeech?.() ?? this.voice.periods ?? [] });
+      this.voice.on("talking", ({ userId, speaking, at }) => { try { this.floor.talk(userId, speaking, at); } catch (e) { this.log.warn(`the floor lost a speaking change: ${e.message}`); } });
+    }
     if (this.cfg.speak && this.cfg.ackPhrase) {
       try { this.ackClips = await this.tts(this.cfg.ackPhrase); this.costs.tts += this.ttsCost(this.cfg.ackPhrase); }
       catch (e) { this.log.warn(`couldn't make the "checking" phrase: ${e.message}`); }
@@ -132,6 +142,11 @@ export class Session {
   async onLine(line, until = line.at, more = false, released = null) {
     if (isStopRequest(line.text)) { this.stop(line.at); this.log.info(`${line.speaker} said stop: she stops`); return; }
     const uid = line.userId;
+    /* she is holding an answer for a gap: every line said meanwhile, by anyone, may be a go-ahead, a "hold on", a stop
+       or a question (Rhea, d-7). A line still being put together (a long question, "Angel?" with the rest to come)
+       goes the usual way. */
+    const h = this.holding;
+    if (h && !more && !released && line.at > h.at && !this.pending.has(uid) && !this.checking.has(uid)) return this.onHeldLine(h, line, until);
     /* the person she just answered may reply without her name for a little while after she stops talking (Rhea,
        2026-11-14: "you replied first but not when I replied to you"); the check still decides it was for her */
     const r = this.replyTo;
@@ -250,12 +265,15 @@ export class Session {
       /* a deferred /angel ask must still get an answer, or Discord shows "thinking…" for 15 minutes */
       return (reply ?? this.post).send(this.capMessage()).catch(() => {});
     }
+    /* someone else asking her, typed, while she holds an answer: a go-ahead, as a spoken question is (review of 0.1.3) */
+    if (this.holding && userId !== this.holding.userId) this.holding.poke("go");
     return this.ask({ question: text, asker, role, via: "text", reply, at: line.at });
   }
 
   ask(q) {
     this.counts.questions++;
     let asked = { at: this.now(), ...q };
+    let into = null; /* the reply this one replaces: it takes that one's place in line (Rhea, d-7) */
     /* the same person said more before she began to speak her reply to them: that reply is dropped and everything they
        said is answered as one (Rhea, 2026-11-15: "Interesting." then "How hard is it to search?" got two replies, the
        first talking past her question; "Answer all in one"). Once she has begun speaking, the new line waits its turn. */
@@ -265,6 +283,7 @@ export class Session {
       if (prev && !prev.started && !prev.superseded && !this.ended && !this.stoppedSince(prev.at) && !this.overCap()) {
         prev.superseded = true;
         prev.drop();
+        into = prev;
         this.counts.merged++;
         this.log.info(`${q.asker} said more before she began her reply: answering it all as one`);
         asked = {
@@ -281,23 +300,35 @@ export class Session {
           noAck: prev.ackPlayed,
         };
       }
-      let drop;
-      const entry = { question: asked.question, meaning: asked.meaning ?? "", chat: asked.chat, unnamed: asked.unnamed, turn: asked.turn, until: asked.until, at: asked.at,
-        started: false, superseded: false, ackPlayed: asked.noAck === true, dropped: new Promise(r => { drop = r; }) };
-      entry.drop = () => drop(DROPPED);
-      this.open.set(uid, entry);
-      asked = { ...asked, entry };
+      asked = this.withEntry(uid, asked);
+      /* a merged question keeps the first one's place in line, ahead of another player's question already waiting
+         (Rhea, 2026-11-15, d-7; 0.1.2 put it at the back): the first one's turn runs it */
+      if (into) { into.replacement = asked; return this.answering; }
     }
     this.answering = this.answering.then(() => this.runAsk(asked)).catch(e => this.log.error(`answering failed: ${e.message}`));
     return this.answering;
   }
 
-  async runAsk(q) {
-    try { return await this.runAskInner(q); }
-    finally { if (q.entry && this.open.get(q.userId) === q.entry) this.open.delete(q.userId); }
+  /* the speaker's open reply, so a line they add before she begins can be answered with it */
+  withEntry(uid, asked) {
+    let drop;
+    const entry = { question: asked.question, meaning: asked.meaning ?? "", chat: asked.chat, unnamed: asked.unnamed, turn: asked.turn, until: asked.until, at: asked.at,
+      started: false, superseded: false, ackPlayed: asked.noAck === true, dropped: new Promise(r => { drop = r; }), replacement: null };
+    entry.drop = () => drop(DROPPED);
+    this.open.set(uid, entry);
+    return { ...asked, entry };
   }
 
-  async runAskInner({ question, meaning = "", asker, via, reply, at, userId = null, until = null, chat = false, turn = 0, unnamed = false, ack = "", noAck = false, entry = null }) {
+  /* one turn in line: the question, then whatever replaced it (a merged question runs in its place) */
+  async runAsk(q) {
+    for (let cur = q; cur; cur = cur.entry?.replacement ?? null) {
+      try { await this.runAskInner(cur); }
+      catch (e) { this.log.error(`answering failed: ${e.message}`); }
+      finally { if (cur.entry && this.open.get(cur.userId) === cur.entry) this.open.delete(cur.userId); }
+    }
+  }
+
+  async runAskInner({ question, meaning = "", asker, role = "player", via, reply, at, userId = null, until = null, chat = false, turn = 0, unnamed = false, ack = "", noAck = false, entry = null }) {
     const target = reply ?? this.post;
     /* they said more before its turn came: answered together with what they said next */
     if (entry?.superseded) return;
@@ -324,11 +355,16 @@ export class Session {
       : target.send(`**${asker} asked:** ${shortQuestion(shown)}\n-# Looking it up…`).catch(e => { this.log.warn(`couldn't post in the channel: ${e.message}`); return null; });
     /* everything she says for this question is handed to the voice in order, through this chain */
     let line = Promise.resolve();
-    if (!quiet && !noAck && this.cfg.speak && this.cfg.ackPhrase !== "") {
+    let ackText = "";
+    /* the table is busy as she takes the question up: no quick reaction, so she cuts in at most once for it (Rhea, d-7) */
+    const busyNow = !quiet && !noAck && this.cfg.speak && this.cfg.ackPhrase !== "" && this.floor?.busy() === true;
+    if (busyNow) this.log.info(`the table is busy as ${asker}'s question is taken up: no quick reaction`);
+    if (!quiet && !noAck && this.cfg.speak && this.cfg.ackPhrase !== "" && !busyNow) {
       if (entry) entry.ackPlayed = true;
       /* her own quick reaction to this question (the check writes it), else one of a few, so it isn't the same line
          every time (Rhea, 2026-11-14: "the 'one sec, let me check' on every reply is getting repetitive") */
       const words = ack || ACKS[this.counts.questions % ACKS.length];
+      ackText = words;
       const made = this.tts(words);
       line = made.then(clips => { this.costs.tts += this.ttsCost(words); if (!this.ended && !this.stoppedSince(at)) this.voice.speak(clips); })
         .catch(() => { if (this.ackClips && !this.ended && !this.stoppedSince(at)) this.voice.speak(this.ackClips); });
@@ -340,6 +376,11 @@ export class Session {
     const times = {};      /* for the log: when the first words were written, when her voice started */
     let lastPlayed = null; /* resolves when the last piece has played (or was stopped) */
     let clipCount = 0;      /* clips of this answer handed to the voice, for the gaps in the timing line */
+    /* before the first piece plays: is the table busy? (Rhea, d-7) "go", or why she won't say it: "letgo" (no gap
+       came), "stop", "merge" (the asker said more: one fresh answer to all of it), "end" */
+    const qc = { question, meaning, asker, role, via, at, userId, until, chat, turn, unnamed, entry, get ackText() { return ackText; } };
+    let floor = null;
+    let floorAt = null;
     const sayPiece = text => {
       const spoken = speakable(text);
       /* the cap is asked before she begins an answer, not in the middle of one: a sentence of voice costs a
@@ -358,6 +399,12 @@ export class Session {
         try { clips = await made; this.costs.tts += this.ttsCost(spoken); }
         catch (e) { this.log.warn(`couldn't speak the answer: ${e.message}`); return; }
         if (this.ended || this.stoppedSince(at)) return;
+        if (!floor) {
+          try { floor = await this.takeFloor(qc); }
+          catch (e) { this.log.warn(`couldn't judge whether the table is busy (${e.message}): speaking`); floor = "go"; }
+          floorAt = this.now();
+        }
+        if (floor !== "go" || this.ended || this.stoppedSince(at)) return;
         try { lastPlayed = this.voice.speak(clips, { onStart: () => { times.voice ??= this.now(); } }); clipCount += clips.length; }
         catch (e) { this.log.warn(`couldn't speak the answer: ${e.message}`); }
       });
@@ -378,7 +425,7 @@ export class Session {
        line, no reply window; its cost is counted when its call ends. Past this point the reply can't be dropped. */
     const answeringRef = {};
     const dropNow = got => {
-      if (!(entry?.superseded && !entry.started)) {
+      if (!(entry?.superseded && !entry.started) && !entry?.mergedAway) {
         if (entry) entry.started = true; /* the answer is in hand: from here it is hers to give (review 10) */
         return false;
       }
@@ -444,21 +491,28 @@ export class Session {
 
     /* the check may call a rules question small talk: one that looked something up is posted anyway */
     let posted = false;
-    const post = async () => {
+    let postedMsg = null, typedText = "";
+    const LET_GO_NOTE = "\n-# (The table was busy, so I didn't get a gap to say this aloud.)";
+    const post = async (note = "") => {
       if (posted) return;
       posted = true;
       const typed = typedAnswer({ asker, question: shown, say: result.details ?? result.say, sources: result.sources, unchecked: result.failedLookups > 0 });
+      typedText = typed;
       /* kept for the next question only when it is a checked rules answer: not small talk, not one a lookup failed for */
       if (!result.failed && result.details && !chat && !result.cut && !result.detailsLost && result.lookups > 0 && !(result.failedLookups > 0)) this.lastWritten = { at: this.now(), text: result.details };
       const placeholder = await placed;
-      try { if (placeholder?.edit) await placeholder.edit(typed); else await target.send(typed); }
+      try { if (placeholder?.edit) { await placeholder.edit(typed + note); postedMsg = placeholder; } else postedMsg = await target.send(typed + note); }
       catch (e) { this.log.warn(`couldn't post the answer: ${e.message}`); }
     };
     if (!quiet || result.failed || result.lookups > 0 || result.sources?.length) await post();
-    /* in the transcript at the moment she began to say it */
-    this.transcript.add({ at: times.written ?? this.now(), speaker: "Angel", role: "angel", text: heard, kind: "angel" });
-    this.lastSaid = heard;
     await line.catch(e => this.log.warn(`speaking failed: ${e.message}`));
+    /* in the transcript at the moment she began to say it (after a wait for a gap, when the gap came); not at all when
+       she never got to say it */
+    const unsaid = floor !== null && floor !== "go";
+    if (!unsaid) {
+      this.transcript.add({ at: floor === "go" && floorAt && floorAt > (times.written ?? 0) ? floorAt : (times.written ?? this.now()), speaker: "Angel", role: "angel", text: heard, kind: "angel" });
+      this.lastSaid = heard;
+    }
     const since = t => (t == null ? "n/a" : `${((t - began) / 1000).toFixed(1)} s`);
     /* the silences between the clips of this answer, so a choppy-sounding one can be told apart: a long gap is a
        sentence whose voice wasn't ready yet, a short one is the join between clips (Rhea, 2026-11-15) */
@@ -475,6 +529,21 @@ export class Session {
        small-talk reply that was only going to be spoken is typed instead, unless she was told to stop */
     /* the limit reached closes their window whether or not her voice got it out (review 9) */
     if (via === "voice" && userId && run >= 3 && this.replyTo?.userId === userId) this.replyTo = null;
+    if (floor === "letgo") {
+      /* no gap came in time: the written answer says so, and the asker can still ask "what was it?" without her name */
+      startLog();
+      if (posted) { if (postedMsg?.edit) await postedMsg.edit(typedText + LET_GO_NOTE).catch(e => this.log.warn(`couldn't note the post: ${e.message}`)); }
+      else await post(LET_GO_NOTE);
+      if (via === "voice" && userId && run < 3 && !this.ended && !this.stoppedSince(at)) {
+        this.replyTo = { userId, from: this.now(), turn: run };
+        this.log.info(`${asker} can reply without her name for ${Math.round(this.cfg.replyWindowMs / 1000)} s`);
+      }
+      return;
+    }
+    /* replaced by a fuller question while she waited: its post goes, the fuller answer is the one (review of 0.1.3) */
+    if (floor === "merge") { const m = postedMsg ?? await placed; m?.delete?.().catch(() => {}); }
+    /* stopped, replaced by a fuller question, or the session ended while she waited for a gap: nothing more */
+    if (unsaid) { startLog(); return; }
     if (!lastPlayed) {
       if (this.cfg.speak) startLog();
       if (quiet && !this.stoppedSince(at)) await post();
@@ -491,6 +560,170 @@ export class Session {
     }).catch(() => {});
   }
 
+  /* A busy table (Rhea, 2026-11-15, d-7: "she cuts in with a quick, I'm ready style responce and then waits for a gap
+     or somone to give some type of go ahead"). Called once per answer, before its first piece plays. Free when the
+     table is quiet: Discord's speaking signal decides, nothing is heard or paid for.
+     - Someone talking: she waits up to busyFirstWaitMs for a pause of busyPauseMs; if one comes she just answers.
+     - Still talking: a quick "I'm ready" in her own words (one tiny call writes it), then she waits for busyGapMs of
+       quiet or a go-ahead ("go ahead", her name, another player's question; judged in `onHeldLine`).
+     - "Hold on" (before or after the cut-in): only a go-ahead releases her; she doesn't cut in after it.
+     - No opening within busyMaxHoldMs of nonstop talk: she lets the spoken answer go ("letgo").
+     Returns "go", "letgo", "stop", "merge" or "end". */
+  async takeFloor(qc) {
+    const f = this.floor;
+    if (!f || this.cfg.busyTable === false || !this.cfg.speak || this.ended || !f.busy()) return "go";
+    let signalled;
+    const h = { ...qc, since: this.now(), mode: "gap", cutIn: "", signal: null, waiter: null, signalled: new Promise(r => { signalled = r; }) };
+    /* "wait" changes how she waits; anything else ends the wait, and the first one stands */
+    h.poke = reason => {
+      if (reason === "wait") { if (!h.signal) { h.mode = "invite"; h.waiter?.wake("wait"); } return; }
+      if (h.signal) return;
+      h.signal = reason;
+      signalled(reason);
+      h.waiter?.wake(reason);
+    };
+    this.holding = h;
+    this.counts.held++;
+    const who = qc.asker;
+    this.log.info(`the table is busy as ${who}'s answer is ready: waiting for a gap`);
+    const deadline = h.since + this.cfg.busyMaxHoldMs;
+    const left = () => Math.max(0, deadline - this.now());
+    const wait = (needMs, opts) => {
+      if (h.signal) return Promise.resolve(h.signal);
+      const w = f.waitForQuiet(needMs, opts);
+      h.waiter = w;
+      return w.promise.finally(() => { if (h.waiter === w) h.waiter = null; });
+    };
+    /* her words are written while she waits, so they are ready if she needs them; a pause that comes first leaves
+       them unsaid (a fraction of a cent) */
+    const ready = !this.readyLine ? Promise.reject(new Error("nothing to write it")) : Promise.resolve()
+      .then(() => this.readyLine({ question: qc.meaning || qc.question, asker: who, earlier: this.readies.slice(-5) }))
+      .then(async r => {
+        this.costs.claude += r?.dollars ?? 0;
+        if (!r?.text) throw new Error("no words came back");
+        const clips = await this.tts(r.text);
+        this.costs.tts += this.ttsCost(r.text);
+        return { text: r.text, clips };
+      });
+    ready.catch(() => {});
+    try {
+      /* 1. a moment for a natural pause */
+      let r = h.mode === "invite" ? "wait" : await wait(this.cfg.busyPauseMs, { maxMs: Math.min(this.cfg.busyFirstWaitMs, left()) });
+      if (r === "quiet") { this.log.info(`a pause came: ${who}'s answer goes ahead`); return "go"; }
+      if (h.signal) return this.held(h);
+      /* 2. still talking: she cuts in, unless told to hold on, or they stopped as the moment passed */
+      let since = -Infinity;
+      if (h.mode !== "invite") {
+        if (!f.busy()) { this.log.info(`the talk stopped: ${who}'s answer goes ahead`); return "go"; }
+        /* while her words are written and voiced, a pause or the time limit still counts (review of 0.1.3) */
+        const watch = f.waitForQuiet(this.cfg.busyPauseMs, { maxMs: left() });
+        h.waiter = watch;
+        const got = await Promise.race([ready.catch(e => ({ failed: e })), h.signalled, watch.promise.then(r => ({ floor: r }))]);
+        watch.wake("done");
+        if (h.waiter === watch) h.waiter = null;
+        if (h.signal) return this.held(h);
+        if (got?.floor === "quiet") { this.log.info(`a pause came: ${who}'s answer goes ahead`); return "go"; }
+        if (got?.floor === "timeout") { this.counts.letGo++; this.log.info(`no gap came in ${Math.round(this.cfg.busyMaxHoldMs / 1000)} s: ${who}'s spoken answer is let go (it is in the thread)`); return "letgo"; }
+        if (got?.floor) { /* "hold on" while her words were written: no cut-in */ }
+        else if (got?.failed) this.log.warn(`couldn't make her "I'm ready" (${got.failed.message}): waiting without it`);
+        else if (h.mode !== "invite" && !this.ended && !this.stoppedSince(qc.at)) {
+          if (!f.busy()) { this.log.info(`the talk stopped: ${who}'s answer goes ahead`); return "go"; }
+          h.cutIn = got.text;
+          this.readies.push(got.text);
+          if (this.readies.length > 10) this.readies.shift();
+          const cutAt = this.now();
+          this.log.info(`the table is still talking: she says she's ready, then waits for a gap or a go-ahead`);
+          await this.voice.speak(got.clips);
+          this.transcript.add({ at: cutAt, speaker: "Angel", role: "angel", text: got.text, kind: "angel" });
+          since = this.now();
+        }
+      }
+      /* 3. a gap (not after "hold on") or a go-ahead, until the time is up */
+      for (;;) {
+        if (h.signal) return this.held(h);
+        if (this.ended) return "end";
+        if (left() <= 0) break;
+        r = await wait(h.mode === "invite" ? Infinity : this.cfg.busyGapMs, { maxMs: left(), since });
+        if (r === "wait") { this.log.info(`told to hold on: ${who}'s answer waits for a go-ahead`); continue; }
+        if (r === "quiet") { this.log.info(`a gap came: ${who}'s answer goes ahead`); return "go"; }
+        if (r === "timeout") break;
+      }
+      if (h.signal) return this.held(h);
+      this.counts.letGo++;
+      this.log.info(`no gap came in ${Math.round(this.cfg.busyMaxHoldMs / 1000)} s: ${who}'s spoken answer is let go (it is in the thread)`);
+      return "letgo";
+    } finally {
+      if (this.holding === h) this.holding = null;
+      h.waiter?.wake("end");
+    }
+  }
+
+  /* what ended a hold early, as takeFloor returns it */
+  held(h) {
+    const why = { go: "a go-ahead", stop: "a stop", merge: "more to the question", end: "the session ending" }[h.signal] ?? h.signal;
+    this.log.info(`${h.asker}'s held answer: ${why}`);
+    return h.signal === "go" ? "go" : h.signal;
+  }
+
+  /* A line said while she holds an answer: a go-ahead, a "hold on", a stop, a question, or nothing for her. */
+  async onHeldLine(h, line, until) {
+    const uid = line.userId;
+    /* her own "I'm ready" coming back through a microphone */
+    /* her own words for this question coming back through a microphone: the quick reaction or the "I'm ready" */
+    const mine = `${h.ackText ?? ""} ${h.cutIn}`.trim();
+    if (mine && this.voice.inEchoWindow(line.at) && echoOf(line.text, mine)) return;
+    if (this.overCap()) return;
+    const context = Transcript.format(this.transcript.before(line, 7).slice(0, -1));
+    let v;
+    if (this.hold) {
+      this.counts.gateChecks++;
+      v = await this.hold({ contextText: context, lastText: `${line.speaker}: ${line.text}`, bareText: line.text, asker: h.asker, question: h.meaning || h.question, cutIn: h.cutIn });
+    } else v = parseHold("", line.text);
+    if (typeof v.dollars === "number") this.costs.claude += v.dollars;
+    if (v.error) this.log.warn(`the check while she waits failed (${v.error}); the plain rule decided`);
+    this.log.info(`check on ${line.speaker}'s line while she waits: ${{ go: "a go-ahead", wait: "hold on", stop: "a stop", ask: v.chat ? "a question, small talk" : "a question", none: "not for her" }[v.kind] ?? v.kind}`);
+    if (this.ended) return;
+    /* still holding the same answer, nothing has ended the wait yet */
+    const live = this.holding === h && !h.signal;
+    /* "never mind" about the held answer drops only that one: another player's question waiting behind it is still
+       answered (review of 0.1.3). After the hold it is a stop like any the check reads, with the reply window kept. */
+    if (v.kind === "stop") { if (live) h.poke("stop"); else this.stop(line.at, { keepReplyWindow: true }); return; }
+    if (v.kind === "go") {
+      if (live) h.poke("go");
+      /* "Angel?" from someone else may be a call with their question still to come: kept, as any "Angel?" is
+         (review of 0.1.3: the question said next had no name and was dropped) */
+      if (uid && uid !== h.userId && mentionsAngel(line.text) && !this.pending.has(uid)) {
+        const timer = setTimeout(() => this.pending.delete(uid), this.cfg.followUpMs);
+        timer.unref?.();
+        this.pending.set(uid, { text: line.text, at: this.now(), timer, byName: true });
+      }
+      return;
+    }
+    if (v.kind === "wait") { if (live) h.poke("wait"); return; }
+    if (v.kind !== "ask") return;
+    /* the asker adds to their question: one fresh answer to all of it, in this one's place (Rhea, d-7 and d-6) */
+    if (live && uid && uid === h.userId && h.via === "voice" && h.entry && !this.stoppedSince(h.at)) {
+      this.counts.questions++;
+      this.counts.merged++;
+      this.log.info(`${line.speaker} said more while she waited: answering it all as one`);
+      const merged = this.withEntry(uid, {
+        question: `${h.question} ${line.text}`,
+        meaning: h.meaning || v.question ? `${h.meaning || h.question} ${v.question || line.text}` : "",
+        asker: h.asker, role: h.role, via: "voice", at: h.at, userId: uid, until: until ?? h.until,
+        chat: h.chat === true && v.chat === true, unnamed: h.unnamed === true, turn: h.turn ?? 0, noAck: true,
+      });
+      h.entry.replacement = merged;
+      /* the held answer is dropped even if still being written, and its post taken away: one answer to all of it */
+      h.entry.mergedAway = true;
+      h.entry.drop();
+      h.poke("merge");
+      return;
+    }
+    /* anyone else asking her counts as a go-ahead: the held answer first, then theirs */
+    if (live) h.poke("go");
+    this.ask({ question: line.text, meaning: v.question || "", asker: line.speaker, role: line.role, via: "voice", at: line.at, userId: uid, until, chat: v.chat === true, turn: 0, unnamed: false });
+  }
+
   /* "Angel, stop": cut her off, drop questions still waiting, and don't speak an answer still being looked up.
      `at` is when the stop was said (a typed or /angel stop: now). */
   stop(at = this.now(), { keepReplyWindow = false } = {}) {
@@ -499,6 +732,8 @@ export class Session {
     for (const p of this.pending.values()) clearTimeout(p.timer);
     this.pending.clear();
     this.voice.stopSpeaking();
+    /* a stop said after the question she is holding drops its spoken answer (the written one stays) */
+    if (this.holding && at > this.holding.at) this.holding.poke("stop");
   }
 
   status() {
@@ -510,6 +745,7 @@ export class Session {
     if (this.ended) return this.status();
     this.ended = true;
     this.replyTo = null;
+    this.holding?.poke("end");
     for (const p of this.pending.values()) clearTimeout(p.timer);
     this.pending.clear();
     this.voice.leave();

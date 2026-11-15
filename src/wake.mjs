@@ -122,3 +122,83 @@ export async function gate({ claude, model, contextText, lastText, bareText = la
     return decision;
   }
 }
+
+/* While Angel holds an answer at a busy table (Rhea, 2026-11-15, design d-7): what a line said meanwhile means for her.
+   Only lines said while she waits are checked, so it costs a fraction of a cent. */
+export const HOLD_SYSTEM = `You watch the transcript of a tabletop game played over voice chat. The table has an AI assistant called Angel who answers rules questions. The transcriber sometimes writes her name as Angela, Angie or angle. Angel has an answer ready but people are talking, so she is waiting for a chance to say it (she may already have said, briefly, that she is ready).
+Decide what the LAST line means for her. Reply with JSON only, no other text:
+{"kind": "go" or "wait" or "stop" or "ask" or "none", "chat": true or false, "question": "..."}
+- go: someone invites her to speak now ("go ahead", "yeah?", "what'd you find?", "okay Angel", "sure, let's hear it", her name on its own).
+- wait: someone asks her to hold off for now but still wants the answer ("hold on", "not now", "one sec, Angel", "after this", "in a minute").
+- stop: they don't want the answer any more ("never mind", "forget it", "stop", "we sorted it out", "don't worry about it").
+- ask: a new question for Angel, or more added to the question she is holding ("oh, and with a shield?", "Angel, what about flanking?"). Use the earlier lines to tell.
+- none: anything else: the table talking among themselves, the game, narration, or talk about Angel that isn't to her. "angel" can be part of the game (an angel creature, an angelic heritage, a statue).
+- chat: for "ask", true when it is small talk that needs no rules lookup; false otherwise.
+- question: for "ask", what they want from her in one sentence of at most 40 words, written to stand on its own using the earlier lines, as the question itself ("Does that work with a shield?"); "" otherwise.`;
+
+export function holdUser(contextLines, last, { asker = "someone", question = "", cutIn = "" } = {}) {
+  const note = `\n\n(Angel is holding her answer to ${asker}'s question${question ? `: "${String(question).slice(0, 200)}"` : ""}.${cutIn ? ` She said: "${cutIn}"` : ""})`;
+  return `Earlier lines:\n${contextLines || "(none)"}\n\nLAST line:\n${last}${note}`;
+}
+
+const HOLD_KINDS = new Set(["go", "wait", "stop", "ask", "none"]);
+/* a plain alternation of fixed words: no backtracking on what the table says */
+const HOLD_WORDS = /\b(?:hold on|hang on|wait|not now|not yet|one sec|one second|a sec|a second|in a minute|after this)\b/i;
+
+/* The model's reply → { kind, chat, question }. When it can't be read, the plain rule: a stop phrase stops her, her
+   name with a question mark is a question, her name otherwise is a go-ahead, anything else is nothing for her. */
+export function parseHold(text, lastLineText = "") {
+  const m = String(text).match(/\{[\s\S]*\}/);
+  if (m) {
+    try {
+      const j = JSON.parse(m[0]);
+      if (HOLD_KINDS.has(j.kind)) return { kind: j.kind, chat: j.chat === true, question: typeof j.question === "string" ? j.question.trim() : "", fallback: false };
+    } catch { /* fall through */ }
+  }
+  const t = String(lastLineText).slice(0, 300);
+  if (isStopRequest(t)) return { kind: "stop", chat: false, question: "", fallback: true };
+  if (!mentionsAngel(t)) return { kind: "none", chat: false, question: "", fallback: true };
+  /* review of 0.1.3: "Hold on Angel." was read as a go-ahead and "Angel?" as a question */
+  if (HOLD_WORDS.test(t)) return { kind: "wait", chat: false, question: "", fallback: true };
+  /* her name and little else ("Angel?", "Okay Angel, go") invites her; her name with a question is a question */
+  const words = (t.replace(new RegExp(NAME, "gi"), " ").match(/[a-z0-9']+/gi) ?? []).filter(w => !/^(hey|ok|okay|so|um+|uh+|oh|yeah|yes|sure|go|ahead|right)$/i.test(w));
+  if (words.length <= 1 || !/\?/.test(t)) return { kind: "go", chat: false, question: "", fallback: true };
+  return { kind: "ask", chat: false, question: t, fallback: true };
+}
+
+export async function holdCheck({ claude, model, contextText, lastText, bareText = lastText, asker, question, cutIn }) {
+  try {
+    const json = await claude.create({
+      model,
+      max_tokens: 400,
+      system: [{ type: "text", text: HOLD_SYSTEM, cache_control: { type: "ephemeral" } }],
+      messages: [{ role: "user", content: holdUser(contextText, lastText, { asker, question, cutIn }) }],
+    }, { timeoutMs: 8000, retries: 1, maxWaitMs: 1500 });
+    const text = (json.content ?? []).filter(b => b.type === "text").map(b => b.text).join("");
+    if (json.stop_reason === "max_tokens") return { ...parseHold("", bareText), error: "its reply was cut off", dollars: claude.cost(model, json.usage) };
+    return { ...parseHold(text, bareText), dollars: claude.cost(model, json.usage) };
+  } catch (e) {
+    return { ...parseHold("", bareText), error: e.message };
+  }
+}
+
+/* Her "I'm ready" when the table is busy: her own few words each time, never a stock line (Rhea, 2026-11-15: "please
+   try not scripting things like this so it's always the same thing"). Written only when she needs to cut in. */
+export const READY_SYSTEM = `You write one short spoken line for Angel, an AI assistant at a tabletop game played over voice chat. She has the answer to a rules question ready, but people at the table are still talking. Write the few words she says to cut in politely and let them know she has it, so they can give her the floor when they're ready: 2 to 8 words, in her voice (warm, quick, a little sassy), fitting the question. Never the answer itself, never a question about the rules. Make it different from any earlier ones you are shown. Reply with only the words she says.`;
+
+export function cleanReady(text) {
+  const t = String(text).replace(/\s+/g, " ").trim().replace(/^["'“”‘’]+|["'“”‘’]+$/g, "").trim();
+  if (!t || t.length > 90 || t.split(" ").length > 12) return "";
+  return t;
+}
+
+export async function readyLine({ claude, model, question, asker, earlier = [] }) {
+  const json = await claude.create({
+    model,
+    max_tokens: 60,
+    system: READY_SYSTEM,
+    messages: [{ role: "user", content: `${asker}'s question: ${String(question).slice(0, 300)}${earlier.length ? `\n\nHer earlier ones (say something else): ${earlier.map(e => `"${e}"`).join(", ")}` : ""}` }],
+  }, { timeoutMs: 6000, retries: 0 });
+  const text = cleanReady((json.content ?? []).filter(b => b.type === "text").map(b => b.text).join(""));
+  return { text, dollars: claude.cost(model, json.usage) };
+}

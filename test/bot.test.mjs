@@ -60,6 +60,8 @@ function makeBot(extra = {}) {
     stt: async () => ({ text: "", seconds: 0 }),
     tts: async () => [],
     gate: async () => ({ toAngel: false }),
+    hold: async () => ({ kind: "none" }),
+    readyLine: async () => ({ text: "Ready." }),
     answer: async q => { answers.push(q); return { say: `Answer: ${q.question}`, sources: [], dollars: 0.01 }; },
   };
   const bot = new AngelBot({ cfg: { ...DEFAULTS, ackPhrase: "", ...extra }, log: quiet, services, dataDir: dir, speakersFile: path.join(dir, "speakers.json"), VoiceLinkClass: FakeVoiceLink });
@@ -78,6 +80,11 @@ test("/angel join from a voice channel starts a session and tells the table she'
   const v = FakeVoiceLink.made.at(-1);
   assert.equal(v.opts.shouldListen("p1"), true);
   assert.equal(v.opts.shouldListen("botty"), false, "other bots are not transcribed");
+  /* (dc-12) who counts for a busy table: people, not other bots */
+  assert.equal(v.opts.isPerson("p1"), true);
+  assert.equal(v.opts.isPerson("botty"), false, "another bot talking isn't the table being busy");
+  assert.equal(bot.sessions.get("g1").session.hold, bot.services.hold, "the session gets the check while she waits");
+  assert.equal(bot.sessions.get("g1").session.readyLine, bot.services.readyLine, "and her 'I'm ready' writer");
   assert.ok(fs.existsSync(path.join(dir, "sessions")), "the session's transcript folder is made");
   const again = interaction(w, "join");
   await bot.onInteraction(again);
@@ -194,6 +201,7 @@ test("/angel iam names a player's character; /angel optout stops and restarts th
   assert.match(out.replies[0].content, /won't transcribe your voice/);
   assert.deepEqual(FakeVoiceLink.made.at(-1).ignored, ["p1"]);
   assert.equal(FakeVoiceLink.made.at(-1).opts.shouldListen("p1"), false);
+  assert.equal(FakeVoiceLink.made.at(-1).opts.isPerson("p1"), true, "(dc-12) a player who opted out still counts as talking");
   const back = interaction(w, "optout");
   await bot.onInteraction(back);
   assert.match(back.replies[0].content, /transcribe your voice again/);

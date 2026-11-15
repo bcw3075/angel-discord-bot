@@ -1,6 +1,7 @@
 /* Angel's place in the voice channel: joining (with Discord's required end-to-end encryption, handled by
    @discordjs/voice and @snazzah/davey), listening to each speaker separately, and speaking.
-   Emits "speech" { userId, packets, startedAt, final } for each piece of speech, and "lost" when the connection
+   Emits "speech" { userId, packets, startedAt, final } for each piece of speech, "talking" { userId, speaking, at }
+   when a person starts or stops talking (Discord's speaking signal, for the floor), and "lost" when the connection
    can't be recovered. The @discordjs/voice functions come in as `lib`, so tests can stand in for Discord. */
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
@@ -8,9 +9,9 @@ import * as discordVoice from "@discordjs/voice";
 import { gather } from "./capture.mjs";
 
 export class VoiceLink extends EventEmitter {
-  constructor({ channel, silenceMs = 900, maxUtteranceSeconds = 30, echoGuardMs = 2500, shouldListen = () => true, log, lib = discordVoice, now = Date.now, reconnectMs = 30000 }) {
+  constructor({ channel, silenceMs = 900, maxUtteranceSeconds = 30, echoGuardMs = 2500, shouldListen = () => true, isPerson = () => true, log, lib = discordVoice, now = Date.now, reconnectMs = 30000 }) {
     super();
-    Object.assign(this, { channel, silenceMs, maxUtteranceSeconds, echoGuardMs, shouldListen, log, lib, now, reconnectMs });
+    Object.assign(this, { channel, silenceMs, maxUtteranceSeconds, echoGuardMs, shouldListen, isPerson, log, lib, now, reconnectMs });
     this.watchdog = null;
     this.closed = false;
     this.speakingNow = false;
@@ -19,6 +20,7 @@ export class VoiceLink extends EventEmitter {
     this.playToken = 0;
     this.queue = Promise.resolve();
     this.listeners = new Map();
+    this.talkers = new Set(); /* people marked talking, so their end is passed on */
   }
 
   async join() {
@@ -57,7 +59,26 @@ export class VoiceLink extends EventEmitter {
     this.player.on("error", e => this.log.warn(`voice playback error: ${e.message}`));
     this.connection.subscribe(this.player);
     this.receiver = this.connection.receiver;
-    this.receiver.speaking.on("start", userId => this.listen(userId));
+    this.receiver.speaking.on("start", userId => { this.talking(userId, true); this.listen(userId); });
+    this.receiver.speaking.on("end", userId => this.talking(userId, false));
+  }
+
+  /* who is talking, for the floor: people only (another bot's sound isn't the table talking); a player who opted out
+     still counts, since only the fact that they are talking is used, never what they say */
+  talking(userId, speaking) {
+    if (this.closed) return;
+    /* decided once, when they start: an end is passed on for whoever's start was (review of 0.1.3: a member not yet
+       cached counted as a person at the start and as a bot at the end, and the table stayed busy for good) */
+    if (speaking) {
+      try { if (!this.isPerson(userId)) return; } catch { return; }
+      this.talkers.add(userId);
+    } else if (!this.talkers.delete(userId)) return;
+    this.emit("talking", { userId, speaking, at: this.now() });
+  }
+
+  /* her own speech, for the floor: the clips she played lately and the one playing now ([start, null]) */
+  ownSpeech() {
+    return this.speakingNow ? [...this.periods, [this.speakingSince, null]] : this.periods;
   }
 
   /* Subscribe to one speaker until they pause; then again when they next speak. */
