@@ -120,7 +120,7 @@ export class Session {
     this.checking.set(uid, later);
     this.counts.gateChecks++;
     let decision;
-    try { decision = await this.gate({ contextText: context, lastText: `${line.speaker}: ${text}`, bareText: text }); }
+    try { decision = await this.gate({ contextText: context, lastText: `${line.speaker}: ${text}`, bareText: text, replying: replying && !byName }); }
     finally { if (this.checking.get(uid) === later) this.checking.delete(uid); }
     if (typeof decision.dollars === "number") this.costs.claude += decision.dollars;
     if (decision.error) this.log.warn(`the "was that for me?" check failed (${decision.error}); the plain rule decided`);

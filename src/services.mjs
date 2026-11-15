@@ -22,7 +22,7 @@ export function buildServices(cfg, { fetchImpl = fetch, dataDir = DATA_DIR } = {
       for (const piece of chunkText(text)) clips.push(await synthesize(piece, { apiKey: cfg.deepgramApiKey, voice: cfg.ttsVoice, format: "ogg", fetchImpl }));
       return clips;
     },
-    gate: ({ contextText, lastText, bareText }) => gate({ claude, model: cfg.gateModel, contextText, lastText, bareText }),
+    gate: ({ contextText, lastText, bareText, replying }) => gate({ claude, model: cfg.gateModel, contextText, lastText, bareText, replying }),
     /* house rules are read for each question, so an edit to house-rules.md counts at once */
     answer: ({ conversation, question, asker, via, gmName }) => answerQuestion({
       claude, aon, model: cfg.answerModel, maxTokens: cfg.maxAnswerTokens, cacheTtl: cfg.answerCacheTtl,

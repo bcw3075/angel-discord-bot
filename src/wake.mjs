@@ -28,7 +28,7 @@ export function isStopRequest(text) {
 }
 
 export const GATE_SYSTEM = `You watch the transcript of a tabletop game played over voice chat. The table has an AI assistant called Angel who answers rules questions. The transcriber sometimes writes her name as Angela, Angie or angle.
-Decide whether the LAST line was said to Angel herself: someone asking her something or telling her something. A line right after Angel spoke that answers or reacts to what she said ("ha, good one", "thanks", "wait, even with a buckler?") was said to her even without her name, unless it's a plain acknowledgement that needs no reply ("okay", "thanks", "got it"): that's to_angel false. It was NOT said to her when "angel" is part of the game (an angel creature, an angelic character or heritage, a statue, a spell), when people talk about her without addressing her ("Angel was right earlier"), or when the word is just "angle" in its normal meaning.
+Decide whether the LAST line was said to Angel herself: someone asking her something or telling her something. A line right after Angel spoke that answers or reacts to what she said ("ha, good one", "thanks", "wait, even with a buckler?") was said to her even without her name. Only a line that is nothing but an acknowledgement ("okay", "thanks", "got it") needs no reply: to_angel false. A line that starts with one and then asks something ("Okay. Good. What about stacking?") is to_angel true. It was NOT said to her when "angel" is part of the game (an angel creature, an angelic character or heritage, a statue, a spell), when people talk about her without addressing her ("Angel was right earlier"), or when the word is just "angle" in its normal meaning.
 Reply with JSON only, no other text:
 {"to_angel": true or false, "complete": true or false, "stop": true or false, "chat": true or false, "question": "..."}
 - complete: false when they called her but haven't said the question yet ("Angel?", "Hey Angel, quick one..."); true otherwise.
@@ -36,8 +36,9 @@ Reply with JSON only, no other text:
 - chat: true when it's banter or small talk that needs no rules lookup ("you were listening", "how are you?"); false for a rules question.
 - question: what they want from her, written to stand on its own using the earlier lines ("" when there's nothing yet).`;
 
-export function gateUser(contextLines, last) {
-  return `Earlier lines:\n${contextLines || "(none)"}\n\nLAST line:\n${last}`;
+export function gateUser(contextLines, last, replying = false) {
+  const note = replying ? "\n\n(Angel has just answered this person; a follow-up without her name is usually for her.)" : "";
+  return `Earlier lines:\n${contextLines || "(none)"}\n\nLAST line:\n${last}${note}`;
 }
 
 /* The model's reply → a decision. When it can't be read, fall back to the plain rule: her name first, then a request. */
@@ -63,13 +64,13 @@ export function parseGate(text, lastLineText = "") {
 
 /* Ask the gate model. Returns the decision and what it cost. `lastText` is the line as the model sees it
    ("Mira: Angel, ..."); `bareText` is what was said, which the fallback rule reads (it looks for her name first). */
-export async function gate({ claude, model, contextText, lastText, bareText = lastText }) {
+export async function gate({ claude, model, contextText, lastText, bareText = lastText, replying = false }) {
   try {
     const json = await claude.create({
       model,
       max_tokens: 200,
       system: [{ type: "text", text: GATE_SYSTEM, cache_control: { type: "ephemeral" } }],
-      messages: [{ role: "user", content: gateUser(contextText, lastText) }],
+      messages: [{ role: "user", content: gateUser(contextText, lastText, replying) }],
     });
     const text = (json.content ?? []).filter(b => b.type === "text").map(b => b.text).join("");
     /* this call's own cost: a delta of the running total would be wrong while an answer runs at the same time */

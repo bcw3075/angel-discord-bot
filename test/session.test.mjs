@@ -83,6 +83,8 @@ test("the person she just answered can reply without her name for a while; bante
   speech(voice, "p1");
   await settle(); await s.answering; await settle();
   assert.equal(gates.length, 2, "the reply went to the check");
+  assert.equal(gates[0].replying, false);
+  assert.equal(gates[1].replying, true, "the check is told it's a follow-up");
   assert.equal(voice.spoken.length, 2, "and she answered it");
   // someone else without her name: not even checked
   speech(voice, "p2");
