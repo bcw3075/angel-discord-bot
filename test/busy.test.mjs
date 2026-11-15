@@ -714,3 +714,40 @@ test("(se-12) a trickle of clicks with live timing (joined into one never-ending
   try { await until(() => answers(x.voice).length === 1, 6000); } finally { on = false; }
   await x.s.answering;
 });
+
+/* ---- the seventh review of 0.1.3 ---- */
+test("(se-12) long talk (over the 10 s cap) ending in 'hold on': her answer doesn't start before it has reached her and been judged", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "...and that's the plan, hold on, Angel."], hold: a => (/hold on/.test(a.bareText) ? { kind: "wait" } : { kind: "none" }), cfg: { ...LIVE, busyFirstWaitMs: 1500 } }));
+  x.s.unheardCapMs = 1000; /* the cap reached, as after 10 s of talk */
+  const began = Date.now() - 3000;
+  x.voice.talk("p2", true, began);
+  speech(x.voice, "p1");
+  await until(() => x.s.holding);
+  await sleep(1000);
+  const stt = x.s.stt, hold = x.s.hold;
+  x.s.stt = async w => { await sleep(400); return stt(w); };
+  x.s.hold = async a => { await sleep(500); return hold(a); };
+  x.voice.talk("p2", false);  /* 0.5 s before the first wait ends: not talking then, its piece not come */
+  setTimeout(() => x.voice.emit("speech", { userId: "p2", packets: tonePackets(4), startedAt: began, final: true }), 800);
+  await sleep(2200);
+  assert.deepEqual(answers(x.voice), [], "the 'hold on' was judged first");
+  assert.equal(x.s.holding?.mode, "invite");
+  x.s.end();
+  await x.s.answering;
+});
+
+test("(se-12) the end of someone else's talk over 30 s, its first part held because it named her: judged while she waits", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Angel, so the first thing is this long story", "and anyway hold on, Angel."], hold: a => (/hold on/.test(a.bareText) ? { kind: "wait" } : { kind: "none" }) }));
+  x.voice.talk("p2", true, Date.now() - 500);
+  speech(x.voice, "p1");
+  await until(() => x.voice.spoken.length === 1);
+  const t = Date.now();
+  x.voice.emit("speech", { userId: "p2", packets: tonePackets(1), startedAt: t, final: false }); /* cut at 30 s, still talking */
+  await until(() => x.s.pending.get("p2")?.held);
+  x.voice.emit("speech", { userId: "p2", packets: tonePackets(1), startedAt: t + 1000, final: true });
+  await until(() => x.holds.length === 1);
+  assert.match(x.holds[0].bareText, /long story and anyway hold on/, "all of it, to the check while she waits");
+  await until(() => x.s.holding?.mode === "invite");
+  x.s.end();
+  await x.s.answering;
+});

@@ -194,6 +194,14 @@ export class Session {
        or a question (Rhea, d-7). A line still being put together (a long question, "Angel?" with the rest to come)
        goes the usual way. */
     const h = this.holding;
+    /* the end of someone else's long talk (its first 30 s held as the start of a question): judged while she waits,
+       all of it, not by the usual check (review 7 of 0.1.3: "...hold on, Angel" at its end never made her wait) */
+    const heldPart = this.pending.get(uid);
+    if (h && !more && !released && heldPart?.held && uid !== h.userId) {
+      this.pending.delete(uid);
+      clearTimeout(heldPart.timer);
+      return this.onHeldLine(h, { ...line, at: heldPart.firstAt, text: `${heldPart.text} ${line.text}` }, until);
+    }
     /* said after the held question, or begun before it and still going after it (review 3 of 0.1.3) */
     if (h && !more && !released && Math.max(line.at, until ?? line.at) > h.at && !(uid === h.userId && line.at <= h.at) && !this.pending.has(uid) && !this.checking.has(uid)) return this.onHeldLine(h, line, until);
     /* the person she just answered may reply without her name for a little while after she stops talking (Rhea,
@@ -683,7 +691,10 @@ export class Session {
       let since = -Infinity;
       let cutDone = false, cutFailed = false;
       /* what was said is known and nobody is talking (review 3 and 4 of 0.1.3) */
-      const settled = () => !f.busy() && !this.unheard(h.at);
+      /* and quiet long enough for the last words to have reached her: a finished stretch's piece comes silenceMs
+         after it, whatever its length (review 7 of 0.1.3: after 10 s of talk the cap let her answer go 0.5 s after
+         "...hold on, Angel") */
+      const settled = () => !f.busy() && f.quietFor(this.now()) >= reachMs && !this.unheard(h.at);
       /* her "I'm ready": once, only while someone is talking, never after "hold on"; the time limit still counts while
          her words are being written */
       const cutIn = async () => {
