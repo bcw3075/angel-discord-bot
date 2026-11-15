@@ -120,6 +120,8 @@ test("their own words after a stop are cut out for the question that follows it"
   assert.equal(afterStop("Angel, stop please. What does stunned do?"), "What does stunned do?");
   assert.equal(afterStop("Angel, stop. Thanksgiving dinner rules?"), "Thanksgiving dinner rules?", "only whole words are dropped");
   assert.equal(afterStop("Angel, stop please."), "");
+  assert.equal(afterStop("Angel, never mind that, how does flanking work?"), "how does flanking work?");
+  assert.equal(afterStop("Angel, stop. Item bonuses, how do they stack?"), "Item bonuses, how do they stack?", "a word that only starts with one of them stays");
   assert.equal(afterStop("Angel, what does stop do?"), "", "no stop at the start: nothing to cut");
   const t0 = performance.now();
   afterStop("Angel, stop " + "'".repeat(50000));

@@ -259,7 +259,7 @@ export class Session {
     let sayEnded = false;  /* all she was going to say had been written */
     /* `end` comes when all of what she will say is written, which is before the written answer is: the last
        sentence (or the only one) is spoken from there, not from the end of the whole answer */
-    const onSay = this.cfg.speakAsWritten === false ? null : (piece, { end = false } = {}) => {
+    const onSay = this.cfg.speakAsWritten === false || !this.cfg.speak ? null : (piece, { end = false } = {}) => {
       try {
         if (piece) times.written ??= this.now();
         for (const sentence of cutter.push(piece)) sayPiece(sentence);
@@ -298,6 +298,7 @@ export class Session {
     if (result.saidAll) { /* nothing more to say */ }
     else if (result.failed || (!said.length && !rest)) sayPiece(result.say);
     else if (rest) sayPiece(rest);
+    if (result.detailsLost && !result.failed && !result.cut) result = { ...result, details: `${result.say}\n-# (I lost the written details for this one. Ask again if you want them.)` };
     if (cutNote) { sayPiece(cutNote); result = { ...result, say: `${result.say} … ${cutNote}`, details: `${result.say} …\n-# (I got cut off part way through this answer. Ask me again.)` }; }
     const heard = result.failed && early && !result.saidAll ? `${early} ${result.say}` : result.say;
 
@@ -308,7 +309,7 @@ export class Session {
       posted = true;
       const typed = typedAnswer({ asker, question: shown, say: result.details ?? result.say, sources: result.sources, unchecked: result.failedLookups > 0 });
       /* kept for the next question only when it is a checked rules answer: not small talk, not one a lookup failed for */
-      if (!result.failed && result.details && !chat && !result.cut && result.lookups > 0 && !(result.failedLookups > 0)) this.lastWritten = { at: this.now(), text: result.details };
+      if (!result.failed && result.details && !chat && !result.cut && !result.detailsLost && result.lookups > 0 && !(result.failedLookups > 0)) this.lastWritten = { at: this.now(), text: result.details };
       const placeholder = await placed;
       try { if (placeholder?.edit) await placeholder.edit(typed); else await target.send(typed); }
       catch (e) { this.log.warn(`couldn't post the answer: ${e.message}`); }

@@ -40,7 +40,7 @@ export function afterStop(text) {
     let i = 0;
     while (i < rest.length && " ,.!?;:-".includes(rest[i])) i++;
     rest = rest.slice(i);
-    for (const word of ["please", "thanks", "thank you", "now", "okay", "ok"]) {
+    for (const word of ["please", "thanks", "thank you", "now", "okay", "ok", "that", "this", "it"]) {
       if (rest.toLowerCase().startsWith(word) && !/[a-z]/i.test(rest[word.length] ?? "")) { rest = rest.slice(word.length); again = true; break; }
     }
   }

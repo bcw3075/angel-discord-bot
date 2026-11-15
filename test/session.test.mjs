@@ -660,3 +660,19 @@ test("an answer cut off part way through what she was saying: she says so, the p
   assert.match(s.transcript.lines.at(-1).text, /But only if … Sorry, I got cut off there/);
   assert.equal(s.lastWritten, null);
 });
+
+test("an answer whose written part was lost is posted with a note and not kept; with speaking off nothing is asked for piece by piece", async () => {
+  let { s, voice, posted } = setup({ heard: ["Angel, can I grapple?"], cfg: { ackPhrase: "" } });
+  s.answer = async q => { q.onSay("Only with a free hand. "); q.onSay("", { end: true }); return { say: "Only with a free hand.", details: "Only with a free hand.", detailsLost: true, sources: [], lookups: 1, dollars: 0.01 }; };
+  await s.start();
+  speech(voice, "p1"); await settle(); await s.answering;
+  assert.deepEqual(voice.spoken.map(String), ["clip:Only with a free hand."]);
+  assert.match(posted[0].edits[0], /Only with a free hand\.\n-# \(I lost the written details/);
+  assert.equal(s.lastWritten, null);
+  let given = "unset";
+  ({ s, voice, posted } = setup({ heard: ["Angel, can I grapple?"], cfg: { speak: false } }));
+  s.answer = async q => { given = q.onSay; return { say: "Yes.", sources: [], dollars: 0.01 }; };
+  await s.start();
+  speech(voice, "p1"); await settle(); await s.answering;
+  assert.equal(given, null, "so a reply cut off can still be asked again");
+});

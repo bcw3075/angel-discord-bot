@@ -510,3 +510,22 @@ test("cut off after she began to speak: what she said is returned marked as cut;
   assert.match(results[0].content, /garbled and was not run/);
   assert.equal(results[0].tool_use_id, "bad");
 });
+
+test("an answer whose written part was lost says so; a garbled answer that stopped mid-sentence is marked cut", async () => {
+  const aon = { async search() { return []; }, async get() { return null; } };
+  /* all she says came through, the written part was cut */
+  let { c } = streamingClaude([{ events: streamEvents([{ type: "tool_use", id: "t", name: "answer", rawInput: '{"say": "Yes, with a free hand.", "details": "**Yes' }], { stop: "max_tokens" }) }]);
+  let r = await answerQuestion({ claude: c, aon, model: "m", system: "S", conversation: "", question: "q", asker: "A", onSay: () => {} });
+  assert.equal(r.detailsLost, true);
+  assert.equal(r.cut, undefined);
+  /* not cut, but the JSON broke inside what she says */
+  ({ c } = streamingClaude([{ events: streamEvents([{ type: "tool_use", id: "t", name: "answer", rawInput: '{"say": "Yes, but only wh' }]) }]));
+  r = await answerQuestion({ claude: c, aon, model: "m", system: "S", conversation: "", question: "q", asker: "A", onSay: () => {} });
+  assert.equal(r.cut, true);
+  assert.equal(r.say, "Yes, but only wh");
+  /* a whole answer has neither mark; the prompt keeps the usual reading, house rules and small talk open */
+  ({ c } = streamingClaude([{ events: streamEvents([{ type: "tool_use", id: "t", name: "answer", input: { say: "Yes.", details: "**Yes.**" } }]) }]));
+  r = await answerQuestion({ claude: c, aon, model: "m", system: "S", conversation: "", question: "q", asker: "A" });
+  assert.equal(r.cut ?? r.detailsLost, undefined);
+  assert.match(systemPrompt({}), /say only what you can point to: the entries you looked up, the house rules below, or what was already said or written at this table.*This doesn't limit small talk, house-rule answers, or giving the usual reading/);
+});
