@@ -66,12 +66,15 @@ test("short spoken answer, fuller written one (Rhea, 2026-11-14)", async () => {
   assert.ok(tool.input_schema.properties.details, "the answer tool has the written part");
 });
 
-test("the last round forces an answer, and plain text counts as one", async () => {
+test("the last round offers only the answer tool (never a forced tool_choice, which Sonnet 5.5 refuses), and plain text counts as one", async () => {
   const loop = Array.from({ length: 2 }, (_, i) => ({ content: [{ type: "tool_use", id: `x${i}`, name: "aon_search", input: { query: "q" } }], usage: {} }));
   const claude = fakeClaude([...loop, { content: [{ type: "tool_use", id: "z", name: "answer", input: { say: "Forced." } }], usage: {} }]);
   const r = await answerQuestion({ claude, aon: fakeAon, model: "m", system: "S", conversation: "", question: "q", asker: "A", maxRounds: 3 });
   assert.equal(r.say, "Forced.");
-  assert.deepEqual(claude.requests[2].tool_choice, { type: "tool", name: "answer" });
+  assert.equal(claude.requests[2].tool_choice, undefined, "no forced tool choice");
+  assert.deepEqual(claude.requests[2].tools.map(t => t.name), ["answer"], "only the answer tool on the last round");
+  assert.match(JSON.stringify(claude.requests[2].messages.at(-1).content), /give your answer now/);
+  assert.ok(claude.requests.every(r => r.tool_choice === undefined), "never forced in any round");
   const plain = await answerQuestion({ claude: fakeClaude([{ content: [{ type: "text", text: "Just text." }], usage: {} }]), aon: fakeAon, model: "m", system: "S", conversation: "", question: "q", asker: "A" });
   assert.equal(plain.say, "Just text.");
   const empty = await answerQuestion({ claude: fakeClaude([{ content: [{ type: "tool_use", id: "e", name: "answer", input: {} }], usage: {} }]), aon: fakeAon, model: "m", system: "S", conversation: "", question: "q", asker: "A" });

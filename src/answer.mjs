@@ -120,13 +120,18 @@ export async function answerQuestion({ claude, aon, model, maxTokens = 1500, sys
 
   async function rounds() {
     for (let round = 1; round <= maxRounds; round++) {
-      const force = round === maxRounds;
+      /* the last round offers only the answer tool and says so, instead of forcing it: Sonnet 5.5 refuses a forced
+         tool_choice ("type tool and any are not supported for this model", live 2026-11-14 on a long question) */
+      const last = round === maxRounds;
+      if (last && round > 1) {
+        const tail = messages.at(-1);
+        if (Array.isArray(tail?.content)) tail.content.push({ type: "text", text: "That's all the looking up there's time for: give your answer now with the answer tool." });
+      }
       const res = await claude.create({
         model,
         max_tokens: maxTokens,
         system: [{ type: "text", text: system, cache_control: cacheControl }],
-        tools: TOOLS,
-        ...(force ? { tool_choice: { type: "tool", name: "answer" } } : {}),
+        tools: last ? TOOLS.filter(t => t.name === "answer") : TOOLS,
         messages,
       });
       dollars += claude.cost(model, res.usage);
