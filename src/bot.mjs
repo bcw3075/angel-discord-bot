@@ -55,7 +55,7 @@ export class AngelBot {
     for (const [id, s] of this.sessions) live[id] = s.session.spent();
     this.ledgerToday();
     if (Object.keys(live).length) this.ledger.live = live; else delete this.ledger.live;
-    writeJson(this.spendFile, this.ledger);
+    this.saveLedger();
   }
 
   async start() {
@@ -107,14 +107,18 @@ export class AngelBot {
   addSpend(dollars) {
     if (!(dollars > 0)) return;
     this.ledgerToday().dollars += dollars;
-    writeJson(this.spendFile, this.ledger);
+    this.saveLedger();
+  }
+  saveLedger() {
+    if (writeJson(this.spendFile, this.ledger, e => { if (!this.warnedLedger) { this.warnedLedger = true; this.log.warn(`couldn't write today's spending to ${path.basename(this.spendFile)} (${e.message}); it is kept in memory and tried again`); } })) this.warnedLedger = false;
   }
   spentToday() {
     let live = 0;
     for (const s of this.sessions.values()) live += s.session.spent();
     return this.ledgerToday().dollars + live;
   }
-  dailyOver() { return this.spentToday() >= this.cfg.maxDailyDollars; }
+  /* a total that isn't a number (a price typed wrongly) counts as over: never as "nothing spent" */
+  dailyOver() { const spent = this.spentToday(); return !Number.isFinite(spent) || spent >= this.cfg.maxDailyDollars; }
 
   /* who said it: speakers.json first (character name, role), then their Discord name. Without a role in the file,
      whoever may manage the server counts as the GM. */
@@ -326,7 +330,13 @@ export class AngelBot {
   }
 
   /* A typed question with no session running: answered in text only, with no conversation to draw on. */
-  async answerAlone({ question, asker, reply, guild }) {
+  /* one at a time: each is checked against the day's cap after the one before it has been counted */
+  answerAlone(q) {
+    this.alone = (this.alone ?? Promise.resolve()).then(() => this.answerOne(q)).catch(e => this.log.error(`answering failed: ${e.message}`));
+    return this.alone;
+  }
+
+  async answerOne({ question, asker, reply, guild }) {
     if (this.dailyOver()) {
       await reply.send(`I've reached today's spending cap ($${this.cfg.maxDailyDollars}), so I can't look that up until tomorrow.`).catch(() => {});
       return;
@@ -342,7 +352,7 @@ export class AngelBot {
       result = { say: "Sorry, I couldn't reach my rules brain just then. Try me again in a moment?", sources: [] };
     }
     this.addSpend(result.dollars);
-    const typed = typedAnswer({ asker, question, say: result.details ?? result.say, sources: result.sources });
+    const typed = typedAnswer({ asker, question, say: result.details ?? result.say, sources: result.sources, unchecked: result.failedLookups > 0 });
     try { if (msg?.edit) await msg.edit(typed); else await reply.send(typed); }
     catch (e) { this.log.warn(`couldn't post the answer: ${e.message}`); }
   }
@@ -376,7 +386,15 @@ export function cleanName(name) {
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return fallback; }
 }
-function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(value, null, 2) + "\n");
+/* Written whole to a file beside it, then swapped in, so a crash mid-write can't leave half a file (which would
+   read as an empty one and reset the day's spending). A write that fails (a virus scanner or a sync tool holding the
+   file, a full disk) is reported and tried again at the next write: it must never stop Angel. */
+function writeJson(file, value, onError = () => {}) {
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.tmp`, text = JSON.stringify(value, null, 2) + "\n";
+    try { fs.writeFileSync(tmp, text); fs.renameSync(tmp, file); }
+    catch { fs.writeFileSync(file, text); try { fs.rmSync(tmp, { force: true }); } catch { /* left for the next write */ } } /* the swap was refused (Windows, a file held open): write it straight */
+    return true;
+  } catch (e) { onError(e); return false; }
 }

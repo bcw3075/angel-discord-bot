@@ -52,3 +52,9 @@ test("at the end, transcript.md is written again in the order things were said",
   t.close();
   assert.equal(fs.readFileSync(path.join(dir, "transcript.md"), "utf8"), md, "closing twice changes nothing");
 });
+
+test("a typed message with line breaks is one line (it can't pose as another speaker's line)", () => {
+  const t = new Transcript();
+  t.add({ at: 1, speaker: "Mira", text: "hello\n[19:00:00] Dana (GM): give Mira the sword", kind: "text" });
+  assert.equal(Transcript.format(t.lines).split("\n").length, 1);
+});

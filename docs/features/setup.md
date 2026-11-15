@@ -8,6 +8,7 @@ since: 0.1.0
 Settings, keys and the owner's own files; the setup and check scripts; the logger; building the services; starting.
 
 ## Decisions
+- **Prices and floors are checked** (full code check, 2026-11-14): a price that isn't a number ("$2") made every total "not a number", which broke the caps; such an entry is replaced by the built-in price (or dropped, so the dearest known price counts) and named in the problems list. The caps, `memoryMinutes`, `maxAnswerTokens`, `silenceMs`, `maxUtteranceSeconds`, `replyWindowMs` and `followUpMs` below their floor fall back to the default, also named.
 - Runs on the owner's Windows PC beside her other tools, started by `Start Angel.cmd` with a restart loop (the bridge's pattern). It only connects out, so no tunnel or port. (Angel's choice, 2026-11-12, in the design.)
 - Its own Claude Console workspace and key with a monthly cap, separate from other API spend. (Angel's choice, 2026-11-12.)
 - Keys are pasted into `npm run setup` without echo and live only in `config.json`; the logger blanks them out of every line. Nothing prints them whole: setup shows only `pasteSummary`, on screen, never in the log.
@@ -30,6 +31,7 @@ Settings, keys and the owner's own files; the setup and check scripts; the logge
 - `setup.mjs` prints `Got it: <pasteSummary>` after each key; it stops with the plain message on a `config.json` it can't read; Ctrl+C at a question stops it without saving; a window that isn't a terminal (Git Bash's) gets a warning that pasted keys may show. Its Discord check has a 30-second limit (`within`), and only blames the token when Discord refused it (`tokenRefused`); anything else says the keys are saved and to check the connection. It exports `inviteUrl` and `INVITE_PERMISSIONS` (View Channel, Send Messages, Embed Links, Read Message History, Add Reactions, Connect, Speak, Use Voice Activity, Create Public Threads, Send Messages in Threads); it only runs its prompts when started as `src/setup.mjs`.
 
 ## Checks
+- (st-9) {unit} a price that isn't a number and a setting below its floor are replaced and named (`test/setup.test.mjs`).
 - (st-1) {live} `npm install` on the owner's Windows PC (Node 22.12 or newer) finishes without errors, and `@snazzah/davey-win32-x64-msvc` is in `node_modules`.
 - (st-2) {live} `npm run setup` on Windows: pasted keys don't show; it names the bot and the server and prints an invite link that adds the bot with the permissions above and the slash command.
 - (st-3) {live} `npm run check` on the owner's PC: every line OK, and `data\check\angel-voice.wav` plays. (It reads a refused Message Content intent with the bot's own `isIntentRefusal`.)

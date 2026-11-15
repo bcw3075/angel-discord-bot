@@ -94,3 +94,22 @@ test("a follow-up goes to the leaning-yes check, anything else to the general on
   assert.equal(seen[0], FOLLOWUP_SYSTEM);
   assert.equal(seen[1], GATE_SYSTEM);
 });
+
+test("the check gets a short time limit and one more try; a reply cut off at its limit is reported, not passed in silence", async () => {
+  const seen = [];
+  const claude = { cost: () => 0.002, async create(body, opts) { seen.push([body, opts]); return { stop_reason: "max_tokens", content: [{ type: "text", text: '{"to_angel": true, "complete": true, "question": "How does the champion\'s reaction' }], usage: {} }; } };
+  const d = await gate({ claude, model: "h", contextText: "", lastText: "Rhea: How about this, tell me how it works, Angel", bareText: "How about this, tell me how it works, Angel" });
+  assert.deepEqual(seen[0][1], { timeoutMs: 8000, retries: 1, maxWaitMs: 1500 });
+  assert.equal(d.dollars, 0.002, "the cut-off call was still paid for and is counted");
+  assert.equal(seen[0][0].max_tokens, 400, "room for a long question written back");
+  assert.match(d.error, /cut off/, "said in the log by the session");
+  assert.equal(d.fallback, true);
+});
+
+test("a call the table is waiting on doesn't sit out a long 'try again later'", async () => {
+  const sleeps = [];
+  const f = scriptedFetch([{ status: 429, headers: { "retry-after": "20" }, body: { error: { message: "slow down" } } }, { body: { content: [], usage: {} } }]);
+  const c = new Claude({ apiKey: "k", prices: {}, fetchImpl: f, sleep: async ms => sleeps.push(ms) });
+  await c.create({ model: "m" }, { retries: 1, maxWaitMs: 1500 });
+  assert.deepEqual(sleeps, [1500]);
+});

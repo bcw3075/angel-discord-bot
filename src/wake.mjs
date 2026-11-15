@@ -80,13 +80,19 @@ export function parseGate(text, lastLineText = "") {
    ("Mira: Angel, ..."); `bareText` is what was said, which the fallback rule reads (it looks for her name first). */
 export async function gate({ claude, model, contextText, lastText, bareText = lastText, replying = false }) {
   try {
+    /* the table is waiting on this check: it gets 8 seconds (a call that runs out of time is never sent again), and
+       one more try after at most 1.5 s when it is refused as busy, not the 45 seconds and two tries of an answer;
+       past that the plain rule decides */
     const json = await claude.create({
       model,
-      max_tokens: 200,
+      max_tokens: 400,
       system: [{ type: "text", text: replying ? FOLLOWUP_SYSTEM : GATE_SYSTEM, cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: gateUser(contextText, lastText, replying) }],
-    });
+    }, { timeoutMs: 8000, retries: 1, maxWaitMs: 1500 });
     const text = (json.content ?? []).filter(b => b.type === "text").map(b => b.text).join("");
+    /* a reply cut off at the limit (a long question written back) has no JSON to read: the plain rule decides and the
+       log says why; the call was still paid for */
+    if (json.stop_reason === "max_tokens") return { ...parseGate("", bareText), error: "its reply was cut off", dollars: claude.cost(model, json.usage) };
     /* this call's own cost: a delta of the running total would be wrong while an answer runs at the same time */
     return { ...parseGate(text, bareText), dollars: claude.cost(model, json.usage) };
   } catch (e) {

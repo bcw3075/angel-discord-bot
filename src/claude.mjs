@@ -28,7 +28,8 @@ export class Claude {
       + (usage.cache_read_input_tokens ?? 0) * p[2] + (usage.output_tokens ?? 0) * p[3]) / 1e6;
   }
 
-  async create(body, { timeoutMs = 45000, retries = 2 } = {}) {
+  /* maxWaitMs caps the wait before another try (a server can ask for up to 20 s), for a call the table is waiting on */
+  async create(body, { timeoutMs = 45000, retries = 2, maxWaitMs = 20000 } = {}) {
     for (let attempt = 0; ; attempt++) {
       let res, text;
       try {
@@ -42,7 +43,7 @@ export class Claude {
       } catch (e) {
         /* a timed-out call is not sent again: it may still have run (and been billed), and the table is waiting */
         if (e?.name === "TimeoutError") throw new Error(`Claude took longer than ${Math.round(timeoutMs / 1000)} s`);
-        if (attempt < retries) { await this.sleep(1500 * (attempt + 1)); continue; }
+        if (attempt < retries) { await this.sleep(Math.min(1500 * (attempt + 1), maxWaitMs)); continue; }
         throw new Error(`Claude could not be reached: ${e.message}`);
       }
       if (res.ok) {
@@ -54,7 +55,7 @@ export class Claude {
       const retryable = res.status === 429 || res.status === 529 || res.status >= 500;
       if (retryable && attempt < retries) {
         const after = Number(res.headers?.get?.("retry-after"));
-        await this.sleep(Number.isFinite(after) && after > 0 ? Math.min(after, 20) * 1000 : 2000 * (attempt + 1));
+        await this.sleep(Math.min(Number.isFinite(after) && after > 0 ? Math.min(after, 20) * 1000 : 2000 * (attempt + 1), maxWaitMs));
         continue;
       }
       let message = text.slice(0, 300);

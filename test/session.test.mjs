@@ -45,13 +45,14 @@ test("a spoken question is checked, answered in the channel and spoken aloud", a
   assert.equal(gates.length, 1);
   assert.equal(gates[0].lastText, "Mira: Angel, what does grabbed do?");
   assert.equal(asked.length, 1);
-  assert.equal(asked[0].question, "What does the grabbed condition do?");
+  assert.equal(asked[0].question, "Angel, what does grabbed do?", "the answer is worked out from their own words");
+  assert.equal(asked[0].meaning, "What does the grabbed condition do?", "the check's reading goes along as a hint");
   assert.equal(asked[0].via, "voice");
   assert.match(asked[0].conversation, /Mira: Angel, what does grabbed do\?/, "the conversation goes with the question");
   assert.equal(posted.length, 1);
   assert.match(posted[0].text, /Looking it up/, "a placeholder at once");
   assert.match(posted[0].edits[0], /^\*\*Mira asked:\*\* What does the grabbed condition do\?\nAnswer to: .*\n-# \[Grabbed\]/);
-  assert.deepEqual(voice.spoken.map(String), ["clip:Grabbed, a classic. Checking.", "clip:Answer to: What does the grabbed condition do?"], "her own quick reaction from the check, then the answer");
+  assert.deepEqual(voice.spoken.map(String), ["clip:Grabbed, a classic. Checking.", "clip:Answer to: Angel, what does grabbed do?"], "her own quick reaction from the check, then the answer");
   assert.equal(s.transcript.lines.at(-1).kind, "angel", "her answer is in the transcript");
   const st = s.status();
   assert.equal(st.questions, 1);
@@ -149,7 +150,8 @@ test('"Angel?" then the question: one answer, with both parts', async () => {
   await settle(); await s.answering;
   assert.equal(gates[1].lastText, "Mira: Angel? can I grapple twice in one turn?");
   assert.equal(asked.length, 1);
-  assert.equal(asked[0].question, "Can I Grapple twice in one turn?");
+  assert.equal(asked[0].question, "Angel? can I grapple twice in one turn?");
+  assert.equal(asked[0].meaning, "Can I Grapple twice in one turn?");
 });
 
 test('"Angel, stop" stops her at once, without the check', async () => {
@@ -323,7 +325,8 @@ test("what the speaker adds while the check runs is kept even when the check cal
   speech(voice, "p1"); await settle();
   speech(voice, "p1"); await settle();
   open(); await settle(); await s.answering;
-  assert.equal(asked[0].question, "What does off-guard do? and does it stack?");
+  assert.equal(asked[0].question, "Angel, what does off-guard do? and does it stack?");
+  assert.equal(asked[0].meaning, "What does off-guard do? and does it stack?");
 });
 
 test("a typed question still waiting when the session ends is told so, not left hanging", async () => {
@@ -581,4 +584,66 @@ test("an answer that breaks off after she said all of it: no apology on top, and
   assert.equal(s.transcript.lines.at(-1).text, SAY);
   assert.match(posted[0].edits[0], /Grabbed means off-guard[\s\S]*lost the written details/);
   assert.ok(s.replyTo, "she did answer, so they can reply");
+});
+
+test("one speaker's lines are taken in the order said, even when a later piece is transcribed first", async () => {
+  const { s, voice, asked } = setup({ gate: ({ bareText }) => ({ toAngel: true, complete: /\?$/.test(bareText), stop: false, question: "" }) });
+  /* the first half ("Angel, about grabbed") comes back from the transcriber after the second half */
+  const texts = [["Angel, about grabbed", 60], ["can they still attack?", 1]];
+  s.stt = async () => { const [text, ms] = texts.shift(); await sleep(ms); return { text, seconds: 1 }; };
+  await s.start();
+  const t = Date.now();
+  speech(voice, "p1", 1, t);
+  speech(voice, "p1", 1, t + 1500);
+  for (let i = 0; i < 6; i++) await settle();
+  await s.answering;
+  assert.equal(asked.length, 1, "one question, not a lost second half and a first half left waiting");
+  assert.equal(asked[0].question, "Angel, about grabbed can they still attack?");
+  /* another speaker isn't held up by them */
+  assert.equal(s.heardOrder.size, 0, "nothing is kept once the lines are handed over");
+});
+
+test("her last written answer goes along with the next question; a failed lookup is said in the post", async () => {
+  const { s, voice, posted, asked } = setup({ heard: ["Angel, what does grabbed do?", "Angel, what about the second one?"], cfg: { ackPhrase: "" } });
+  let n = 0;
+  s.answer = async q => { asked.push(q); return n++ ? { say: "That one.", details: "**That one.**", sources: [], failedLookups: 1, dollars: 0.01 } : { say: "Two things.", details: "**Two things.**\n- Off-guard\n- Immobilized", sources: [], failedLookups: 0, dollars: 0.01 }; };
+  await s.start();
+  speech(voice, "p1"); await settle(); await s.answering;
+  assert.doesNotMatch(asked[0].conversation, /last written answer/);
+  assert.doesNotMatch(posted[0].edits[0], /couldn't reach Archives/);
+  speech(voice, "p1"); await settle(); await s.answering;
+  assert.match(asked[1].conversation, /Your last written answer in the text channel \(the table can see it\):\n\*\*Two things\.\*\*\n- Off-guard\n- Immobilized$/);
+  assert.match(posted[1].edits[0], /couldn't reach Archives of Nethys for part of this/);
+});
+
+test('"Angel, stop. What does stunned do?": the question goes on without the stop in it; a stop is heard even while an earlier piece is still being transcribed', async () => {
+  let { s, voice, asked } = setup({ heard: ["Angel, stop. What does stunned do?"], gate: () => ({ toAngel: true, complete: true, stop: true, question: "What does stunned do?" }) });
+  await s.start();
+  speech(voice, "p1"); await settle(); await s.answering;
+  assert.equal(voice.stops, 1);
+  assert.equal(asked[0].question, "What does stunned do?", "their own words still hold the stop, which is already done");
+  /* the first piece's transcription hangs; "Angel, stop" said after it is acted on at once, and once */
+  let slow;
+  ({ s, voice, asked } = setup({}));
+  const texts = [new Promise(r => { slow = () => r({ text: "so anyway the ogre", seconds: 1 }); }), Promise.resolve({ text: "Angel, stop", seconds: 1 })];
+  s.stt = () => texts.shift();
+  await s.start();
+  const t = Date.now();
+  speech(voice, "p1", 1, t); speech(voice, "p1", 1, t + 1500);
+  await settle();
+  assert.equal(voice.stops, 1, "stopped while the earlier piece is still out");
+  slow(); await settle();
+  assert.equal(voice.stops, 1, "and not a second time when its turn comes");
+  assert.equal(s.transcript.lines.length, 2, "both lines are in the transcript");
+});
+
+test("only a checked rules answer is kept as her last written answer", async () => {
+  const { s, voice, asked } = setup({ heard: ["Angel, one?", "Angel, two?", "Angel, three?"], cfg: { ackPhrase: "", speak: false }, gate: ({ bareText }) => ({ toAngel: true, complete: true, stop: false, chat: /two/.test(bareText), question: bareText }) });
+  const replies = [{ say: "A.", details: "**Unchecked.**", sources: [], failedLookups: 1, dollars: 0 }, { say: "B.", details: "**Chatter.**", sources: [], failedLookups: 0, dollars: 0 }, { say: "C.", details: "**C.**", sources: [], dollars: 0 }];
+  s.answer = async q => { asked.push(q); return replies.shift(); };
+  await s.start();
+  for (let i = 0; i < 3; i++) { speech(voice, "p1"); await settle(); await s.answering; }
+  assert.doesNotMatch(asked[1].conversation, /last written answer/, "one a lookup failed for is not handed back as her answer");
+  assert.doesNotMatch(asked[2].conversation, /last written answer/, "nor is small talk");
+  assert.equal(s.lastWritten.text, "**C.**");
 });

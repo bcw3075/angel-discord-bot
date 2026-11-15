@@ -23,7 +23,8 @@ export class Transcript {
 
   /* kind: "voice" (said), "text" (typed), "angel" (Angel's answer) */
   add({ at = Date.now(), userId = null, speaker, role = "player", text, kind = "voice" }) {
-    const line = { at, userId, speaker, role, text: String(text).trim(), kind };
+    /* one line each: a typed message with line breaks could otherwise look like several lines, one of them "the GM's" */
+    const line = { at, userId, speaker, role, text: String(text).replace(/\s+/g, " ").trim(), kind };
     if (!line.text) return null;
     let i = this.lines.length;
     while (i > 0 && this.lines[i - 1].at > at) i--;

@@ -11,7 +11,9 @@ export function systemPrompt({ houseRules = "", gmName = "" } = {}) {
 Who you are: warm, quick, and a little sassy now and then. You're on the table's side and you enjoy the game. You call it straight: if someone has a rule wrong, you tell them, kindly.
 
 Getting the rule right:
-- Look rules up with aon_search and aon_get before you answer. Don't trust memory for anything a lookup can settle: numbers, actions, traits, conditions, exact wording.
+- Look rules up with aon_search and aon_get before you answer. A search gives the full text of its top entries, so you often need no aon_get (use aon_get when an entry you need came without text); when you need more than one thing, ask for them all in the same turn (several searches or pages at once run together), because every extra turn of looking up keeps the table waiting.
+- Read the entry before you rely on it: check its name and source are the rule they mean (several entries can share a name; one marked older or legacy is an earlier printing that has been replaced, so use the newest unless they ask about the old rule; one marked preRemaster is from before the Remaster and is the rule only if nothing newer replaced it, often under a new name), and if an entry's text is marked truncated and the part you need isn't there, get the whole entry with aon_get.
+- Don't trust memory for anything a lookup can settle: numbers, actions, traits, conditions, exact wording.
 - These are the Remastered rules (Player Core, GM Core and the rest). The search already swaps old entries for their Remaster versions. If the table uses an old name (flat-footed, attack of opportunity), use the Remaster name and mention the old one once.
 - The house rules below come before Archives of Nethys wherever they apply.
 - Use the conversation: "this", "that" and "it" mean what the table was just talking about. If you truly can't tell what they mean, ask one short question instead of guessing.
@@ -39,7 +41,7 @@ ${houseRules || "(none given)"}`;
 export const TOOLS = [
   {
     name: "aon_search",
-    description: "Search Archives of Nethys (Pathfinder 2e; Remastered entries first). Returns up to 6 entries: id, name, category, source, link, short summary. Use a short query: the name of the rule, action, condition, spell, feat or item, or a few key words.",
+    description: "Search Archives of Nethys (Pathfinder 2e; Remastered entries first). Returns up to 6 entries: id, name, category, source, year released, link, short summary (oldName is the name the entry had before the Remaster); the top three also come with their full text (text), so you don't need aon_get for those unless the text is marked truncated. Use a short query: the name of the rule, action, condition, spell, feat or item, or a few key words. You can call it several times in one turn.",
     input_schema: {
       type: "object",
       properties: {
@@ -51,7 +53,7 @@ export const TOOLS = [
   },
   {
     name: "aon_get",
-    description: "The full text of one Archives of Nethys entry, by the id or the link that aon_search gave.",
+    description: "The full text of one Archives of Nethys entry, by the id or the link that aon_search gave. For an entry whose text the search didn't give, or gave truncated. You can call it several times in one turn.",
     input_schema: { type: "object", properties: { ref: { type: "string" } }, required: ["ref"] },
   },
   {
@@ -75,46 +77,65 @@ export const TOOLS = [
   },
 ];
 
-export function userMessage({ conversation, question, asker, via }) {
+/* `meaning` is the check's quick reading of a spoken question (a small model's paraphrase): a hint, never the quote */
+export function userMessage({ conversation, question, asker, via, meaning = "" }) {
+  const hint = meaning && meaning !== question
+    ? `\n(Their words come from a speech transcriber and can be garbled. A quick first reading of what they want: "${meaning}". Go by their own words and the conversation where that reading differs.)` : "";
   return `What the table said in the last few minutes (oldest first):
 ${conversation || "(nothing yet)"}
 
-${asker} ${via === "text" ? "typed" : "said"} to you: "${question}"`;
+${asker} ${via === "text" ? "typed" : "said"} to you: "${question}"${hint}`;
 }
 
-async function runTool(aon, use) {
-  try {
-    if (use.name === "aon_search") {
-      const hits = await aon.search(use.input?.query ?? "", { category: use.input?.category || null });
-      return hits.length ? JSON.stringify(hits) : "No entries found. Try other words, or no category.";
-    }
-    if (use.name === "aon_get") {
-      const doc = await aon.get(use.input?.ref ?? "");
-      return doc ? JSON.stringify(doc) : "No entry with that id or link.";
-    }
-    return `Unknown tool ${use.name}.`;
-  } catch (e) {
-    return `The lookup failed: ${e.message}. Answer from what you know if you're sure, and say you couldn't check.`;
+/* A lookup that fails is tried once more at once (a dropped connection is the usual cause); if it fails again
+   Claude is told, and the failure is counted so the post can say the answer couldn't be fully checked. */
+async function runTool(aon, use, failed, seen) {
+  const fail = e => {
+    failed.count++;
+    return `The lookup failed: ${e.message}. Answer from what you know only if you're sure, and say plainly that you couldn't check Archives of Nethys.`;
+  };
+  try { return await lookUp(aon, use, seen); }
+  catch (first) {
+    /* one that ran out of time is not tried again: the table has already waited for it */
+    if (first?.name === "TimeoutError") return fail(first);
+    try { return await lookUp(aon, use, seen); }
+    catch (e) { return fail(e); }
   }
+}
+
+async function lookUp(aon, use, seen) {
+  if (use.name === "aon_search") {
+    const hits = await aon.search(use.input?.query ?? "", { category: use.input?.category || null, withText: 3 });
+    for (const h of hits) if (h.url) seen.add(h.url);
+    return hits.length ? JSON.stringify(hits) : "No entries found. Try other words, or no category.";
+  }
+  if (use.name === "aon_get") {
+    const doc = await aon.get(use.input?.ref ?? "");
+    if (doc?.url) seen.add(doc.url);
+    return doc ? JSON.stringify(doc) : "No entry with that id or link.";
+  }
+  return `Unknown tool ${use.name}.`;
 }
 
 /* onSay(text) is given each new piece of `say` as it is written, and onSay("", { end: true }) once when `say` is
    whole, which is before the rest of the answer is (only with a Claude client that can stream) */
-export async function answerQuestion({ claude, aon, model, maxTokens = 1500, system, conversation, question, asker, via = "voice", maxRounds = 6, cacheTtl = "5m", onSay = null }) {
+export async function answerQuestion({ claude, aon, model, maxTokens = 1500, system, conversation, question, asker, via = "voice", maxRounds = 6, cacheTtl = "5m", onSay = null, meaning = "" }) {
   const cacheControl = cacheTtl === "1h" ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" };
-  const messages = [{ role: "user", content: userMessage({ conversation, question, asker, via }) }];
+  const messages = [{ role: "user", content: userMessage({ conversation, question, asker, via, meaning }) }];
   const fetched = [];
+  const failed = { count: 0 };
+  const seen = new Set(); /* the page links the lookups gave: only those can be posted as sources */
   let lookups = 0, dollars = 0;
   const cache = { written: 0, read: 0 };
   const done = (input, rounds) => {
     const say = String(input?.say ?? "").trim() || "Sorry, I lost my train of thought there. Could you ask me again?";
     const details = String(input?.details ?? "").trim() || say;
     let sources = (Array.isArray(input?.sources) ? input.sources : [])
-      .filter(s => s && typeof s.url === "string" && s.url.startsWith(AON_SITE + "/"))
+      .filter(s => s && typeof s.url === "string" && s.url.startsWith(AON_SITE + "/") && seen.has(s.url))
       .map(s => ({ name: String(s.name || "Archives of Nethys").slice(0, 80), url: s.url }));
     if (!sources.length) sources = fetched.slice(0, 3);
     const unique = [...new Map(sources.map(s => [s.url, s])).values()].slice(0, 5);
-    return { say, details, sources: unique, rounds, lookups, dollars, cache };
+    return { say, details, sources: unique, rounds, lookups, failedLookups: failed.count, dollars, cache };
   };
   try {
     return await rounds();
@@ -171,15 +192,15 @@ export async function answerQuestion({ claude, aon, model, maxTokens = 1500, sys
         return done({ say: text }, round);
       }
       messages.push({ role: "assistant", content });
-      const results = [];
-      for (const use of uses) {
-        lookups++;
-        const out = await runTool(aon, use);
+      /* lookups asked for in the same turn run together; the results go back in the order asked */
+      lookups += uses.length;
+      const outs = await Promise.all(uses.map(use => runTool(aon, use, failed, seen)));
+      const results = uses.map((use, i) => {
         if (use.name === "aon_get") {
-          try { const d = JSON.parse(out); if (d?.url) fetched.push({ name: d.name, url: d.url }); } catch { /* not a page */ }
+          try { const d = JSON.parse(outs[i]); if (d?.url) fetched.push({ name: d.name, url: d.url }); } catch { /* not a page */ }
         }
-        results.push({ type: "tool_result", tool_use_id: use.id, content: out });
-      }
+        return { type: "tool_result", tool_use_id: use.id, content: outs[i] };
+      });
       messages.push({ role: "user", content: results });
     }
     return done({}, maxRounds);
@@ -193,9 +214,11 @@ export function shortQuestion(q) {
 }
 
 /* The typed copy in the text channel: who asked, the answer, the pages. Kept under Discord's 2,000 characters. */
-export function typedAnswer({ asker, question, say, sources = [] }) {
+export function typedAnswer({ asker, question, say, sources = [], unchecked = false }) {
   const head = asker && question ? `**${asker} asked:** ${shortQuestion(question)}\n` : "";
-  const links = sources.length ? `\n-# ${sources.map(s => `[${s.name.replace(/[[\]]/g, "")}](<${s.url}>)`).join(" · ")}` : "";
+  /* a lookup failed even at the second try: the table is told this answer wasn't fully checked against the rules */
+  const warn = unchecked ? "\n-# ⚠️ I couldn't reach Archives of Nethys for part of this, so check it before you rely on it." : "";
+  const links = warn + (sources.length ? `\n-# ${sources.map(s => `[${s.name.replace(/[[\]]/g, "")}](<${s.url}>)`).join(" · ")}` : "");
   const room = 1990 - head.length - links.length;
   const body = say.length > room ? say.slice(0, room - 1) + "…" : say;
   return head + body + links;

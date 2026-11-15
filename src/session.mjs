@@ -34,6 +34,8 @@ export class Session {
     this.lastStopAt = -Infinity; /* when the last "stop" was said: a question said before it is dropped or not spoken */
     this.answering = Promise.resolve();
     this.ackClips = null;
+    this.heardOrder = new Map(); /* userId → the hand-over of their last piece of speech, so their lines are taken in the order said */
+    this.lastWritten = null;     /* { at, text }: her last written answer, which the table can see and may ask about */
   }
 
   async start() {
@@ -81,13 +83,30 @@ export class Session {
     const piece = packetsToWav(this.decoderFor(userId), packets, this.cfg);
     if (!piece.wav) { this.counts.skipped++; return; }
     this.counts.pieces++;
-    const heard = await this.stt(piece.wav);
-    this.costs.stt += this.sttCost(heard.seconds || piece.durationMs / 1000);
-    if (!heard.text || this.ended) return;
-    const who = this.speakerOf(userId);
-    const line = this.transcript.add({ at: startedAt, userId, speaker: who.name, role: who.role, text: heard.text, kind: "voice" });
-    /* when they stopped talking (speech time; a pause inside the piece isn't counted): the timing in the log starts here */
-    if (line) await this.onLine(line, startedAt + piece.durationMs);
+    /* pieces are transcribed side by side, but one speaker's lines are taken in the order they were said: when the
+       second half of a question came back first it had no name yet and was dropped, and the first half then waited
+       for a rest that had already gone by */
+    const hearing = this.stt(piece.wav);
+    /* "Angel, stop" doesn't wait its turn behind an earlier piece still being transcribed */
+    let stoppedEarly = false;
+    hearing.then(h => { if (!this.ended && h?.text && isStopRequest(h.text)) { stoppedEarly = true; this.stop(startedAt); } }).catch(() => {});
+    const before = this.heardOrder.get(userId) ?? Promise.resolve();
+    let handling = null;
+    const turn = before.then(async () => {
+      const heard = await hearing;
+      this.costs.stt += this.sttCost(heard.seconds || piece.durationMs / 1000);
+      if (!heard.text || this.ended) return;
+      const who = this.speakerOf(userId);
+      const line = this.transcript.add({ at: startedAt, userId, speaker: who.name, role: who.role, text: heard.text, kind: "voice" });
+      /* started in order, not waited for in order: what they say while the check on this line runs is the rest of
+         the question. `until` is when they stopped talking (speech time): the timing in the log starts there */
+      if (line && !stoppedEarly) { handling = this.onLine(line, startedAt + piece.durationMs); handling.catch(() => {}); }
+    });
+    const settled = turn.catch(() => {});
+    this.heardOrder.set(userId, settled);
+    settled.then(() => { if (this.heardOrder.get(userId) === settled) this.heardOrder.delete(userId); });
+    await turn;
+    await handling;
   }
 
   /* a stop said after the question was said cancels it, wherever it is: transcribing, being checked, queued or looked up */
@@ -110,7 +129,11 @@ export class Session {
     /* her own voice coming back through a microphone. A reply without her name gets a closer look instead of the plain
        time rule: right after she stops is exactly when people answer her (2026-11-14: "Nice. And does that stack...?"
        began 2 s after she finished and was dropped). It's an echo only if its words are hers. */
-    if (!waiting && this.voice.inEchoWindow(line.at) && (byName || !replying || echoOf(line.text, this.lastSaid))) return;
+    if (!waiting && this.voice.inEchoWindow(line.at) && (byName || !replying || echoOf(line.text, this.lastSaid))) {
+      /* in the log, so a line she didn't answer can be explained */
+      if (byName) this.log.info(`${line.speaker}'s line naming her began while she was talking (or just after): taken as her own voice coming back, not answered`);
+      return;
+    }
     if (this.overCap()) return;
     let text = line.text;
     if (waiting) {
@@ -128,26 +151,32 @@ export class Session {
     finally { if (this.checking.get(uid) === later) this.checking.delete(uid); }
     if (typeof decision.dollars === "number") this.costs.claude += decision.dollars;
     if (decision.error) this.log.warn(`the "was that for me?" check failed (${decision.error}); the plain rule decided`);
+    else if (decision.fallback) this.log.warn(`the "was that for me?" check gave a reply that couldn't be read; the plain rule decided`);
     /* what the check decided goes in the log (no words, just the verdict), so a line she didn't answer can be explained */
     this.log.info(`check on ${line.speaker}'s line${byName ? "" : " (a reply, no name)"}: ${decision.toAngel ? (decision.chat ? "for Angel, small talk" : decision.complete === false ? "for Angel, waiting for the rest" : "for Angel") : "not for Angel"}`);
     if (!decision.toAngel || this.ended || this.stoppedSince(line.at)) return;
     let at = line.at;
+    let asked = text; /* their own words */
     if (decision.stop) {
       this.stop(line.at);
-      /* "Angel, stop. What does stunned do?": stop, then answer the question (asked just after the stop) */
+      /* "Angel, stop. What does stunned do?": stop, then answer the question (asked just after the stop). Here the
+         check's wording is the question: their own words still hold the "stop", which is already done */
       if (!(decision.complete && decision.question && /\?/.test(text))) return;
       at = line.at + 1;
+      asked = decision.question;
     }
     /* what they said while the check ran is the rest of the question, finished or not */
     const rest = later.length ? ` ${later.join(" ")}` : "";
     if (!decision.complete) {
-      if (rest) { this.ask({ question: `${text}${rest}`, asker: line.speaker, role: line.role, via: "voice", at, userId: uid, until }); return; }
+      if (rest) { this.ask({ question: `${text}${rest}`, meaning: "", asker: line.speaker, role: line.role, via: "voice", at, userId: uid, until }); return; }
       const timer = setTimeout(() => this.pending.delete(uid), this.cfg.followUpMs);
       timer.unref?.();
       this.pending.set(uid, { text, at: this.now(), timer });
       return;
     }
-    this.ask({ question: `${decision.question || text}${rest}`, asker: line.speaker, role: line.role, via: "voice", at, userId: uid, until, chat: decision.chat === true, ack: decision.ack || "", turn: byName ? 0 : (r?.turn ?? 0) + 1 });
+    /* the answer is worked out from their own words; the check's reading of them (a paraphrase by a small model, which
+       can drop or bend a detail) goes along as a hint only, and is what the post shows as the question */
+    this.ask({ question: `${asked}${rest}`, meaning: decision.question ? `${decision.question}${rest}` : "", asker: line.speaker, role: line.role, via: "voice", at, userId: uid, until, chat: decision.chat === true, ack: decision.ack || "", turn: byName ? 0 : (r?.turn ?? 0) + 1 });
   }
 
   /* A typed question (@Angel, "Angel, …" in chat, or /angel ask): no check needed, they meant her. */
@@ -168,8 +197,9 @@ export class Session {
     return this.answering;
   }
 
-  async runAsk({ question, asker, via, reply, at, userId = null, until = null, chat = false, turn = 0, ack = "" }) {
+  async runAsk({ question, meaning = "", asker, via, reply, at, userId = null, until = null, chat = false, turn = 0, ack = "" }) {
     const target = reply ?? this.post;
+    const shown = meaning || question; /* the question as the channel shows it */
     if (this.ended) {
       /* a deferred /angel ask must still hear back */
       if (reply) await reply.send(`The session ended before I got to "${shortQuestion(question)}".`).catch(() => {});
@@ -189,7 +219,7 @@ export class Session {
     const quiet = chat && via === "voice" && this.cfg.speak;
     /* the placeholder and her quick reaction are started but not waited for: the answer is already being worked out */
     const placed = quiet ? null
-      : target.send(`**${asker} asked:** ${shortQuestion(question)}\n-# Looking it up…`).catch(e => { this.log.warn(`couldn't post in the channel: ${e.message}`); return null; });
+      : target.send(`**${asker} asked:** ${shortQuestion(shown)}\n-# Looking it up…`).catch(e => { this.log.warn(`couldn't post in the channel: ${e.message}`); return null; });
     /* everything she says for this question is handed to the voice in order, through this chain */
     let line = Promise.resolve();
     if (!quiet && this.cfg.speak && this.cfg.ackPhrase !== "") {
@@ -239,9 +269,13 @@ export class Session {
 
     let result;
     try {
+      /* her last written answer goes along: the table can see it and asks about it ("what about that second
+         exception?"), and only her spoken words are in the transcript */
+      const w = this.lastWritten;
+      const wrote = w && this.now() - w.at <= this.cfg.memoryMinutes * 60000 ? `\n\nYour last written answer in the text channel (the table can see it):\n${w.text}` : "";
       result = await this.answer({
-        conversation: Transcript.format(this.transcript.recent(this.cfg.memoryMinutes, this.now())),
-        question, asker, via, onSay,
+        conversation: Transcript.format(this.transcript.recent(this.cfg.memoryMinutes, this.now())) + wrote,
+        question, meaning, asker, via, onSay,
       });
       this.costs.claude += result.dollars ?? 0;
     } catch (e) {
@@ -268,7 +302,9 @@ export class Session {
     const post = async () => {
       if (posted) return;
       posted = true;
-      const typed = typedAnswer({ asker, question, say: result.details ?? result.say, sources: result.sources });
+      const typed = typedAnswer({ asker, question: shown, say: result.details ?? result.say, sources: result.sources, unchecked: result.failedLookups > 0 });
+      /* kept for the next question only when it is a checked rules answer: not small talk, not one a lookup failed for */
+      if (!result.failed && result.details && !chat && !(result.failedLookups > 0)) this.lastWritten = { at: this.now(), text: result.details };
       const placeholder = await placed;
       try { if (placeholder?.edit) await placeholder.edit(typed); else await target.send(typed); }
       catch (e) { this.log.warn(`couldn't post the answer: ${e.message}`); }

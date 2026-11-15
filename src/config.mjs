@@ -118,6 +118,24 @@ export function loadConfig(file = CONFIG_PATH) {
     problems.push(`"guildId" needs its quote marks (without them a long number loses its last digits): run npm run setup once more to save it again`);
   }
   const cfg = { ...DEFAULTS, ...saved, prices: { ...DEFAULTS.prices, ...(saved.prices ?? {}) }, deepgramPrices: { ...DEFAULTS.deepgramPrices, ...(saved.deepgramPrices ?? {}) } };
+  /* the price tables decide what counts against the caps: a price that isn't a number would make every total "not a
+     number", so such an entry is dropped (the default, or the dearest known price, is used) and named */
+  for (const [model, row] of Object.entries(cfg.prices)) {
+    if (!Array.isArray(row) || row.length < 4 || !row.every(n => typeof n === "number" && Number.isFinite(n) && n >= 0)) {
+      problems.push(`the price for "${model}" should be a list of numbers, not ${JSON.stringify(row)}, so ${DEFAULTS.prices[model] ? "the built-in price" : "the dearest known price"} is used`);
+      if (DEFAULTS.prices[model]) cfg.prices[model] = DEFAULTS.prices[model]; else delete cfg.prices[model];
+    }
+  }
+  for (const [k, v] of Object.entries(DEFAULTS.deepgramPrices)) {
+    if (typeof cfg.deepgramPrices[k] !== "number" || !Number.isFinite(cfg.deepgramPrices[k]) || cfg.deepgramPrices[k] < 0) {
+      problems.push(`the Deepgram price "${k}" should be a number, not ${JSON.stringify(cfg.deepgramPrices[k])}, so ${v} is used`);
+      cfg.deepgramPrices[k] = v;
+    }
+  }
+  /* settings that only make sense above a floor: below it the default is used and named */
+  for (const [k, min] of Object.entries({ maxSessionDollars: 0, maxDailyDollars: 0, memoryMinutes: 1, maxAnswerTokens: 300, silenceMs: 200, maxUtteranceSeconds: 5, replyWindowMs: 0, followUpMs: 1000 })) {
+    if (!(cfg[k] >= min)) { problems.push(`"${k}" should be ${min} or more, not ${JSON.stringify(cfg[k])}, so ${DEFAULTS[k]} is used`); cfg[k] = DEFAULTS[k]; }
+  }
   for (const model of new Set([cfg.answerModel, cfg.gateModel])) {
     if (!cfg.prices[model]) problems.push(`no price is known for "${model}", so its cost is counted at the dearest price in the table`);
   }

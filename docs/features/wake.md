@@ -8,6 +8,7 @@ since: 0.1.0
 Knowing when someone is talking to Angel: a free text check for her name, then a cheap model decides.
 
 ## Decisions
+- **The check has its own limits** (full code check, 2026-11-14): 8 seconds (a call that runs out of time is never sent again) and one more try after at most 1.5 s when the server is busy, not an answer's 45 seconds and two (the table is waiting on it); room for 400 tokens, since it writes the question back and a long one was cut off at 200, leaving JSON that couldn't be read; a reply cut off at the limit, or one that can't be read, is said in the log, and the plain rule decides.
 - **A follow-up has its own check** (`FOLLOWUP_SYSTEM`, 2026-11-14: even with the note, the general check judged "Okay. What about stacking?" not for her, 19:14): for the person she just answered, it leans to yes and says no only for a line plainly for someone else or a bare acknowledgement.
 - **Her quick reaction** comes from the check (`ack`: three to ten words in her voice about this question, different each time), replacing the fixed "One sec, let me check" (Rhea, 2026-11-14: "getting repetitive. I'd love your personality to come through... I'm ok with using more tokens"). Typed questions and failed checks use one of a few varied lines (`ACKS`); `ackPhrase: ""` still turns it off.
 - A follow-up that starts with an acknowledgement and then asks something is for her; only a bare "okay"/"thanks" isn't. A reply without her name is sent to the check with a note that she just answered this person (2026-11-14: "Okay. Good. What about stacking with other penalties or bonuses?" was judged not for her).
@@ -22,6 +23,7 @@ Knowing when someone is talking to Angel: a free text check for her name, then a
 - Each call returns its own cost (`dollars`), worked out from that call's usage.
 
 ## Checks
+- (wk-9) {unit} the check's time limit and one retry, and a cut-off reply reported (`test/wake.test.mjs`).
 - (wk-1) {live} in play, "Angel, ..." questions are answered, and at least five in-game uses of "angel" or "angelic" and the word "angle" get no answer.
 - (wk-2) {live} "Angel?" followed by the question as its own sentence gets one answer.
 - (wk-3) {unit} names, stop phrases (and what is not a stop), reading the model's reply, the fallback on the bare words when the model can't be reached, and every text reader (these, `typedQuestion`, `speakable`) staying fast on 4,000 characters of odd text (`test/wake.test.mjs`).

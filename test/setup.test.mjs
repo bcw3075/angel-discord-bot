@@ -280,3 +280,20 @@ test("every source file parses, including the scripts no test imports (check.mjs
   const { execFileSync } = await import("node:child_process");
   for (const f of fs.readdirSync("src").filter(f => f.endsWith(".mjs"))) execFileSync(process.execPath, ["--check", path.join("src", f)]);
 });
+
+test("config: a price that isn't a number, or a setting below its floor, is replaced and named (the caps depend on them)", () => {
+  const dir = tmp(), f = path.join(dir, "config.json");
+  fs.writeFileSync(f, JSON.stringify({ prices: { "claude-sonnet-5-5": ["$2", 2.5, 0.1, 10], "my-model": "cheap", "ok-model": [1, 1, 1, 1] }, deepgramPrices: { sttPerMinute: "$0.0043" }, memoryMinutes: 0, maxAnswerTokens: -5, maxSessionDollars: -1, maxDailyDollars: 0 }));
+  const c = loadConfig(f);
+  assert.deepEqual(c.prices["claude-sonnet-5-5"], DEFAULTS.prices["claude-sonnet-5-5"]);
+  assert.equal(c.prices["my-model"], undefined, "counted at the dearest known price instead");
+  assert.deepEqual(c.prices["ok-model"], [1, 1, 1, 1]);
+  assert.equal(c.deepgramPrices.sttPerMinute, DEFAULTS.deepgramPrices.sttPerMinute);
+  assert.equal(c.deepgramPrices.ttsPer1000Chars, DEFAULTS.deepgramPrices.ttsPer1000Chars);
+  assert.equal(c.memoryMinutes, DEFAULTS.memoryMinutes);
+  assert.equal(c.maxAnswerTokens, DEFAULTS.maxAnswerTokens);
+  assert.equal(c.maxSessionDollars, DEFAULTS.maxSessionDollars);
+  assert.equal(c.maxDailyDollars, 0, "a cap of nothing is a choice (she spends nothing), not a mistake");
+  for (const word of ["claude-sonnet-5-5", "my-model", "sttPerMinute", "memoryMinutes", "maxAnswerTokens", "maxSessionDollars"]) assert.ok(c.problems.some(p => p.includes(word)), `named: ${word}`);
+  assert.equal(loadConfig(path.join(dir, "none.json")).problems.length, 0, "the defaults themselves pass");
+});

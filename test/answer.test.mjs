@@ -315,3 +315,51 @@ test("an answer cut short still says what she had written; one that breaks off r
   assert.match(err.message, /broke off/);
   assert.ok(Math.abs(err.dollars - (3 + 10 / 1e6)) < 1e-12, "$1 for the first round and $2 for what the broken one had read (and the start's one token of writing)");
 });
+
+test("lookups asked for in one turn run together, and searches ask for the top entries' text", async () => {
+  let running = 0, most = 0;
+  const seen = [];
+  const slowAon = {
+    async search(q, o) { seen.push(o); running++; most = Math.max(most, running); await new Promise(r => setTimeout(r, 20)); running--; return [{ id: `s-${q}`, name: q }]; },
+    async get(ref) { running++; most = Math.max(most, running); await new Promise(r => setTimeout(r, 5)); running--; return { id: ref, name: "Grabbed", url: "https://2e.aonprd.com/Conditions.aspx?ID=77", text: "t" }; },
+  };
+  const claude = fakeClaude([
+    { content: [{ type: "tool_use", id: "a", name: "aon_search", input: { query: "one" } }, { type: "tool_use", id: "b", name: "aon_get", input: { ref: "condition-77" } }, { type: "tool_use", id: "c", name: "aon_search", input: { query: "two" } }], usage: {} },
+    { content: [{ type: "tool_use", id: "d", name: "answer", input: { say: "Yes." } }], usage: {} },
+  ]);
+  const r = await answerQuestion({ claude, aon: slowAon, model: "m", system: "S", conversation: "", question: "q", asker: "A" });
+  assert.equal(most, 3, "all three at once");
+  assert.equal(r.lookups, 3);
+  const results = claude.requests[1].messages[2].content;
+  assert.deepEqual(results.map(x => x.tool_use_id), ["a", "b", "c"], "the results go back in the order asked");
+  assert.match(results[0].content, /s-one/);
+  assert.match(results[2].content, /s-two/);
+  assert.equal(seen[0].withText, 3);
+  assert.deepEqual(r.sources, [{ name: "Grabbed", url: "https://2e.aonprd.com/Conditions.aspx?ID=77" }], "the page she read is still listed when she names none");
+});
+
+test("their own words are the question and the check's reading only a hint; only pages the lookups gave are posted; a lookup is tried twice", async () => {
+  assert.match(userMessage({ conversation: "", question: "Angel, what does grabbed do?", asker: "Mira", via: "voice", meaning: "What does the grabbed condition do?" }), /Mira said to you: "Angel, what does grabbed do\?"\n\(Their words come from a speech transcriber.*first reading of what they want: "What does the grabbed condition do\?"\. Go by their own words/);
+  assert.doesNotMatch(userMessage({ conversation: "", question: "q", asker: "A", via: "text" }), /first reading/);
+  let tries = 0;
+  const flaky = { async search() { tries++; if (tries === 1) throw new Error("socket hang up"); return [{ id: "c-77", name: "Grabbed", url: "https://2e.aonprd.com/Conditions.aspx?ID=77" }]; }, async get() { throw new Error("Archives of Nethys answered 503"); } };
+  const claude = fakeClaude([
+    { content: [{ type: "tool_use", id: "s", name: "aon_search", input: { query: "grabbed" } }, { type: "tool_use", id: "g", name: "aon_get", input: { ref: "c-1" } }], usage: {} },
+    { content: [{ type: "tool_use", id: "f", name: "answer", input: { say: "Yes.", sources: [{ name: "Grabbed", url: "https://2e.aonprd.com/Conditions.aspx?ID=77" }, { name: "Made up", url: "https://2e.aonprd.com/Conditions.aspx?ID=999" }] } }], usage: {} },
+  ]);
+  const r = await answerQuestion({ claude, aon: flaky, model: "m", system: "S", conversation: "", question: "q", asker: "A", meaning: "m" });
+  assert.equal(tries, 2, "the search worked at the second try");
+  assert.equal(r.failedLookups, 1, "the page that failed twice is counted");
+  assert.match(claude.requests[1].messages[2].content[1].content, /lookup failed: Archives of Nethys answered 503.*say plainly that you couldn't check/);
+  assert.deepEqual(r.sources, [{ name: "Grabbed", url: "https://2e.aonprd.com/Conditions.aspx?ID=77" }], "a link no lookup gave is not posted");
+  assert.match(typedAnswer({ asker: "A", question: "q", say: "Yes.", sources: r.sources, unchecked: true }), /Yes\.\n-# ⚠️ I couldn't reach Archives of Nethys for part of this.*\n-# \[Grabbed\]/);
+});
+
+test("a lookup that ran out of time is not tried again", async () => {
+  let tries = 0;
+  const slow = { async search() { tries++; throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }); }, async get() { return null; } };
+  const claude = fakeClaude([{ content: [{ type: "tool_use", id: "s", name: "aon_search", input: { query: "q" } }], usage: {} }, { content: [{ type: "tool_use", id: "f", name: "answer", input: { say: "Couldn't check." } }], usage: {} }]);
+  const r = await answerQuestion({ claude, aon: slow, model: "m", system: "S", conversation: "", question: "q", asker: "A" });
+  assert.equal(tries, 1);
+  assert.equal(r.failedLookups, 1);
+});

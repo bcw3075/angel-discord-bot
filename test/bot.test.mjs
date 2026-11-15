@@ -382,3 +382,47 @@ test("when she can't post in the channel, she doesn't join voice at all", async 
   assert.match(i.edits[0], /can't post in this channel/);
   assert.equal(bot.joining.has("g1"), false);
 });
+
+test("a spend file that can't be written never stops her: the total stays in memory and is tried again", async () => {
+  const { bot } = makeBot();
+  const warned = [];
+  bot.log = { ...quiet, warn: m => warned.push(m) };
+  /* a folder where the file should be: every write fails, as with a file that is locked */
+  fs.rmSync(bot.spendFile, { force: true });
+  fs.mkdirSync(bot.spendFile, { recursive: true });
+  bot.addSpend(0.02);
+  bot.bookLive();
+  bot.addSpend(0.03);
+  assert.equal(bot.spentToday().toFixed(2), "0.05", "counted all the same");
+  assert.equal(warned.length, 1, "said once");
+  assert.match(warned[0], /couldn't write today's spending/);
+  fs.rmdirSync(bot.spendFile);
+  bot.addSpend(0.01);
+  assert.equal(bot.warnedLedger, false, "a later failure would be said again");
+  /* only the swap is refused (Windows, a file held open): written straight instead */
+  fs.mkdirSync(bot.spendFile + ".tmp");
+  bot.addSpend(0.00);
+  bot.saveLedger();
+  assert.equal(warned.length, 1, "no new warning: the straight write worked");
+  fs.rmSync(bot.spendFile + ".tmp", { recursive: true, force: true });
+  assert.equal(JSON.parse(fs.readFileSync(bot.spendFile, "utf8")).dollars.toFixed(2), "0.06", "written whole once it can be");
+  assert.equal(fs.existsSync(bot.spendFile + ".tmp"), false, "swapped in, no half file left beside it");
+  /* a total that isn't a number counts as over the cap */
+  bot.ledger.dollars = NaN; bot.ledgerToday = () => bot.ledger;
+  assert.equal(bot.dailyOver(), true);
+  clearInterval(bot.bookTimer);
+});
+
+test("typed questions outside a session are answered one at a time, each checked against the cap after the last was counted", async () => {
+  const { bot, answers } = makeBot({ maxDailyDollars: 0.015 });
+  let running = 0, most = 0;
+  bot.services.answer = async q => { answers.push(q); running++; most = Math.max(most, running); await new Promise(r => setTimeout(r, 10)); running--; return { say: "Yes.", sources: [], dollars: 0.01 }; };
+  bot.knowOwner = async () => {};
+  const sent = [];
+  const reply = { send: async t => { sent.push(t); return { edit: async e => sent.push(e) }; } };
+  await Promise.all([1, 2, 3].map(n => bot.answerAlone({ question: `q${n}`, asker: "Mira", reply, guild: null })));
+  assert.equal(most, 1, "one at a time");
+  assert.equal(answers.length, 2, "the third met the cap the first two reached");
+  assert.ok(sent.some(t => /spending cap/.test(t)));
+  clearInterval(bot.bookTimer);
+});
