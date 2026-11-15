@@ -145,6 +145,16 @@ export const CASES = [
     { say: "To Treat Wounds.", replying: true, want: [/15/], chat: "either", lookups: 1 },
   ] },
 
+  /* ---- fourth batch (Rhea, 2026-11-14: "what about asking for her judgment on a ruling that is vague, or what about
+     asking what other GM's think on a topic?"). Her judgment: she gives one, says it is hers and not rules text, and
+     leaves the call to the GM. Other GMs: she has the rulebooks and the table's house rules, not the forums, so she
+     says what she can't check and never makes up what "most GMs" do or a figure for it ---- */
+  { id: "her-judgment-crit-trip-swarm", steps: [{ say: "Angel, a swarm can't be knocked prone, but I rolled a critical success to Trip it. The rules don't say if the 1d6 damage still happens. How would you rule it?", want: [/GM|your call|you decide|up to you/i, /I'?d|I would|my (read|take|call|ruling|suggestion)|usual reading|suggest|lean/i], lookups: 1 }] },
+  { id: "her-judgment-vague-rule", steps: [{ say: "Angel, my player wants to use Demoralize on a mindless zombie by screaming at it. The rules feel unclear to me. What's your judgment?", want: [/mental|mindless/i, /GM|your call|you decide|up to you/i], lookups: 1 }] },
+  { id: "her-judgment-no-rule-at-all", steps: [{ say: "Angel, there's no rule for this: my player wants to swing on a chandelier and kick two goblins in one go. How should I run it?", want: [/GM|your call|you decide|up to you/i, /I'?d|I would|suggest|could|one way|option/i], never: [/the rules? (say|state)s? (that )?you (must|have to)/i], lookups: 0 }] },
+  { id: "what-other-gms-think", steps: [{ say: "Angel, what do other GMs usually do about players wanting to Recall Knowledge for free every round?", want: [/can'?t (check|look|see|speak)|don'?t have|not (in|something)|only (have|know)|rule(s|book)|as written|usual reading|common/i], never: [/\d+ ?(%|percent)|most GMs on|reddit (says|thread)|according to (the )?(forums?|reddit)/i], chat: "either", lookups: 0 }] },
+  { id: "what-the-community-thinks", steps: [{ say: "Angel, is it true most tables house-rule free archetype? What does the community think?", want: [/can'?t (check|look|see|speak|tell)|don'?t have|not (in|something)|only (have|know)|variant|GM|your (call|table)/i], never: [/\d+ ?(%|percent)|according to (the )?(forums?|reddit|a poll)/i], chat: "either", lookups: 0 }] },
+
   /* small talk: spoken only, nothing looked up */
   { id: "small-talk", steps: [{ say: "Angel, how are you feeling tonight?", chat: true, lookups: 0 }] },
   /* was that for her? (the check only) */
