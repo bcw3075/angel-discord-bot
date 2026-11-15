@@ -77,7 +77,7 @@ nothing from her: defaults fill the gap.
 <!-- feature-index:start -->
 | Feature | Doc | Owns | Checks |
 |---|---|---|---|
-| answering | `docs/features/answering.md` | src/answer.mjs, src/claude.mjs, src/aon.mjs | 14 |
+| answering | `docs/features/answering.md` | src/answer.mjs, src/claude.mjs, src/aon.mjs | 15 |
 | deepgram | `docs/features/deepgram.md` | Choose Voice.cmd, src/stt.mjs, src/tts.mjs, src/speech.mjs | 5 |
 | discord | `docs/features/discord.md` | src/bot.mjs, src/commands.mjs | 10 |
 | floor | `docs/features/floor.md` | src/floor.mjs | 2 |

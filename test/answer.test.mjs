@@ -543,3 +543,13 @@ test("an answer whose written part was lost says so; a garbled answer that stopp
   assert.equal(r.cut ?? r.detailsLost, undefined);
   assert.match(systemPrompt({}), /say only what you can point to: the entries you looked up, the house rules below, or what was already said or written at this table.*This doesn't limit small talk, house-rule answers, or giving the usual reading/);
 });
+
+test("(an-15) a note on a typed answer takes its room from the answer: the page links stay whole, an emoji isn't cut in half (review 3 of 0.1.3)", async () => {
+  const { typedAnswer, cutWhole } = await import("../src/answer.mjs");
+  const note = "\n-# (The table was busy, so I didn't get a gap to say this aloud.)";
+  const out = typedAnswer({ asker: "Mira", question: "q", say: "x".repeat(3000), sources: [{ name: "Grabbed", url: "https://2e.aonprd.com/Conditions.aspx?ID=77" }], note });
+  assert.ok(out.length <= 1990);
+  assert.ok(out.endsWith(`[Grabbed](<https://2e.aonprd.com/Conditions.aspx?ID=77>)${note}`), "links whole, note last");
+  assert.equal(cutWhole("ab😀", 3), "ab", "no half of an emoji");
+  assert.equal(cutWhole("ab😀", 4), "ab😀");
+});

@@ -99,14 +99,17 @@ export class Session {
     /* a piece is "being heard" until its line has been judged: a gap while she holds an answer doesn't release her
        before what was said in it is known (review 2 of 0.1.3: "hold on" then quiet, and she spoke over it) */
     const no = ++this.pieceNo;
-    this.hearingNow.set(no, seg.startedAt);
+    /* by when it ended: talk that began before the question and ran on past it counts (review 3 of 0.1.3) */
+    this.hearingNow.set(no, { end: seg.startedAt + (seg.packets?.length ?? 0) * 20, added: this.now() });
     try { return await this.hearPiece(seg); }
     finally { this.hearingNow.delete(no); }
   }
 
   /* something said after `at` is still being heard or judged */
   stillHearing(at) {
-    for (const t of this.hearingNow.values()) if (t > at) return true;
+    const now = this.now();
+    /* a piece stuck longer than this (a hung call) stops holding her up: the hold's limit must not be spent on it */
+    for (const p of this.hearingNow.values()) if (p.end > at && now - p.added < 10000) return true;
     return false;
   }
 
@@ -163,7 +166,8 @@ export class Session {
        or a question (Rhea, d-7). A line still being put together (a long question, "Angel?" with the rest to come)
        goes the usual way. */
     const h = this.holding;
-    if (h && !more && !released && line.at > h.at && !this.pending.has(uid) && !this.checking.has(uid)) return this.onHeldLine(h, line, until);
+    /* said after the held question, or begun before it and still going after it (review 3 of 0.1.3) */
+    if (h && !more && !released && Math.max(line.at, until ?? line.at) > h.at && !(uid === h.userId && line.at <= h.at) && !this.pending.has(uid) && !this.checking.has(uid)) return this.onHeldLine(h, line, until);
     /* the person she just answered may reply without her name for a little while after she stops talking (Rhea,
        2026-11-14: "you replied first but not when I replied to you"); the check still decides it was for her */
     const r = this.replyTo;
@@ -510,18 +514,18 @@ export class Session {
 
     /* the check may call a rules question small talk: one that looked something up is posted anyway */
     let posted = false;
-    let postedMsg = null, typedText = "";
+    let postedMsg = null;
     let wroteBefore = null, ownWritten = null; /* her last written answer before this one, put back if this post goes */
     const LET_GO_NOTE = "\n-# (The table was busy, so I didn't get a gap to say this aloud.)";
+    const typedWith = (note = "") => typedAnswer({ asker, question: shown, say: result.details ?? result.say, sources: result.sources, unchecked: result.failedLookups > 0, note });
     const post = async (note = "") => {
       if (posted) return;
       posted = true;
-      const typed = typedAnswer({ asker, question: shown, say: result.details ?? result.say, sources: result.sources, unchecked: result.failedLookups > 0 });
-      typedText = typed;
+      const typed = typedWith(note);
       /* kept for the next question only when it is a checked rules answer: not small talk, not one a lookup failed for */
       if (!result.failed && result.details && !chat && !result.cut && !result.detailsLost && result.lookups > 0 && !(result.failedLookups > 0)) { wroteBefore = this.lastWritten; this.lastWritten = ownWritten = { at: this.now(), text: result.details }; }
       const placeholder = await placed;
-      try { if (placeholder?.edit) { await placeholder.edit(withNote(typed, note)); postedMsg = placeholder; } else postedMsg = await target.send(withNote(typed, note)); }
+      try { if (placeholder?.edit) { await placeholder.edit(typed); postedMsg = placeholder; } else postedMsg = await target.send(typed); }
       catch (e) { this.log.warn(`couldn't post the answer: ${e.message}`); }
     };
     if (!quiet || result.failed || result.lookups > 0 || result.sources?.length) await post();
@@ -529,6 +533,8 @@ export class Session {
     /* in the transcript at the moment she began to say it (after a wait for a gap, when the gap came); not at all when
        she never got to say it */
     const unsaid = floor !== null && floor !== "go";
+    /* what she really said for it, for the echo check: her reaction and her "I'm ready", not the answer (review 3) */
+    if (unsaid) this.lastSaid = [ackText, qc.cutIn].filter(Boolean).join(" ");
     if (!unsaid) {
       this.transcript.add({ at: floor === "go" && floorAt && floorAt > (times.written ?? 0) ? floorAt : (times.written ?? this.now()), speaker: "Angel", role: "angel", text: heard, kind: "angel" });
       this.lastSaid = heard;
@@ -552,7 +558,7 @@ export class Session {
     if (floor === "letgo") {
       /* no gap came in time: the written answer says so, and the asker can still ask "what was it?" without her name */
       startLog();
-      if (posted) { if (postedMsg?.edit) await postedMsg.edit(withNote(typedText, LET_GO_NOTE)).catch(e => this.log.warn(`couldn't note the post: ${e.message}`)); }
+      if (posted) { if (postedMsg?.edit) await postedMsg.edit(typedWith(LET_GO_NOTE)).catch(e => this.log.warn(`couldn't note the post: ${e.message}`)); }
       else await post(LET_GO_NOTE);
       if (via === "voice" && userId && run < 3 && !this.ended && !this.stoppedSince(at)) {
         this.replyTo = { userId, from: this.now(), turn: run };
@@ -614,8 +620,11 @@ export class Session {
     const deadline = h.since + this.cfg.busyMaxHoldMs;
     /* a pause or gap is at least as long as it takes a piece of speech to reach her (it ends after silenceMs of
        silence), so what was said just before it is already being heard when it is judged (review 2 of 0.1.3) */
-    const pauseMs = Math.max(this.cfg.busyPauseMs, this.cfg.silenceMs + 200);
-    const gapMs = Math.max(this.cfg.busyGapMs, this.cfg.silenceMs + 200);
+    const reachMs = this.cfg.silenceMs + 200;
+    const pauseMs = Math.max(this.cfg.busyPauseMs, reachMs);
+    const gapMs = Math.max(this.cfg.busyGapMs, reachMs);
+    /* `reachMs` is also counted from any talk at all, a blip included: a short "Wait!" doesn't hold the table, but
+       it is waited for until it would have reached her (review 3 of 0.1.3) */
     const left = () => Math.max(0, deadline - this.now());
     const wait = (needMs, opts) => {
       if (h.signal) return Promise.resolve(h.signal);
@@ -637,15 +646,18 @@ export class Session {
     ready.catch(() => {});
     try {
       /* 1. a moment for a natural pause */
-      let r = h.mode === "invite" ? "wait" : await wait(pauseMs, { maxMs: Math.min(this.cfg.busyFirstWaitMs, left()), blocked: () => this.stillHearing(h.at) });
+      let r = h.mode === "invite" ? "wait" : await wait(pauseMs, { maxMs: Math.min(this.cfg.busyFirstWaitMs, left()), blocked: () => this.stillHearing(h.at), minSinceAnyMs: reachMs });
       if (r === "quiet") { this.log.info(`a pause came: ${who}'s answer goes ahead`); return "go"; }
       if (h.signal) return this.held(h);
       /* 2. still talking: she cuts in, unless told to hold on, or they stopped as the moment passed */
       let since = -Infinity;
-      if (h.mode !== "invite") {
-        if (!f.busy()) { this.log.info(`the talk stopped: ${who}'s answer goes ahead`); return "go"; }
+      /* the talk stopped, but what was said is still being heard: no cut-in, she waits for it (review 3 of 0.1.3) */
+      const settled = () => !f.busy() && !this.stillHearing(h.at);
+      if (h.mode !== "invite" && !f.busy() && this.stillHearing(h.at)) this.log.info(`the talk stopped; waiting to hear what was said`);
+      else if (h.mode !== "invite") {
+        if (settled()) { this.log.info(`the talk stopped: ${who}'s answer goes ahead`); return "go"; }
         /* while her words are written and voiced, a pause or the time limit still counts (review of 0.1.3) */
-        const watch = f.waitForQuiet(pauseMs, { maxMs: left(), blocked: () => this.stillHearing(h.at) });
+        const watch = f.waitForQuiet(pauseMs, { maxMs: left(), blocked: () => this.stillHearing(h.at), minSinceAnyMs: reachMs });
         h.waiter = watch;
         const got = await Promise.race([ready.catch(e => ({ failed: e })), h.signalled, watch.promise.then(r => ({ floor: r }))]);
         watch.wake("done");
@@ -656,15 +668,18 @@ export class Session {
         if (got?.floor) { /* "hold on" while her words were written: no cut-in */ }
         else if (got?.failed) this.log.warn(`couldn't make her "I'm ready" (${got.failed.message}): waiting without it`);
         else if (h.mode !== "invite" && !this.ended && !this.stoppedSince(qc.at)) {
-          if (!f.busy()) { this.log.info(`the talk stopped: ${who}'s answer goes ahead`); return "go"; }
-          h.cutIn = got.text;
-          this.readies.push(got.text);
-          if (this.readies.length > 10) this.readies.shift();
-          const cutAt = this.now();
-          this.log.info(`the table is still talking: she says she's ready, then waits for a gap or a go-ahead`);
-          await this.voice.speak(got.clips);
-          this.transcript.add({ at: cutAt, speaker: "Angel", role: "angel", text: got.text, kind: "angel" });
-          since = this.now();
+          if (settled()) { this.log.info(`the talk stopped: ${who}'s answer goes ahead`); return "go"; }
+          if (!f.busy()) this.log.info(`the talk stopped; waiting to hear what was said`);
+          else {
+            h.cutIn = qc.cutIn = got.text;
+            this.readies.push(got.text);
+            if (this.readies.length > 10) this.readies.shift();
+            const cutAt = this.now();
+            this.log.info(`the table is still talking: she says she's ready, then waits for a gap or a go-ahead`);
+            await this.voice.speak(got.clips);
+            this.transcript.add({ at: cutAt, speaker: "Angel", role: "angel", text: got.text, kind: "angel" });
+            since = this.now();
+          }
         }
       }
       /* 3. a gap (not after "hold on") or a go-ahead, until the time is up */
@@ -672,7 +687,7 @@ export class Session {
         if (h.signal) return this.held(h);
         if (this.ended) return "end";
         if (left() <= 0) break;
-        r = await wait(h.mode === "invite" ? Infinity : gapMs, { maxMs: left(), since, blocked: () => this.stillHearing(h.at) });
+        r = await wait(h.mode === "invite" ? Infinity : gapMs, { maxMs: left(), since, blocked: () => this.stillHearing(h.at), minSinceAnyMs: reachMs });
         if (r === "wait") { this.log.info(`told to hold on: ${who}'s answer waits for a go-ahead`); continue; }
         if (r === "quiet") { this.log.info(`a gap came: ${who}'s answer goes ahead`); return "go"; }
         if (r === "timeout") break;
@@ -783,13 +798,6 @@ export class Session {
     this.transcript.close();
     return this.status();
   }
-}
-
-/* a note added to a post, within Discord's 2,000 characters: the answer is shortened, never the note (review 2 of 0.1.3) */
-export function withNote(text, note = "", limit = 2000) {
-  if (!note) return text;
-  if (text.length + note.length <= limit) return text + note;
-  return `${text.slice(0, Math.max(0, limit - note.length - 1))}…${note}`;
 }
 
 export function summaryText(s) {

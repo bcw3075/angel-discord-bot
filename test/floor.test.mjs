@@ -86,3 +86,21 @@ test("a stretch that never got its end stops counting after maxSpellMs, and the 
   f.talk("a", true); step(600);
   assert.equal(f.busy(), true, "talking again counts");
 });
+
+test("a short sound after the talk is not talk, but a wait counts from it until it would have reached her (review 3 of 0.1.3)", async () => {
+  let t = 0;
+  const f = new Floor({ now: () => t, blipMs: 500, mergeMs: 100, pollMs: 2 });
+  f.talk("a", true); t = 1000; f.talk("a", false);
+  t = 1450; f.talk("b", true); t = 1650; f.talk("b", false); /* a 200 ms "Wait." */
+  assert.equal(f.busy(), false, "not talk");
+  t = 2600;
+  assert.ok(f.quietFor() >= 1500);
+  assert.equal(f.sinceAnyTalk(), 950);
+  const w = f.waitForQuiet(1500, { maxMs: 10_000, minSinceAnyMs: 1100 });
+  await sleep(10);
+  let done = false; w.promise.then(() => { done = true; });
+  await sleep(10);
+  assert.equal(done, false, "held back until the short sound would have reached her");
+  t = 2760; await sleep(10);
+  assert.equal(await w.promise, "quiet");
+});

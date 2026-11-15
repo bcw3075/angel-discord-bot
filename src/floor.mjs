@@ -81,6 +81,20 @@ export class Floor {
   }
   open(spell, at) { return spell.end === null && at - spell.start <= this.maxSpellMs; }
 
+  /* How long since anyone made any sound at all, a blip included (her own voice coming back aside) */
+  sinceAnyTalk(at = this.now()) {
+    let lastEnd = -Infinity;
+    for (const list of this.spells.values()) {
+      for (const spell of list) {
+        const end = this.endOf(spell, at);
+        if (this.effectiveStart(spell, at) > end) continue; /* all inside her own echo window */
+        if (this.open(spell, at)) return 0;
+        if (end > lastEnd) lastEnd = end;
+      }
+    }
+    return at - lastEnd;
+  }
+
   /* when a stretch of talk starts to count: talk that began while she spoke (or in the tail after) counts from the
      end of that window */
   effectiveStart(spell, at) {
@@ -95,7 +109,7 @@ export class Floor {
   /* Wait until nobody has talked for `needMs` (counted from `since`), at most `maxMs`. Returns { promise, wake }:
      the promise resolves "quiet", "timeout", or whatever `wake(reason)` was given. needMs Infinity waits for wake or
      the timeout only. `blocked()` true holds a quiet back (the timeout and wakes still count). */
-  waitForQuiet(needMs, { maxMs = Infinity, since = -Infinity, blocked = () => false } = {}) {
+  waitForQuiet(needMs, { maxMs = Infinity, since = -Infinity, blocked = () => false, minSinceAnyMs = 0 } = {}) {
     const began = this.now();
     let timer = null, done = null;
     const promise = new Promise(resolve => {
@@ -104,7 +118,7 @@ export class Floor {
         if (!done) return;
         const at = this.now();
         /* `blocked`: something said in the quiet is still being heard or judged (the caller's to say) */
-        if (needMs !== Infinity && this.quietFor(at, since) >= needMs && !blocked()) return done("quiet");
+        if (needMs !== Infinity && this.quietFor(at, since) >= needMs && this.sinceAnyTalk(at) >= minSinceAnyMs && !blocked()) return done("quiet");
         if (at - began >= maxMs) return done("timeout");
         /* not unref'd: a hold always has a limit (busyMaxHoldMs), and a session waiting on it is real work */
         timer = setTimeout(tick, this.pollMs);

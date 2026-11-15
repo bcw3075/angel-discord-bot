@@ -20,6 +20,7 @@ Who has the floor: who is talking now, from Discord's speaking signal, and a wai
 - `busy(at)`: anyone whose last stretch counts and is still going, or paused shorter than `mergeMs`.
 - `quietFor(at, since)`: how long since the last counted talk ended, from `since` at the earliest; 0 while anyone is mid-word (a blip so far included), unless all of it is still inside her own echo window.
 - A stretch still open after `maxSpellMs` (ten minutes) is taken as ended then, and the speaker's next start counts: a lost end can't keep the table busy for good (review of 0.1.3).
+- `sinceAnyTalk(at)`: since any sound at all, a blip included (her own echo aside); `waitForQuiet`'s `minSinceAnyMs` needs that much too, and `blocked()` holds a quiet back while the caller is still hearing something (review 2 and 3 of 0.1.3).
 - `waitForQuiet(needMs, { maxMs, since })` polls every `pollMs` (100 ms) and resolves `"quiet"`, `"timeout"`, or the reason given to `wake(reason)` (the first one stands). `needMs` Infinity waits for a wake or the timeout only. The poll timer is not unref'd: a hold always has a limit.
 
 ## Checks

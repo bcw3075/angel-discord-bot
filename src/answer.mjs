@@ -276,12 +276,20 @@ export function shortQuestion(q) {
 }
 
 /* The typed copy in the text channel: who asked, the answer, the pages. Kept under Discord's 2,000 characters. */
-export function typedAnswer({ asker, question, say, sources = [], unchecked = false }) {
+export function typedAnswer({ asker, question, say, sources = [], unchecked = false, note = "" }) {
   const head = asker && question ? `**${asker} asked:** ${shortQuestion(question)}\n` : "";
   /* a lookup failed even at the second try: the table is told this answer wasn't fully checked against the rules */
   const warn = unchecked ? "\n-# ⚠️ I couldn't reach Archives of Nethys for part of this, so check it before you rely on it." : "";
   const links = warn + (sources.length ? `\n-# ${sources.map(s => `[${s.name.replace(/[[\]]/g, "")}](<${s.url}>)`).join(" · ")}` : "");
-  const room = 1990 - head.length - links.length;
-  const body = say.length > room ? say.slice(0, room - 1) + "…" : say;
-  return head + body + links;
+  /* a note (0.1.3: "didn't get a gap") goes last; room for it comes out of the answer, never the links */
+  const room = 1990 - head.length - links.length - note.length;
+  const body = say.length > room ? cutWhole(say, room - 1) + "…" : say;
+  return head + body + links + note;
+}
+
+/* the first n UTF-16 units, not ending half way through an emoji (review 3 of 0.1.3) */
+export function cutWhole(text, n) {
+  let out = String(text).slice(0, Math.max(0, n));
+  if (/[\uD800-\uDBFF]$/.test(out)) out = out.slice(0, -1);
+  return out;
 }

@@ -437,14 +437,6 @@ test("(se-12) after a merge, the held answer's post is not given to the fresh on
   assert.equal(x.s.lastWritten.text, "fresh details");
 });
 
-test("(se-11) the note fits in Discord's 2,000 characters: the answer is shortened, never the note", async () => {
-  const { withNote } = await import("../src/session.mjs");
-  const out = withNote("x".repeat(1995), "\n-# (note)");
-  assert.equal(out.length, 2000);
-  assert.ok(out.endsWith("…\n-# (note)"));
-  assert.equal(withNote("short", "\n-# n"), "short\n-# n");
-});
-
 test("(se-12) a typed question held: the asker's own typed line doesn't release her; someone else's does", async () => {
   const x = await started(setup());
   x.voice.talk("p2", true, Date.now() - 500);
@@ -468,5 +460,77 @@ test("(se-12) a gap is never shorter than it takes a piece of speech to reach he
   x.voice.talk("p2", false);
   await until(() => answers(x.voice).length === 1);
   assert.ok(Date.now() - t0 >= 780, `released after ${Date.now() - t0} ms`);
+  await x.s.answering;
+});
+
+/* ---- the third review of 0.1.3 ---- */
+test("(se-12) the talk stops early in the hold with 'hold on' still being heard: no 'the talk stopped, go ahead'", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Hold on Angel, one sec."], hold: a => (/Hold on/.test(a.bareText) ? { kind: "wait" } : { kind: "none" }), cfg: { busyFirstWaitMs: 300 } }));
+  x.voice.talk("p2", true, Date.now() - 500);
+  speech(x.voice, "p1");
+  await until(() => x.s.holding);
+  const stt = x.s.stt, hold = x.s.hold;
+  x.s.stt = async w => { await sleep(300); return stt(w); };
+  x.s.hold = async a => { await sleep(300); return hold(a); };
+  x.voice.talk("p2", false);
+  speech(x.voice, "p2");
+  await sleep(1000);
+  assert.deepEqual(answers(x.voice), [], "held for the go-ahead");
+  assert.equal(x.s.holding?.mode, "invite");
+  x.s.end();
+  await x.s.answering;
+});
+
+test("(se-12) someone talking since before the question, ending with 'hold on': heard and judged as said while she waits", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "...so that's my plan, hold on Angel, one sec."], hold: a => (/hold on/.test(a.bareText) ? { kind: "wait" } : { kind: "none" }) }));
+  const began = Date.now() - 2000;
+  x.voice.talk("p2", true, began);
+  speech(x.voice, "p1");
+  await until(() => x.s.holding);
+  const stt = x.s.stt;
+  x.s.stt = async w => { await sleep(200); return stt(w); };
+  x.voice.talk("p2", false);
+  x.voice.emit("speech", { userId: "p2", packets: tonePackets(3), startedAt: began, final: true }); /* one piece of 3 s, begun before the question */
+  await sleep(900);
+  assert.equal(x.holds.length, 1, "it went to the check while she waits");
+  assert.deepEqual(answers(x.voice), []);
+  x.s.end();
+  await x.s.answering;
+});
+
+test("(se-12) a piece stuck in hearing stops holding her up after ten seconds", async () => {
+  const x = await started(setup());
+  x.s.hearingNow.set(99, { end: Date.now() + 1000, added: Date.now() });
+  assert.equal(x.s.stillHearing(Date.now() - 1), true);
+  x.s.hearingNow.set(99, { end: Date.now() + 1000, added: Date.now() - 11000 });
+  assert.equal(x.s.stillHearing(Date.now() - 1), false);
+});
+
+test("(se-12) after a merge or a stop, what she said for the question is her reaction and her 'I'm ready', not the answer", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Never mind."], hold: a => (/Never/.test(a.bareText) ? { kind: "stop" } : { kind: "none" }) }));
+  x.voice.talk("p2", true, Date.now() - 500);
+  speech(x.voice, "p1");
+  await until(() => x.voice.spoken.length === 1);
+  speech(x.voice, "gm");
+  await x.s.answering;
+  assert.equal(x.s.lastSaid, "Got it, whenever you're ready.");
+});
+
+test("(se-12) the talk stops while her 'I'm ready' is being written, with 'hold on' still being heard: no 'go ahead' when her words are ready", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Hold on Angel."], hold: a => (/Hold on/.test(a.bareText) ? { kind: "wait" } : { kind: "none" }), cfg: { busyFirstWaitMs: 50 } }));
+  x.s.readyLine = async () => { await sleep(700); return { text: "Ready when you are." }; };
+  x.voice.talk("p2", true, Date.now() - 500);
+  speech(x.voice, "p1");
+  await until(() => x.s.holding);
+  await sleep(100); /* past the first wait: her words are being written */
+  const stt = x.s.stt, hold = x.s.hold;
+  /* heard and judged only after her words are ready, and the talk stopped well before that */
+  x.s.stt = async w => { await sleep(500); return stt(w); };
+  x.s.hold = async a => { await sleep(500); return hold(a); };
+  x.voice.talk("p2", false);
+  speech(x.voice, "p2");
+  await sleep(1400);
+  assert.deepEqual(answers(x.voice), []);
+  x.s.end();
   await x.s.answering;
 });
