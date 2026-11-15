@@ -99,7 +99,7 @@ export class Session {
     const hearing = this.stt(piece.wav);
     /* "Angel, stop" doesn't wait its turn behind an earlier piece still being transcribed */
     let stoppedEarly = false;
-    hearing.then(h => { if (!this.ended && h?.text && isStopRequest(h.text)) { stoppedEarly = true; this.stop(startedAt); } }).catch(() => {});
+    hearing.then(h => { if (!this.ended && h?.text && isStopRequest(h.text)) { stoppedEarly = true; this.stop(startedAt); this.log.info(`${this.speakerOf(userId)?.name ?? "Someone"} said stop: she stops (heard at once)`); } }).catch(() => {});
     const before = this.heardOrder.get(userId) ?? Promise.resolve();
     let handling = null;
     const turn = before.then(async () => {
@@ -130,7 +130,7 @@ export class Session {
 
   /* `more` means this piece was cut off because the speaker has talked for maxUtteranceSeconds and is still talking */
   async onLine(line, until = line.at, more = false, released = null) {
-    if (isStopRequest(line.text)) { this.stop(line.at); return; }
+    if (isStopRequest(line.text)) { this.stop(line.at); this.log.info(`${line.speaker} said stop: she stops`); return; }
     const uid = line.userId;
     /* the person she just answered may reply without her name for a little while after she stops talking (Rhea,
        2026-11-14: "you replied first but not when I replied to you"); the check still decides it was for her */
@@ -191,11 +191,21 @@ export class Session {
     else if (decision.fallback) this.log.warn(`the "was that for me?" check gave a reply that couldn't be read; the plain rule decided`);
     /* what the check decided goes in the log (no words, just the verdict), so a line she didn't answer can be explained */
     this.log.info(`check on ${line.speaker}'s line${wasNamed ? "" : " (a reply, no name)"}: ${decision.toAngel ? (decision.chat ? "for Angel, small talk" : decision.complete === false ? "for Angel, waiting for the rest" : "for Angel") : "not for Angel"}`);
-    if (!decision.toAngel || this.ended || this.stoppedSince(firstAt)) return;
+    if (this.ended || this.stoppedSince(firstAt)) return;
+    /* "okay, that's enough, thanks" can come back as not for her (a bare acknowledgement) and a stop: from the person
+       she is talking with, the stop still counts (review 11) */
+    if (!decision.toAngel && !(decision.stop && (wasNamed || replying))) return;
     let at = firstAt;
     let asked = text; /* their own words */
     if (decision.stop) {
-      this.stop(line.at);
+      /* in the log, so a line taken as a stop can be explained (live 2026-11-15: "Cut me off there." was read as one,
+         her answer was never spoken and the lines after it went unheard). A stop only the check read into the line
+         gives them a reply window, so a wrong reading costs one answer, not the conversation. */
+      this.log.info(`check on ${line.speaker}'s line: read as "stop": she stops`);
+      this.stop(line.at, { keepReplyWindow: true });
+      /* a fresh minute from now, not what was left of the last one (review 11), with the small-talk count kept */
+      if (uid) this.replyTo = { userId: uid, from: this.now(), turn: r?.userId === uid ? r.turn : 0 };
+      if (!decision.toAngel) return;
       /* "Angel, stop. What does stunned do?": stop, then answer the question (asked just after the stop): their own
          words from after the stop, which is already done (the check's wording when the stop can't be cut off) */
       if (!(decision.complete && decision.question && /\?/.test(text))) return;
@@ -483,9 +493,9 @@ export class Session {
 
   /* "Angel, stop": cut her off, drop questions still waiting, and don't speak an answer still being looked up.
      `at` is when the stop was said (a typed or /angel stop: now). */
-  stop(at = this.now()) {
+  stop(at = this.now(), { keepReplyWindow = false } = {}) {
     this.lastStopAt = Math.max(this.lastStopAt, at);
-    this.replyTo = null;
+    if (!keepReplyWindow) this.replyTo = null;
     for (const p of this.pending.values()) clearTimeout(p.timer);
     this.pending.clear();
     this.voice.stopSpeaking();

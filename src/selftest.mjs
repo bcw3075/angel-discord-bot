@@ -12,7 +12,8 @@ import { SentenceCutter } from "./speech.mjs";
    - `checkOnly` stops after the check; `replying` means she has just answered this person;
    - `want` are things a right answer says and `never` things it must not say (patterns over what she says and
      writes together); `lookups` is the least number of lookups a rules answer needs (0 for small talk);
-   - `typed` asks it as a typed question (no check).
+   - `typed` asks it as a typed question (no check);
+   - `stop` (true or false) is whether the check should read the line as "stop".
    The patterns mark an answer "to look at": they are a first sieve, not the judge. The rules facts in them were
    checked against Archives of Nethys (Remaster) when they were written, 2026-11-14. */
 export const CASES = [
@@ -23,6 +24,18 @@ export const CASES = [
     { say: "Ha, same here.", replying: true, chat: true, lookups: 0, never: [/(say|use|need) my name/i] },
     { say: "Do you like being a bot?", replying: true, chat: true, lookups: 0, never: [/(say|use|need) my name/i] },
     { say: "Fair enough, I get that.", replying: true, chat: true, lookups: 0, lastReply: true, want: [/\bname\b/i], never: [/say my name if you need me again/i] },
+  ] },
+  /* remarks about being cut off are not stops (live 2026-11-15: "Cut me off there." stopped her answer); real stops are */
+  { id: "cut-off-is-not-stop", steps: [
+    { say: "Angel, which is the stronger spellcaster, a wizard or a sorcerer?", lookups: 1 },
+    { say: "Oh, and are there any differences", replying: true, checkOnly: true, complete: "either", chat: "either", stop: false },
+    { say: "Cut me off there.", replying: true, checkOnly: true, complete: "either", chat: "either", stop: false },
+    { say: "Hold on, I wasn't done.", replying: true, checkOnly: true, complete: "either", chat: "either", stop: false },
+  ] },
+  { id: "real-stops", steps: [
+    { say: "Angel, what does slowed do?", lookups: 1 },
+    { say: "Okay that's enough, thanks.", replying: true, checkOnly: true, complete: "either", chat: "either", stop: true },
+    { say: "Never mind, forget it.", replying: true, checkOnly: true, complete: "either", chat: "either", stop: true },
   ] },
   /* the plain run of a table: a rule, then follow-ups without her name, three deep */
   { id: "rule-then-follow-ups", steps: [
@@ -191,14 +204,15 @@ async function runStep({ services, asker, role = "GM", step, lines, now, previou
     const g0 = now();
     try {
       const d = await services.gate({ contextText: lines.slice(-7).join("\n"), lastText: `${asker}: ${step.say}`, bareText: step.say, replying: step.replying === true });
-      r.check = { ms: now() - g0, toAngel: d.toAngel === true, chat: d.chat === true, complete: d.complete !== false, question: d.question ?? "", ack: d.ack ?? "", error: d.error ?? "", fallback: d.fallback === true, dollars: d.dollars ?? 0 };
+      r.check = { ms: now() - g0, toAngel: d.toAngel === true, stop: d.stop === true, chat: d.chat === true, complete: d.complete !== false, question: d.question ?? "", ack: d.ack ?? "", error: d.error ?? "", fallback: d.fallback === true, dollars: d.dollars ?? 0 };
       /* a check Claude refused is the kind of fault this run exists to find: it is a failure, not a note */
       if (/^Claude answered 4/.test(d.error ?? "")) r.failed = `the check: ${d.error}`;
       else if (d.error) r.notes.push(`the check failed and the plain rule decided: ${d.error}`);
+      if (typeof step.stop === "boolean" && r.check.stop !== step.stop) r.notes.push(`the check said ${r.check.stop ? "stop" : "not a stop"}, expected ${step.stop ? "stop" : "not a stop"}`);
       if (r.check.toAngel !== wantForHer) r.notes.push(`the check said ${r.check.toAngel ? "for Angel" : "not for Angel"}, expected ${wantForHer ? "for Angel" : "not for Angel"}`);
       else if (wantForHer && step.complete === false && r.check.complete) r.notes.push("the check called it a finished question; it was only a call");
-      else if (wantForHer && step.complete !== false && !r.check.complete) r.notes.push("the check is waiting for more, but the question was whole");
-      else if (wantForHer && step.complete !== false && step.chat !== "either" && r.check.chat !== (step.chat === true)) r.notes.push(`the check called it ${r.check.chat ? "small talk" : "a rules question"}`);
+      else if (wantForHer && step.complete !== false && step.complete !== "either" && !r.check.complete) r.notes.push("the check is waiting for more, but the question was whole");
+      else if (wantForHer && step.complete !== false && step.complete !== "either" && step.chat !== "either" && r.check.chat !== (step.chat === true)) r.notes.push(`the check called it ${r.check.chat ? "small talk" : "a rules question"}`);
     } catch (e) { r.check = { ms: now() - g0, error: e.message, threw: true }; r.failed = `the check: ${e.message}`; }
   }
   lines.push(`[${clock(now())}] ${asker}${role === "GM" ? " (GM)" : ""}${step.typed ? " (typed)" : ""}: ${step.say}`);

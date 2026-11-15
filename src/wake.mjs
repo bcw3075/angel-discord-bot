@@ -52,7 +52,7 @@ Decide whether the LAST line was said to Angel herself: someone asking her somet
 Reply with JSON only, no other text:
 {"to_angel": true or false, "complete": true or false, "stop": true or false, "chat": true or false, "question": "...", "ack": "..."}
 - complete: false when they called her but haven't said the question yet ("Angel?", "Hey Angel, quick one..."); true otherwise. A question of a word or two that names a rule is whole ("Angel, grapple?", "Angel, flanking?"): complete true.
-- stop: true when they're telling her to stop talking or that they're done.
+- stop: true only when they plainly tell her to stop talking or that they don't want the answer any more ("stop", "that's enough", "never mind", "forget it"). A remark about being cut off, interrupted or misheard is not a stop ("cut me off there", "you cut me off", "hold on, I wasn't done", "that's not what I said"): stop false.
 - chat: true when it's banter or small talk that needs no rules lookup ("you were listening", "how are you?"); false for a rules question.
 - question: what they want from her in one sentence of at most 40 words, written to stand on its own using the earlier lines ("" when there's nothing yet). For a long question give the heart of it, don't copy it out. Write it as the question itself, the way they would ask it ("How does Grapple work?"), never as a report of it ("Rhea asks Angel how grapple works").
 - ack: for a rules question, what Angel says at once while she looks it up: three to ten spoken words in her voice (warm, quick, a little sassy), reacting to this question, different every time ("Ooh, grappling with a shield, bold. Checking.", "Stacking, my favourite headache. One moment."). "" for small talk or when it isn't for her.`;
@@ -64,7 +64,7 @@ Decide whether the LAST line is for Angel: a follow-up, a reaction, or another q
 Say no only when the line is plainly for someone else (the table or another player: narration, "roll initiative", "your turn, Sam", a player's name) or is nothing but an acknowledgement ("okay", "thanks", "got it").
 Reply with JSON only, no other text:
 {"to_angel": true or false, "complete": true, "stop": true or false, "chat": true or false, "question": "...", "ack": "..."}
-- stop: true when they're telling her to stop talking or that they're done.
+- stop: true only when they plainly tell her to stop talking or that they don't want the answer any more ("stop", "that's enough", "never mind", "forget it"). A remark about being cut off, interrupted or misheard is not a stop ("cut me off there", "you cut me off", "hold on, I wasn't done", "that's not what I said"): stop false.
 - chat: true when it's banter or small talk that needs no rules lookup; false for a rules question.
 - question: what they want from her in one sentence of at most 40 words, written to stand on its own using the earlier lines. Write it as the question itself, the way they would ask it ("Does that stack with cover?"), never as a report of it ("Asks whether it stacks").
 - ack: for a rules question, three to ten spoken words she says at once while she looks it up, in her voice (warm, quick, a little sassy), reacting to this question, different every time. "" for small talk.`;

@@ -471,6 +471,45 @@ test("review 10: three lines merged give one quick reaction; an answer in hand i
   }
 });
 
+test("a stop only the check read into a line is logged and leaves the reply window open; \"Angel, stop\" closes it (live 2026-11-15)", async () => {
+  // "Cut me off there." was read as a stop: her answer wasn't spoken and the lines after it went unheard
+  const lines = [];
+  const { s, voice, asked } = setup({ heard: ["Cut me off there.", "I'm curious how their power differs."], gate: ({ lastText }) => (/Cut me off/.test(lastText) ? { toAngel: true, complete: true, stop: true, chat: true, question: "" } : { toAngel: true, complete: true, stop: false, question: "How does their power differ?" }) });
+  s.answer = async q => { asked.push(q); return { say: `Answer to: ${q.question}`, sources: [], lookups: 1, dollars: 0.01 }; };
+  s.log = { info: m => lines.push(m), warn() {}, error() {}, debug() {} };
+  await s.start();
+  // the window from her last answer is nearly used up
+  s.replyTo = { userId: "p1", from: Date.now() - s.cfg.replyWindowMs + 50, turn: 2 };
+  speech(voice, "p1", 1, Date.now()); await settle(); await s.answering;
+  assert.equal(voice.stops, 1, "she stops");
+  assert.ok(lines.some(m => /read as "stop"/.test(m)), "and the log says why");
+  assert.equal(s.replyTo?.userId, "p1", "the window stays open: a wrong reading doesn't end the conversation");
+  assert.ok(s.replyTo.from >= Date.now() - 1000, "a fresh minute from now, not what was left");
+  assert.equal(s.replyTo.turn, 2, "with the small-talk count kept");
+  await sleep(80);
+  speech(voice, "p1", 1, Date.now()); await settle(); await s.answering;
+  assert.equal(asked.at(-1)?.question, "I'm curious how their power differs.", "her next line without the name is answered");
+  // "okay, that's enough, thanks" read as not for her but a stop: from the person she is talking with, she still stops
+  const c = setup({ heard: ["Okay that's enough, thanks."], gate: () => ({ toAngel: false, complete: true, stop: true, question: "" }) });
+  await c.s.start();
+  c.s.replyTo = { userId: "p1", from: Date.now() - 10, turn: 0 };
+  speech(c.voice, "p1", 1, Date.now()); await settle(); await c.s.answering;
+  assert.equal(c.voice.stops, 1, "she stops");
+  // from someone she isn't talking with, a line the check calls not for her does nothing
+  const d = setup({ heard: ["that's enough of that goblin"], gate: () => ({ toAngel: false, complete: true, stop: true, question: "" }) });
+  await d.s.start();
+  speech(d.voice, "p2", 1, Date.now()); await settle();
+  assert.equal(d.voice.stops, 0);
+  const b = setup({ heard: ["Angel, stop."] });
+  const bl = [];
+  b.s.log = { info: m => bl.push(m), warn() {}, error() {}, debug() {} };
+  await b.s.start();
+  b.s.replyTo = { userId: "p1", from: Date.now() - 10, turn: 0 };
+  speech(b.voice, "p1", 1, Date.now()); await settle();
+  assert.equal(b.s.replyTo, null, "her name and stop: the window closes");
+  assert.ok(bl.some(m => /said stop/.test(m)));
+});
+
 test("what the speaker says while the check runs is kept as the rest of the question", async () => {
   let open;
   const { s, voice, asked } = setup({ heard: ["Hey Angel, quick one", "what does off-guard do?"] });
