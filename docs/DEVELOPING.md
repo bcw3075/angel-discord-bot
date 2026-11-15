@@ -63,7 +63,7 @@ fill the change record, `gate` (it runs the doc check, the privacy scan and the 
 nothing from her: defaults fill the gap.
 
 ## Putting a build on the owner's PC
-- Stage each changed file under a NEW folder in the outputs area, wait about ten seconds, copy it with `device_commit_files`, then read it back with `device_stage_files` and `cmp` it against the build. "written" is not proof: a file copied a second after it was written over arrived with its old content, and the owner's retest failed the same way (2026-11-14). A matching size is not enough either.
+- Stage each changed file under a NEW folder in the outputs area, wait about ten seconds, copy it with `device_commit_files`, then read it back with `device_stage_files` and compare it byte for byte with the build. "written" is not proof: a file copied a second after it was written over arrived with its old content, and the owner's retest failed the same way (2026-11-14). A matching size is not enough either.
 - She restarts `Start Angel.cmd` to load new files; a running Angel keeps the old code.
 - `Test Angel.cmd` (docs/features/setup.md) runs the real check and answering with her keys, no Discord: use it before asking for a voice test, and read every answer in its report against Archives of Nethys. Voice-only paths (pieces of speech, the echo guard, talking over someone) need Discord.
 
