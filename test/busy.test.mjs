@@ -928,7 +928,7 @@ test("(se-11) a truly quiet table (nothing said since the question): no hold, no
   assert.equal(x.readies.length, 0);
 });
 
-test("(se-12) a long talk that named her, kept through one hold: the next hold judges only what wasn't judged before", async () => {
+test("(se-12) a long talk that named her, kept for one hold, is dropped when it ends: the next hold judges only what comes after", async () => {
   const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Angel, never mind, forget it, so the thing is", "Angel, how does flanking work?", "and that's all."], hold: holdOn }));
   x.voice.talk("p2", true, Date.now() - 500);
   speech(x.voice, "p1");
@@ -936,7 +936,7 @@ test("(se-12) a long talk that named her, kept through one hold: the next hold j
   x.voice.emit("speech", { userId: "p3", packets: tonePackets(1), startedAt: Date.now(), final: false });
   await until(() => !x.s.holding);
   await x.s.answering;
-  assert.ok(x.s.pending.get("p3")?.judgedTo > 0, "named: kept as a question would be, what was judged marked");
+  assert.equal(x.s.pending.has("p3"), false, "dropped with its hold (review 11: so its old 'never mind' is never judged again)");
   speech(x.voice, "gm");
   await until(() => x.s.holding?.asker === "Dana", 3000);
   x.voice.emit("speech", { userId: "p3", packets: tonePackets(1), startedAt: Date.now(), final: true });
@@ -960,16 +960,16 @@ async function heldThenNext(x, p3pieces) {
   return p3pieces;
 }
 
-test("(se-12) a long talk that named her: a later piece arriving with nobody holding keeps what was judged; the next hold judges only the new part", async () => {
+test("(se-12) a long talk that named her: a later piece arriving with nobody holding, then the next hold: the old 'never mind' is not judged again", async () => {
   const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Angel, never mind, forget it, so the thing is", "and more and more", "Angel, how does flanking work?", "and that's all."], hold: holdOn }));
   await heldThenNext(x);
   x.voice.emit("speech", { userId: "p3", packets: tonePackets(1), startedAt: Date.now(), final: false }); /* nobody holding */
-  await until(() => x.s.pending.get("p3")?.text.includes("and more"));
+  await until(() => x.s.transcript.lines.some(l => l.text === "and more and more"));
   speech(x.voice, "gm");
   await until(() => x.s.holding?.asker === "Dana", 3000);
   x.voice.emit("speech", { userId: "p3", packets: tonePackets(1), startedAt: Date.now(), final: true });
-  await until(() => x.holds.length >= 2);
-  assert.equal(x.holds.at(-1).bareText, "and more and more and that's all.");
+  await until(() => x.holds.some(c => c.bareText === "and that's all."));
+  assert.equal(x.holds.filter(c => /never mind/.test(c.bareText)).length, 1, "the old 'never mind' was judged once, in its own hold");
   assert.ok(x.s.holding, "Dana's answer still held");
   stops(x, "p2");
   await until(() => answers(x.voice).length === 1, 4000);
@@ -993,10 +993,10 @@ test("(se-12) a long talk that named her whose rest never comes in the next hold
   await heldThenNext(x);
   speech(x.voice, "gm");
   await until(() => x.s.holding?.asker === "Dana", 3000);
-  x.s.releaseHold("p3", "the rest never came");
-  await until(() => x.holds.length >= 2);
+  assert.equal(x.s.releaseHold("p3", "the rest never came"), null, "nothing kept to release");
   await sleep(50);
   assert.ok(x.s.holding, "Dana's answer still held");
+  assert.equal(x.holds.length, 1);
   x.s.end(); await x.s.answering;
 });
 
@@ -1031,4 +1031,50 @@ test("(se-12) a lively table: at most six lines said since the question are judg
   await x.s.answering;
   assert.equal(x.holds.length, 6);
   assert.equal(x.asked.length, 1, "no questions made of chatter");
+  assert.equal(x.s.saidSince.length, 0, "the older two are let go, not left for a later question");
+});
+
+/* ---- the eleventh review of 0.1.3 ---- */
+test("(se-12) a real 'Hold on.' said over her 'I'm ready' isn't taken for her own voice because of words she hasn't said yet", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Hold on."], hold: holdOn }));
+  x.s.answer = async () => ({ say: "You hold on to the creature until it breaks free.", sources: [], lookups: 1, dollars: 0.02 });
+  x.voice.talk("p2", true, Date.now() - 500);
+  speech(x.voice, "p1");
+  await until(() => x.voice.spoken.length === 1);
+  x.voice.echo = true;          /* said in the echo window, right after her cut-in */
+  speech(x.voice, "p3");
+  await until(() => x.s.holding?.mode === "invite");
+  x.voice.echo = false;
+  x.s.end(); await x.s.answering;
+});
+
+test("(se-12) 'Hold on Angel, one sec.' said while she looks it up, read by the usual check as a call or as not for her: judged when she would answer", async () => {
+  for (const verdict of [{ toAngel: true, complete: false, stop: false, question: "" }, { toAngel: false, complete: true, stop: false, question: "" }]) {
+    const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Hold on Angel, one sec."], hold: holdOn, gate: a => (/Hold on/.test(a.bareText) ? verdict : { toAngel: true, complete: true, stop: false, question: a.bareText }) }));
+    let release; const later = new Promise(r => { release = r; });
+    x.s.answer = async q => { await later; return { say: `Answer to: ${q.question}`, sources: [], lookups: 1, dollars: 0.02 }; };
+    speech(x.voice, "p1");
+    await until(() => x.s.counts.questions === 1);
+    speech(x.voice, "p2");
+    await until(() => x.s.counts.gateChecks === 2);
+    await sleep(20);
+    release();
+    await until(() => x.s.holding?.mode === "invite", 2000);
+    assert.deepEqual(answers(x.voice), [], verdict.complete ? "read as a call" : "read as not for her");
+    x.s.end(); await x.s.answering;
+  }
+});
+
+test("(se-12) the asker's unfinished 30 s piece heard before her answer is ready is never merged as a whole question", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "and also if the grabber is prone does it"], hold: () => ({ kind: "ask", question: "If prone?" }) }));
+  let release; const later = new Promise(r => { release = r; });
+  x.s.answer = async q => { if (x.asked.push(q) === 1) await later; return { say: `Answer to: ${q.question}`, sources: [], lookups: 1, dollars: 0.02 }; };
+  speech(x.voice, "p1");
+  await until(() => x.asked.length === 1);
+  x.voice.emit("speech", { userId: "p1", packets: tonePackets(1), startedAt: Date.now(), final: false });
+  await until(() => x.s.transcript.lines.length === 2);
+  release();
+  await until(() => answers(x.voice).length === 1, 3000);
+  await x.s.answering;
+  assert.equal(x.asked.length, 1, "not merged mid-sentence");
 });
