@@ -50,6 +50,7 @@ export class Session {
     this.hearingNow = new Map(); /* pieces of speech still being heard or judged (review 2 of 0.1.3) */
     this.lastArrived = new Map(); /* userId → when their latest piece of speech reached her */
     this.unheardCapMs = 10000;    /* longer unbroken talk than this isn't waited for (see `unheard`) */
+    this.saidSince = [];          /* lines not for her by the usual rule, kept briefly for a hold that may begin */
     this.pieceNo = 0;
   }
 
@@ -203,14 +204,17 @@ export class Session {
         const text = before?.held ? `${before.text} ${line.text}` : line.text;
         const firstAt = before?.held ? before.firstAt : line.at;
         const holdMs = this.cfg.maxUtteranceSeconds * 1000 + this.cfg.followUpMs;
-        const kept = { text, at: this.now(), holdMs, byName: mentionsAngel(line.text) || before?.byName === true, held: true, firstAt, line: { ...line, at: firstAt }, until };
+        const kept = { text, at: this.now(), holdMs, byName: mentionsAngel(line.text) || before?.byName === true, held: true, firstAt, line: { ...line, at: firstAt }, until, keptFor: h, judgedTo: before?.judgedTo ?? 0 };
         kept.timer = setTimeout(() => this.releaseHold(uid, "the rest never came"), holdMs);
         kept.timer.unref?.();
         this.pending.set(uid, kept);
         return this.onHeldLine(h, { ...line, at: firstAt, text }, until, { partial: true });
       }
       if (before && !released) { this.pending.delete(uid); clearTimeout(before.timer); }
-      const whole = before && !released ? { ...line, at: before.firstAt ?? line.at, text: `${before.text} ${line.text}` } : line;
+      /* what an earlier hold already judged of it is not judged again (review 9 of 0.1.3: an old "never mind" ended
+         the next question's hold) */
+      const fresh = w => (w.judgedTo ? w.text.slice(w.judgedTo).trim() : w.text);
+      const whole = released ? { ...line, text: fresh(released) || line.text } : before ? { ...line, at: before.firstAt ?? line.at, text: `${fresh(before)} ${line.text}`.trim() } : line;
       return this.onHeldLine(h, whole, until);
     }
     /* the person she just answered may reply without her name for a little while after she stops talking (Rhea,
@@ -223,7 +227,12 @@ export class Session {
     const inFlight = this.checking.get(uid);
     if (inFlight && !byName) { inFlight.push(line.text); return; }
     const waiting = released ? null : this.pending.get(uid);
-    if (!waiting && !named) return;
+    if (!waiting && !named) {
+      /* not for her by the usual rule, but a question of hers may be on its way: kept for a little while, so a "wait,
+         hold on" heard before her answer is ready is judged when she holds it (review 9 of 0.1.3) */
+      if (!more) { this.saidSince.push({ line, until, added: this.now() }); while (this.saidSince.length > 20) this.saidSince.shift(); }
+      return;
+    }
     /* her own voice coming back through a microphone. A reply without her name gets a closer look instead of the plain
        time rule: right after she stops is exactly when people answer her (2026-11-14: "Nice. And does that stack...?"
        began 2 s after she finished and was dropped). It's an echo only if its words are hers. */
@@ -653,7 +662,11 @@ export class Session {
        ("wait, hold on") and not heard yet is waited for (Rhea, 2026-11-15 afternoon, after review 8: "Wait to hear
        it"; free, a second or two) */
     const busyAtStart = f.busy();
-    if (!busyAtStart && !this.unheard(qc.at)) return "go";
+    /* lines said since the question, heard already but not judged (nobody was holding yet) */
+    const now0 = this.now();
+    this.saidSince = this.saidSince.filter(u => now0 - u.added < 20000);
+    const early = this.saidSince.filter(u => Math.max(u.line.at, u.until ?? u.line.at) > qc.at && !(u.line.userId === qc.userId && u.line.at <= qc.at));
+    if (!busyAtStart && !early.length && !this.unheard(qc.at)) return "go";
     let signalled, kicked;
     const h = { ...qc, since: this.now(), mode: "gap", cutIn: "", signal: null, waiter: null, goAsked: false,
       signalled: new Promise(r => { signalled = r; }), kicked: new Promise(r => { kicked = r; }) };
@@ -670,6 +683,13 @@ export class Session {
     };
     this.holding = h;
     this.counts.held++;
+    /* judged now, as lines said while she waits; held as "being heard" until they are */
+    for (const u of early) {
+      this.saidSince.splice(this.saidSince.indexOf(u), 1);
+      const no = ++this.pieceNo;
+      this.hearingNow.set(no, { end: this.now(), added: this.now() });
+      this.onHeldLine(h, u.line, u.until).catch(e => this.log.warn(`couldn't judge a line said while she waits: ${e.message}`)).finally(() => this.hearingNow.delete(no));
+    }
     const who = qc.asker;
     this.log.info(busyAtStart ? `the table is busy as ${who}'s answer is ready: waiting for a gap` : `something was just said as ${who}'s answer is ready: waiting to hear it`);
     const deadline = h.since + this.cfg.busyMaxHoldMs;
@@ -706,6 +726,9 @@ export class Session {
     const goNow = async () => {
       while (h.goAsked && !h.signal && !this.ended) {
         if (!this.unheard(h.at)) { this.log.info(`a go-ahead: ${who}'s answer goes ahead`); return "go"; }
+        /* time is up: the hold ends (review 9 of 0.1.3: a wait of 0 ms returned at once, round and round, and froze
+           the whole bot) */
+        if (left() <= 0) return null;
         const r2 = await wait(0, { maxMs: left(), blocked: () => this.unheard(h.at) });
         if (r2 === "timeout") return null;
       }
@@ -776,6 +799,7 @@ export class Session {
       for (;;) {
         if (h.signal) return this.held(h);
         if (this.ended) return "end";
+        if (left() <= 0) break;
         if (h.goAsked) { if (await goNow()) return "go"; continue; }
         if (left() <= 0) break;
         const canCut = !cutDone && !cutFailed && h.mode !== "invite" && !!this.readyLine;
@@ -798,6 +822,13 @@ export class Session {
     } finally {
       if (this.holding === h) this.holding = null;
       h.waiter?.wake("end");
+      /* a long talk kept only for this hold: dropped when it didn't name her; one that did goes on as a question would,
+         with what was judged here marked (review 9 of 0.1.3) */
+      for (const [uid, p] of [...this.pending]) {
+        if (p.keptFor !== h) continue;
+        if (!p.byName) { clearTimeout(p.timer); this.pending.delete(uid); }
+        else { p.keptFor = null; p.judgedTo = p.text.length; }
+      }
     }
   }
 

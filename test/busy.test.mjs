@@ -810,7 +810,7 @@ test("(se-12) a line said while that speaker's earlier line is still at the usua
   x.s.end(); await x.s.answering;
 });
 
-test("(se-12) something just said when her answer is ready, nobody talking: she waits to hear it (Rhea: 'Wait to hear it'); a quiet table is unchanged", async () => {
+test("(se-12) something just said when her answer is ready, nobody talking: she waits to hear it (Rhea: 'Wait to hear it')", async () => {
   const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Wait, hold on."], hold: holdOn, cfg: LIVE }));
   let release; const later = new Promise(r => { release = r; });
   x.s.answer = async q => { await later; return { say: `Answer to: ${q.question}`, sources: [], lookups: 1, dollars: 0.02 }; };
@@ -858,5 +858,92 @@ test("(se-12) a long talk cut at 30 s that is a question, whose rest is too shor
   stops(x, "p2");
   await until(() => answers(x.voice).length === 2, 4000);
   assert.equal(answers(x.voice)[1], "clip:Answer to: Angel, how does flanking work with a reach weapon");
+  await x.s.answering;
+});
+
+/* ---- the ninth review of 0.1.3 ---- */
+test("(se-12) a go-ahead as the time runs out, another line stuck being heard: the hold ends at its limit and the bot never freezes", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Go ahead, Angel."], hold: holdOn, cfg: { busyMaxHoldMs: 1400 } }));
+  x.voice.talk("p2", true, Date.now() - 500);
+  speech(x.voice, "p1");
+  await until(() => x.voice.spoken.length === 1);
+  x.s.hearingNow.set(999, { end: Date.now() + 60000, added: Date.now() }); /* a piece that never finishes being heard */
+  await sleep(300);
+  speech(x.voice, "gm");    /* "Go ahead", well before the limit; she waits for the stuck line until the limit */
+  await until(() => x.holds.length === 1);
+  assert.equal(x.s.holding?.goAsked, true, "the go-ahead was taken");
+  let worst = 0, last = Date.now();
+  const tick = setInterval(() => { const n = Date.now(); worst = Math.max(worst, n - last); last = n; }, 10);
+  await until(() => x.s.counts.letGo === 1, 3000);
+  clearInterval(tick);
+  assert.ok(worst < 200, `the bot kept running (longest stall ${worst} ms)`);
+  assert.deepEqual(answers(x.voice), []);
+  x.s.hearingNow.delete(999);
+  await x.s.answering;
+});
+
+test("(se-12) a long talk kept for one hold isn't judged again in the next question's hold", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "never mind, forget it, so the thing is", "Angel, how does flanking work?", "and that's all."], hold: holdOn }));
+  x.voice.talk("p2", true, Date.now() - 500);
+  speech(x.voice, "p1");
+  await until(() => x.voice.spoken.length === 1);
+  x.voice.emit("speech", { userId: "p3", packets: tonePackets(1), startedAt: Date.now(), final: false }); /* "never mind" in a long talk */
+  await until(() => !x.s.holding);
+  await x.s.answering;
+  assert.equal(x.s.pending.has("p3"), false, "kept only for that hold: dropped");
+  speech(x.voice, "gm");    /* Dana's question, held: the table is still busy */
+  await until(() => x.s.holding?.asker === "Dana", 3000);
+  x.voice.emit("speech", { userId: "p3", packets: tonePackets(1), startedAt: Date.now(), final: true }); /* the rest of p3's talk */
+  await until(() => x.holds.length >= 2);
+  assert.equal(x.holds.at(-1).bareText, "and that's all.", "only what wasn't judged before");
+  stops(x, "p2");
+  await until(() => answers(x.voice).length === 1, 4000);
+  await x.s.answering;
+});
+
+test("(se-12) a 'wait, hold on' heard before her answer is ready (nobody holding yet) is judged when she would answer", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Wait, hold on."], hold: holdOn }));
+  let release; const later = new Promise(r => { release = r; });
+  x.s.answer = async q => { await later; return { say: `Answer to: ${q.question}`, sources: [], lookups: 1, dollars: 0.02 }; };
+  speech(x.voice, "p1");
+  await until(() => x.s.counts.questions === 1);
+  speech(x.voice, "p2");    /* heard and dropped by the usual rule before any hold */
+  await sleep(50);
+  release();
+  await until(() => x.s.holding?.mode === "invite", 2000);
+  assert.deepEqual(x.voice.spoken, []);
+  assert.equal(x.holds[0].bareText, "Wait, hold on.");
+  x.s.end(); await x.s.answering;
+});
+
+test("(se-11) a truly quiet table (nothing said since the question): no hold, no check, nothing paid", async () => {
+  const x = await started(setup({ heard: ["chat from before", "Angel, what does grabbed do?"] }));
+  speech(x.voice, "p2", Date.now() - 5000); /* said before the question */
+  await until(() => x.s.transcript.lines.length === 1);
+  speech(x.voice, "p1");
+  await until(() => answers(x.voice).length === 1);
+  await x.s.answering;
+  assert.equal(x.s.counts.held, 0);
+  assert.equal(x.holds.length, 0);
+  assert.equal(x.readies.length, 0);
+});
+
+test("(se-12) a long talk that named her, kept through one hold: the next hold judges only what wasn't judged before", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Angel, never mind, forget it, so the thing is", "Angel, how does flanking work?", "and that's all."], hold: holdOn }));
+  x.voice.talk("p2", true, Date.now() - 500);
+  speech(x.voice, "p1");
+  await until(() => x.voice.spoken.length === 1);
+  x.voice.emit("speech", { userId: "p3", packets: tonePackets(1), startedAt: Date.now(), final: false });
+  await until(() => !x.s.holding);
+  await x.s.answering;
+  assert.ok(x.s.pending.get("p3")?.judgedTo > 0, "named: kept as a question would be, what was judged marked");
+  speech(x.voice, "gm");
+  await until(() => x.s.holding?.asker === "Dana", 3000);
+  x.voice.emit("speech", { userId: "p3", packets: tonePackets(1), startedAt: Date.now(), final: true });
+  await until(() => x.holds.length >= 2);
+  assert.equal(x.holds.at(-1).bareText, "and that's all.", "the old 'never mind' isn't judged again");
+  assert.ok(x.s.holding, "Dana's answer is still held, not stopped");
+  stops(x, "p2");
+  await until(() => answers(x.voice).length === 1, 4000);
   await x.s.answering;
 });
