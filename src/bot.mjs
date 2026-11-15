@@ -217,35 +217,64 @@ export class AngelBot {
       });
       try { await voice.join(); }
       catch (e) { voice.leave(); return i.editReply(e.message); }
-      await this.knowOwner(channel.guild);
-      const startedAt = Date.now();
-      /* one thread per session holds everything she posts, so the channel stays clean (Rhea, 2026-11-14); without
-         the thread permissions she falls back to the channel itself */
-      let thread = null;
-      if (cfg.sessionThread && textChannel.threads?.create) {
-        try { thread = await textChannel.threads.create({ name: threadName(startedAt), autoArchiveDuration: 1440, reason: "Angel's session" }); }
-        catch (e) { log.warn(`couldn't start a thread, posting in the channel instead: ${e.message}`); }
+      /* anything failing after the voice join leaves voice and drops the half-made session, instead of sitting in
+         the call with no session (thread review, 2026-11-14) */
+      let made = null;
+      try {
+        await this.knowOwner(channel.guild);
+        const startedAt = Date.now();
+        /* one thread per session holds everything she posts, so the channel stays clean (Rhea, 2026-11-14); without
+           the thread permissions she falls back to the channel itself */
+        let thread = null;
+        made = () => thread;
+        const me = textChannel.guild?.members?.me;
+        const mayThread = !me || !textChannel.permissionsFor || textChannel.permissionsFor(me)?.has?.(["CreatePublicThreads", "SendMessagesInThreads"]) !== false;
+        if (cfg.sessionThread && textChannel.threads?.create && mayThread) {
+          try {
+            thread = await Promise.race([
+              textChannel.threads.create({ name: threadName(startedAt), autoArchiveDuration: 1440, reason: "Angel's session" }),
+              new Promise((_, no) => setTimeout(() => no(new Error("Discord took over 5 seconds")), 5000).unref?.()),
+            ]);
+          } catch (e) { log.warn(`couldn't start a thread, posting in the channel instead: ${e.message}`); }
+        }
+        let home = thread ?? textChannel;
+        const post = { send: text => home.send({ content: text, ...NO_PINGS }) };
+        const session = new Session({
+          cfg, voice, post, log,
+          stt: this.services.stt, tts: this.services.tts, gate: this.services.gate,
+          answer: q => this.services.answer({ ...q, gmName: this.gmName(channel.guild) }),
+          speakerOf: id => this.speakerOf(channel.guild, id),
+          keytermCount: this.services.keytermCount,
+          dailyOver: () => this.dailyOver(),
+          transcript: new Transcript({ dir: cfg.saveTranscript ? path.join(this.dataDir, "sessions", folderName(startedAt)) : null, startedAt, title: channel.guild.name }),
+        });
+        voice.on("lost", () => { home.send("I lost the voice connection. `/angel join` brings me back.").catch(() => {}); this.end(i.guildId, "voice connection lost"); });
+        this.sessions.set(i.guildId, { session, voiceChannelId: channel.id, textChannel, home, thread, emptyTimer: null });
+        await session.start();
+        const notice = `🎙️ I'm in **${channel.name}**, listening and transcribing so I can answer rules questions. Say "Angel, ..." or type \`@Angel ...\`. ` +
+          `Only text is kept, never audio, on the GM's computer. \`/angel optout\` if you'd rather I didn't transcribe you; \`/angel stop\` or "Angel, stop" cuts me off; \`/angel leave\` when you're done.`;
+        let inThread = false;
+        if (thread) {
+          try { await thread.send({ content: notice, ...NO_PINGS }); inThread = true; }
+          catch (e) {
+            /* made but can't be posted in: the channel after all */
+            log.warn(`couldn't post in the thread, using the channel: ${e.message}`);
+            home = textChannel;
+            const live = this.sessions.get(i.guildId);
+            if (live) { live.home = textChannel; live.thread = null; }
+          }
+        }
+        /* a reply that can't be edited any more mustn't end a session that works */
+        if (inThread) await i.editReply(`🎙️ I'm in **${channel.name}**. Everything for this session is in <#${thread.id}>.`).catch(e => log.warn(`couldn't answer /angel join: ${e.message}`));
+        else await i.editReply(notice).catch(e => log.warn(`couldn't answer /angel join: ${e.message}`));
+      } catch (e) {
+        voice.leave();
+        this.sessions.delete(i.guildId);
+        const t = made?.();
+        if (t?.delete) await t.delete().catch(() => {});
+        log.error(`couldn't start the session: ${e.message}`);
+        return i.editReply(`I couldn't start the session: ${e.message}`).catch(() => {});
       }
-      const home = thread ?? textChannel;
-      const post = { send: text => home.send({ content: text, ...NO_PINGS }) };
-      const session = new Session({
-        cfg, voice, post, log,
-        stt: this.services.stt, tts: this.services.tts, gate: this.services.gate,
-        answer: q => this.services.answer({ ...q, gmName: this.gmName(channel.guild) }),
-        speakerOf: id => this.speakerOf(channel.guild, id),
-        keytermCount: this.services.keytermCount,
-        dailyOver: () => this.dailyOver(),
-        transcript: new Transcript({ dir: cfg.saveTranscript ? path.join(this.dataDir, "sessions", folderName(startedAt)) : null, startedAt, title: channel.guild.name }),
-      });
-      voice.on("lost", () => { home.send("I lost the voice connection. `/angel join` brings me back.").catch(() => {}); this.end(i.guildId, "voice connection lost"); });
-      this.sessions.set(i.guildId, { session, voiceChannelId: channel.id, textChannel, home, thread, emptyTimer: null });
-      await session.start();
-      const notice = `🎙️ I'm in **${channel.name}**, listening and transcribing so I can answer rules questions. Say "Angel, ..." or type \`@Angel ...\`. ` +
-        `Only text is kept, never audio, on the GM's computer. \`/angel optout\` if you'd rather I didn't transcribe you; \`/angel stop\` or "Angel, stop" cuts me off; \`/angel leave\` when you're done.`;
-      if (thread) {
-        await thread.send({ content: notice, ...NO_PINGS }).catch(e => log.warn(`couldn't post in the thread: ${e.message}`));
-        await i.editReply(`🎙️ I'm in **${channel.name}**. Everything for this session is in ${thread.toString?.() ?? thread.name}.`);
-      } else await i.editReply(notice);
       log.info(`session started in ${channel.guild.name} / ${channel.name}`);
     } finally {
       this.joining.delete(i.guildId);
@@ -264,6 +293,8 @@ export class AngelBot {
     live.session.answering.finally(() => this.addSpend(live.session.spent() - s.dollars));
     this.log.info(`session ended (${why}): ${JSON.stringify(s)}`);
     try { await (live.home ?? live.textChannel).send(summaryText(s)); } catch { /* channel gone */ }
+    /* the session's thread is closed once its summary is in, so it's plain the session is over */
+    if (live.thread?.setArchived) await live.thread.setArchived(true).catch(() => {});
   }
 
   async endAll(why) {
@@ -286,6 +317,8 @@ export class AngelBot {
     /* asked in the channel while the session has a thread: answered in the thread, to keep the channel clean */
     const toThread = live?.thread && m.channelId === live.textChannel.id;
     const reply = toThread ? { send: text => live.thread.send({ content: text, ...NO_PINGS }) } : { send: text => m.reply({ content: text, ...NO_PINGS }) };
+    /* a 🧵 on the question in the channel says where the answer went, without adding text there */
+    if (toThread) m.react?.("🧵")?.catch?.(() => {});
     if (live) return live.session.textQuestion({ userId: m.author.id, asker: who.name, role: who.role, text: q.question, reply });
     return this.answerAlone({ question: q.question, asker: who.name, reply, guild: m.guild });
   }

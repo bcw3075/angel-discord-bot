@@ -91,17 +91,48 @@ test("a session gets its own thread: the notice, typed answers and the summary g
   const i = interaction(w, "join");
   await bot.onInteraction(i);
   assert.match(i.edits[0], /Everything for this session is in <#th1>/);
+  assert.match(threadName(Date.UTC(2026, 10, 14, 18)), /^Angel · Sat, Nov 14$/);
   assert.match(inThread[0].content, /listening and transcribing/, "the notice is in the thread");
   assert.equal(bot.sessions.get("g1").thread.name, threadName(Date.now()));
   // typed in the channel: answered in the thread, nothing replied in the channel
   const replies = [];
-  await bot.onMessage({ author: { id: "p1", bot: false }, guild: w.guild, channelId: "tc1", content: "Angel, flanking?", reply: async r => { replies.push(r); return { edit: async () => {} }; } });
+  const reacted = [];
+  await bot.onMessage({ author: { id: "p1", bot: false }, guild: w.guild, channelId: "tc1", content: "Angel, flanking?", react: async e => { reacted.push(e); }, reply: async r => { replies.push(r); return { edit: async () => {} }; } });
   await bot.sessions.get("g1").session.answering;
   assert.equal(replies.length, 0, "no reply in the channel");
+  assert.deepEqual(reacted, ["🧵"], "a thread mark on the question instead");
   assert.ok(inThread.some(m => /flanking/.test(m.content)), "the answer is in the thread");
   await bot.end("g1", "test");
   assert.match(inThread.at(-1).content, /\$/, "the summary is in the thread");
   assert.equal(w.sent.length, 0, "nothing at all in the channel");
+});
+
+test("a thread she can't post in, or that takes too long, falls back to the channel; a failure after joining leaves voice", async () => {
+  let w = world(), { bot } = makeBot();
+  w.textChannel.threads = { create: async () => ({ id: "th1", send: async () => { throw new Error("Missing Permissions"); } }) };
+  let i = interaction(w, "join");
+  await bot.onInteraction(i);
+  assert.match(i.edits[0], /listening and transcribing/, "the notice in the reply, not a pointer to an empty thread");
+  assert.equal(bot.sessions.get("g1").thread, null);
+  await bot.end("g1", "test");
+  assert.match(w.sent.at(-1).content, /\$/, "the summary in the channel");
+  ({ bot } = makeBot()); w = world();
+  w.textChannel.permissionsFor = () => ({ has: () => false });
+  w.guild.members.me = {};
+  w.textChannel.guild = w.guild;
+  let created = 0;
+  w.textChannel.threads = { create: async () => { created++; return {}; } };
+  i = interaction(w, "join");
+  await bot.onInteraction(i);
+  assert.equal(created, 0, "no thread without the permissions to use it");
+  await bot.end("g1", "test");
+  ({ bot } = makeBot()); w = world();
+  bot.knowOwner = async () => { throw new Error("boom"); };
+  i = interaction(w, "join");
+  await bot.onInteraction(i);
+  assert.match(i.edits.at(-1), /couldn't start the session: boom/);
+  assert.equal(bot.sessions.has("g1"), false);
+  assert.equal(FakeVoiceLink.made.at(-1).left, true, "voice is left");
 });
 
 test("with no thread permission she posts in the channel as before", async () => {
