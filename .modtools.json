@@ -5,7 +5,7 @@
   "changes": "docs/changes",
   "developing": "docs/DEVELOPING.md",
   "manifest": "package.json",
-  "zip": {"path": "dist/angel-discord-bot.zip", "include": ["package.json", "package-lock.json", "src", "README.md", "Start Angel.cmd", "Install Angel.cmd", "Choose Voice.cmd", "examples"]},
+  "zip": {"path": "dist/angel-discord-bot.zip", "include": ["package.json", "package-lock.json", "src", "README.md", "Start Angel.cmd", "Install Angel.cmd", "Choose Voice.cmd", "Test Angel.cmd", "examples"]},
   "tests": "npm test",
   "mainBranch": "main",
   "reviewPaths": ["src"],

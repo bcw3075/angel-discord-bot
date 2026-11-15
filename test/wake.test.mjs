@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { GATE_SYSTEM, FOLLOWUP_SYSTEM, mentionsAngel, isStopRequest, parseGate, gate, gateUser } from "../src/wake.mjs";
+import { GATE_SYSTEM, FOLLOWUP_SYSTEM, mentionsAngel, isStopRequest, parseGate, gate, gateUser, afterStop } from "../src/wake.mjs";
 import { Claude } from "../src/claude.mjs";
 import { scriptedFetch } from "./helpers.mjs";
 
@@ -112,4 +112,16 @@ test("a call the table is waiting on doesn't sit out a long 'try again later'", 
   const c = new Claude({ apiKey: "k", prices: {}, fetchImpl: f, sleep: async ms => sleeps.push(ms) });
   await c.create({ model: "m" }, { retries: 1, maxWaitMs: 1500 });
   assert.deepEqual(sleeps, [1500]);
+});
+
+test("their own words after a stop are cut out for the question that follows it", () => {
+  assert.equal(afterStop("Angel, stop. What does stunned do?"), "What does stunned do?");
+  assert.equal(afterStop("okay Angel, that's enough, thanks - how does flanking work?"), "how does flanking work?", "the politeness that goes with the stop is not part of the question");
+  assert.equal(afterStop("Angel, stop please. What does stunned do?"), "What does stunned do?");
+  assert.equal(afterStop("Angel, stop. Thanksgiving dinner rules?"), "Thanksgiving dinner rules?", "only whole words are dropped");
+  assert.equal(afterStop("Angel, stop please."), "");
+  assert.equal(afterStop("Angel, what does stop do?"), "", "no stop at the start: nothing to cut");
+  const t0 = performance.now();
+  afterStop("Angel, stop " + "'".repeat(50000));
+  assert.ok(performance.now() - t0 < 100);
 });

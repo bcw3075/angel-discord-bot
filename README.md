@@ -41,7 +41,9 @@ port or tunnel is needed.
    - `keyterms.txt`: your campaign's names, one per line, so the transcriber spells them right.
 7. Run `npm run check`. Every line should say OK (a NOTE is only for your information); a FAIL says what to do on
    the line under it. It also saves a sample of Angel's voice as data\check\angel-voice.wav.
-8. Optional: double-click **Choose Voice.cmd**. It saves a sample of every one of Angel's 24 voices in the data\voices
+8. Optional: double-click **Test Angel.cmd** to put about thirty test questions through her with your own keys (no Discord
+   needed, two or three minutes, about a dollar); the result is saved in the data\selftest folder.
+9. Optional: double-click **Choose Voice.cmd**. It saves a sample of every one of Angel's 24 voices in the data\voices
    folder, opens it, and asks which you want (type its name, such as luna). Restart Angel to hear it.
 9. Optional: `npm run ask -- "can I grapple with a shield in my hand?"` asks one question without Discord, so you can
    judge her answers and see what each costs.

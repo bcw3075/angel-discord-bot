@@ -135,36 +135,52 @@ export async function answerQuestion({ claude, aon, model, maxTokens = 1500, sys
       .map(s => ({ name: String(s.name || "Archives of Nethys").slice(0, 80), url: s.url }));
     if (!sources.length) sources = fetched.slice(0, 3);
     const unique = [...new Map(sources.map(s => [s.url, s])).values()].slice(0, 5);
-    return { say, details, sources: unique, rounds, lookups, failedLookups: failed.count, dollars, cache };
+    return { say, details, sources: unique, rounds, lookups, failedLookups: failed.count, dollars, cache, fellBack };
   };
+  let spoke = false;    /* some of `say` has been passed on (and may already be heard) */
+  let roomy = false;    /* this round is being asked again with twice the room, after a reply cut off at its limit */
+  let fellBack = "";    /* why the answer was worked out again the plain way, if it was */
+  const saySafe = !onSay ? null : (text, opts) => { if (text) spoke = true; onSay(text, opts); };
   try {
-    return await rounds();
+    return await rounds(!!claude.stream);
   } catch (e) {
     /* the rounds that ran before the failure were paid for, and so was what is known of one that broke off */
     if (e.usage) dollars += claude.cost(model, e.usage);
+    /* A reply read as it is written is put back together here, and Claude refuses a later round when a piece of it
+       came back wrong (live 2026-11-14: a thinking block). If that happens before she has said anything, the
+       question is worked out once more the plain way, where Claude's replies go back exactly as they came. */
+    if (claude.stream && !spoke && /^Claude answered 400/.test(e.message)) {
+      fellBack = e.message;
+      messages.length = 1; fetched.length = 0; lookups = 0; failed.count = 0; seen.clear(); roomy = false;
+      try { return await rounds(false); }
+      catch (again) { if (again.usage) dollars += claude.cost(model, again.usage); again.dollars = dollars; throw again; }
+    }
     e.dollars = dollars;
     throw e;
   }
 
-  async function rounds() {
-    for (let round = 1; round <= maxRounds; round++) {
-      /* the last round offers only the answer tool and says so, instead of forcing it: Sonnet 5.5 refuses a forced
-         tool_choice ("type tool and any are not supported for this model", live 2026-11-14 on a long question) */
-      const last = round === maxRounds;
-      if (last && round > 1) {
+  async function rounds(streamed) {
+    /* The last round says "answer now" instead of forcing the answer tool: Sonnet 5.5 refuses a forced tool_choice
+       ("type tool and any are not supported for this model", live 2026-11-14 on a long question). The tools stay
+       the same in every round: Claude accepts her earlier thinking back only while what came before it is unchanged
+       (the thinking docs, read 2026-11-14), and the same tools keep the cached prompt in use. If she asks for
+       another lookup anyway it isn't run, she is told so, and she gets one more round to answer. */
+    for (let round = 1; round <= maxRounds + 1; round++) {
+      const last = round >= maxRounds;
+      if (round === maxRounds && round > 1 && !roomy) {
         const tail = messages.at(-1);
         if (Array.isArray(tail?.content)) tail.content.push({ type: "text", text: "That's all the looking up there's time for: give your answer now with the answer tool." });
       }
       const body = {
         model,
-        max_tokens: maxTokens,
+        max_tokens: roomy ? maxTokens * 2 : maxTokens,
         system: [{ type: "text", text: system, cache_control: cacheControl }],
-        tools: last ? TOOLS.filter(t => t.name === "answer") : TOOLS,
+        tools: TOOLS,
         messages,
       };
       /* what the answer tool's `say` holds so far, per tool call, read out of its unfinished JSON */
       const saying = new Map();
-      const res = !claude.stream ? await claude.create(body) : await claude.stream(body, {
+      const res = !streamed ? await claude.create(body) : await claude.stream(body, {
         onDelta: ({ index, block, delta }) => {
           if (block.type !== "tool_use" || block.name !== "answer" || delta.type !== "input_json_delta") return;
           let reader = saying.get(index);
@@ -172,8 +188,8 @@ export async function answerQuestion({ claude, aon, model, maxTokens = 1500, sys
           if (!reader) saying.set(index, reader = new FieldReader("say"));
           const wasDone = reader.done;
           const fresh = reader.feed(delta.partial_json);
-          if (fresh && onSay) onSay(fresh);
-          if (reader.done && !wasDone && onSay) onSay("", { end: true });
+          if (fresh && saySafe) saySafe(fresh);
+          if (reader.done && !wasDone && saySafe) saySafe("", { end: true });
         },
       });
       dollars += claude.cost(model, res.usage);
@@ -182,6 +198,20 @@ export async function answerQuestion({ claude, aon, model, maxTokens = 1500, sys
       const content = res.content ?? [];
       const uses = content.filter(b => b.type === "tool_use");
       const final = uses.find(u => u.name === "answer");
+      /* A reply cut off at its limit (her thinking counts toward it) is not a reply: a lookup cut mid-way would be
+         run with nothing in it and its results read as what she asked for. Unless what she says had already come
+         through whole, the round is asked once more with twice the room; nothing of a cut reply is kept. */
+      const cut = res.stop_reason === "max_tokens";
+      /* whole only when its closing quote was seen as it was written; a cut plain reply is never taken as whole */
+      const sayWhole = !!final && streamed && [...saying.values()][0]?.done === true;
+      if (cut && !sayWhole && !spoke && !roomy) { roomy = true; round--; continue; }
+      roomy = false;
+      /* cut again, or cut after she had begun to speak (she can't be asked again: she would say it twice): what she
+         had said so far is all there is, and the result says it was cut, so she and the post can say so */
+      if (cut && !sayWhole) {
+        const heard = [...saying.values()][0]?.text ?? "";
+        return spoke && heard.trim() ? { ...done({ say: heard }, round), cut: true } : done({}, round);
+      }
       if (final) {
         /* an answer cut short (out of tokens, or JSON that doesn't parse) still has what she was saying */
         const heard = [...saying.values()][0]?.text ?? "";
@@ -191,10 +221,19 @@ export async function answerQuestion({ claude, aon, model, maxTokens = 1500, sys
         const text = content.filter(b => b.type === "text").map(b => b.text).join(" ").trim();
         return done({ say: text }, round);
       }
+      /* cut after a whole answer's worth of talk but with no answer call (her thinking or a lookup ran out of room) */
+      if (cut && !final) return done({}, round);
       messages.push({ role: "assistant", content });
+      if (last) {
+        messages.push({ role: "user", content: uses.map(use => ({ type: "tool_result", tool_use_id: use.id, content: "Not looked up: there's no more time for looking up. Give your answer now with the answer tool, from what you have, and say what you couldn't check." })) });
+        continue;
+      }
       /* lookups asked for in the same turn run together; the results go back in the order asked */
       lookups += uses.length;
-      const outs = await Promise.all(uses.map(use => runTool(aon, use, failed, seen)));
+      /* a request whose JSON didn't come through whole is never run (it would be a search for nothing): she is told */
+      const garbled = new Set(res.brokenBlocks ?? []);
+      lookups -= uses.filter(u => garbled.has(u)).length;
+      const outs = await Promise.all(uses.map(use => (garbled.has(use) ? "That request came through garbled and was not run. Ask for it again." : runTool(aon, use, failed, seen))));
       const results = uses.map((use, i) => {
         if (use.name === "aon_get") {
           try { const d = JSON.parse(outs[i]); if (d?.url) fetched.push({ name: d.name, url: d.url }); } catch { /* not a page */ }
@@ -203,7 +242,7 @@ export async function answerQuestion({ claude, aon, model, maxTokens = 1500, sys
       });
       messages.push({ role: "user", content: results });
     }
-    return done({}, maxRounds);
+    return done({}, maxRounds + 1);
   }
 }
 

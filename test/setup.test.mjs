@@ -297,3 +297,67 @@ test("config: a price that isn't a number, or a setting below its floor, is repl
   for (const word of ["claude-sonnet-5-5", "my-model", "sttPerMinute", "memoryMinutes", "maxAnswerTokens", "maxSessionDollars"]) assert.ok(c.problems.some(p => p.includes(word)), `named: ${word}`);
   assert.equal(loadConfig(path.join(dir, "none.json")).problems.length, 0, "the defaults themselves pass");
 });
+
+test("the self-test runs every case through the check and the answering, marks what to look at, and writes a report", async () => {
+  const { runSelfTest, reportText, saveReport, CASES } = await import("../src/selftest.mjs");
+  assert.ok(CASES.length >= 25 && new Set(CASES.map(c => c.id)).size === CASES.length, "many cases, each with its own name");
+  const asked = [];
+  const services = {
+    gate: async ({ lastText, replying }) => ({ toAngel: !/statue|wrong/.test(lastText), complete: !/quick one/.test(lastText), chat: /feeling/.test(lastText), question: "", dollars: 0.001, replying }),
+    answer: async q => {
+      asked.push(q);
+      if (/breaks/.test(q.question)) { const e = new Error("Claude answered 400: nope"); e.dollars = 0.01; throw e; }
+      q.onSay("Off-guard is a minus 2 circumstance penalty to AC. "); q.onSay("", { end: true });
+      return { say: "Off-guard is a minus 2 circumstance penalty to AC.", details: "**-2 circumstance penalty to AC.**", sources: [{ name: "Off-Guard", url: "https://2e.aonprd.com/Conditions.aspx?ID=58" }], rounds: 2, lookups: 1, failedLookups: 0, dollars: 0.02 };
+    },
+  };
+  const cases = [
+    { id: "fine", steps: [{ say: "Angel, what does off-guard do?", want: [/2/, /circumstance/i], lookups: 1 }, { say: "And then?", replying: true }] },
+    { id: "wrong-fact", steps: [{ say: "Angel, fireball?", want: [/10d6/], never: [/circumstance/] }] },
+    { id: "breaks", steps: [{ say: "Angel, this breaks" }] },
+    { id: "statue", steps: [{ say: "that angel statue", forHer: false, checkOnly: true }] },
+    { id: "check-is-wrong", steps: [{ say: "Angel, the check gets this wrong", checkOnly: true }] },
+    { id: "call", steps: [{ say: "Hey Angel, quick one.", complete: false, checkOnly: true }] },
+    { id: "typed", before: ["Mira: earlier talk"], steps: [{ say: "what is off-guard?", typed: true }] },
+  ];
+  /* a check Claude refused is a failure, not a note; one that only fell back is a note */
+  const refused = await runSelfTest({ services: { ...services, gate: async ({ lastText }) => ({ toAngel: true, complete: true, error: /first/.test(lastText) ? "Claude answered 400: no" : "its reply was cut off" }) }, cases: [{ id: "a", steps: [{ say: "Angel, first", checkOnly: true }] }, { id: "b", steps: [{ say: "Angel, second", checkOnly: true }] }] });
+  assert.equal(refused.failed, 1);
+  assert.equal(refused.look, 1);
+  /* the real cases' patterns on answers that are right and answers that are wrong */
+  const strike = CASES.find(c => c.id === "same-name-two-printings").steps[0];
+  const right = "Your ally gets resistance equal to 2 plus your level, in your champion's aura (15 feet). It's used once, not applied to each type: they choose which damage type it goes against.";
+  const wrong = "The resistance of 2 plus your level applies to each damage type separately, so all three are reduced.";
+  assert.ok(strike.want.every(re => re.test(right)) && !strike.never.some(re => re.test(right)), "a right answer passes, the champion's aura given in feet included");
+  assert.ok(strike.never.some(re => re.test(wrong)), "the old ruling is caught");
+  const fly = CASES.find(c => c.id === "told-to-ignore-her-rules").steps[0];
+  assert.equal(fly.never.some(re => re.test("Nice try! I can't just say you can fly at will because you said so.")), false);
+  assert.equal(fly.never.some(re => re.test("Sure, you can fly at will now.")), true);
+  const printed = [];
+  const run = await runSelfTest({ services, cases, print: l => printed.push(l), together: 2 });
+  assert.equal(run.failed, 1);
+  assert.equal(run.look, 2, "the wrong fact and the check's wrong verdict");
+  assert.deepEqual(run.results.map(r => r.id), cases.map(c => c.id), "in the order written, though run side by side");
+  assert.equal(run.results[0].steps[1].check.toAngel, true);
+  assert.match(asked.find(q => q.question === "And then?").conversation, /Angel, what does off-guard do\?\n.*Angel: Off-guard is a minus 2/, "a step is asked with the talk before it");
+  assert.equal(asked.find(q => q.question === "what is off-guard?").via, "text");
+  assert.match(asked.find(q => q.question === "what is off-guard?").conversation, /Mira: earlier talk/);
+  assert.equal(run.results[0].steps[0].answer.sayDoneMs != null, true, "when all she says was written is noted");
+  assert.deepEqual(run.results[1].steps[0].notes.length, 2);
+  assert.match(run.results[2].steps[0].failed, /the answer: Claude answered 400/);
+  assert.equal(asked.some(q => /statue|quick one|gets this wrong/.test(q.question)), false, "check-only steps aren't answered");
+  assert.match(run.summary, /8 steps in 7 cases: 5 fine, 2 to look at, 1 FAILED\. .*Cost about \$0\.\d\d\./);
+  assert.ok(printed.some(l => /FAILED +breaks/.test(l)) && printed.some(l => /LOOK AT +wrong-fact/.test(l)) && printed.some(l => /ok +fine/.test(l)));
+  const text = reportText(run, { startedAt: 0, version: "0.1.2", models: "m" });
+  assert.match(text, /## wrong-fact\nSaid: Angel, fireball\?\nLOOK AT: a right answer should say \/10d6\/\nLOOK AT: it should never say/);
+  assert.match(text, /She writes:\n\*\*-2 circumstance penalty to AC\.\*\*\nPages: Off-Guard <https:/);
+  const dir = tmp();
+  const file = saveReport(dir, run, { startedAt: Date.UTC(2026, 10, 14, 12, 0, 0), version: "0.1.2" });
+  assert.match(path.basename(file), /^selftest-2026-11-1\d_\d{6}\.md$/);
+  assert.equal(fs.readFileSync(file, "utf8").includes("## breaks\nSaid: Angel, this breaks\nFAILED: the answer"), true);
+  /* every pattern in the real cases is quick on a long odd text */
+  const odd = "a".repeat(5000) + " 2 + ".repeat(2000) + "each type ".repeat(2000);
+  const t0 = performance.now();
+  for (const c of CASES) for (const s of c.steps) for (const re of [...(s.want ?? []), ...(s.never ?? [])]) re.test(odd);
+  assert.ok(performance.now() - t0 < 500);
+});

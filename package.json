@@ -11,6 +11,7 @@
     "check": "node src/check.mjs",
     "voices": "node src/check.mjs --voices",
     "ask": "node src/check.mjs --ask",
+    "selftest": "node src/check.mjs --selftest",
     "test": "node --test \"test/*.test.mjs\"",
     "test:aon": "node test/live/aon-live.mjs"
   },

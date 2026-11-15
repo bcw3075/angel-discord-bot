@@ -606,7 +606,7 @@ test("one speaker's lines are taken in the order said, even when a later piece i
 test("her last written answer goes along with the next question; a failed lookup is said in the post", async () => {
   const { s, voice, posted, asked } = setup({ heard: ["Angel, what does grabbed do?", "Angel, what about the second one?"], cfg: { ackPhrase: "" } });
   let n = 0;
-  s.answer = async q => { asked.push(q); return n++ ? { say: "That one.", details: "**That one.**", sources: [], failedLookups: 1, dollars: 0.01 } : { say: "Two things.", details: "**Two things.**\n- Off-guard\n- Immobilized", sources: [], failedLookups: 0, dollars: 0.01 }; };
+  s.answer = async q => { asked.push(q); return n++ ? { say: "That one.", details: "**That one.**", sources: [], lookups: 1, failedLookups: 1, dollars: 0.01 } : { say: "Two things.", details: "**Two things.**\n- Off-guard\n- Immobilized", sources: [], lookups: 1, failedLookups: 0, dollars: 0.01 }; };
   await s.start();
   speech(voice, "p1"); await settle(); await s.answering;
   assert.doesNotMatch(asked[0].conversation, /last written answer/);
@@ -621,7 +621,8 @@ test('"Angel, stop. What does stunned do?": the question goes on without the sto
   await s.start();
   speech(voice, "p1"); await settle(); await s.answering;
   assert.equal(voice.stops, 1);
-  assert.equal(asked[0].question, "What does stunned do?", "their own words still hold the stop, which is already done");
+  assert.equal(asked[0].question, "What does stunned do?", "their own words from after the stop, which is already done");
+  assert.equal(asked[0].meaning, "What does stunned do?");
   /* the first piece's transcription hangs; "Angel, stop" said after it is acted on at once, and once */
   let slow;
   ({ s, voice, asked } = setup({}));
@@ -638,12 +639,24 @@ test('"Angel, stop. What does stunned do?": the question goes on without the sto
 });
 
 test("only a checked rules answer is kept as her last written answer", async () => {
-  const { s, voice, asked } = setup({ heard: ["Angel, one?", "Angel, two?", "Angel, three?"], cfg: { ackPhrase: "", speak: false }, gate: ({ bareText }) => ({ toAngel: true, complete: true, stop: false, chat: /two/.test(bareText), question: bareText }) });
-  const replies = [{ say: "A.", details: "**Unchecked.**", sources: [], failedLookups: 1, dollars: 0 }, { say: "B.", details: "**Chatter.**", sources: [], failedLookups: 0, dollars: 0 }, { say: "C.", details: "**C.**", sources: [], dollars: 0 }];
+  const { s, voice, asked } = setup({ heard: ["Angel, one?", "Angel, two?", "Angel, three?", "Angel, four?"], cfg: { ackPhrase: "", speak: false }, gate: ({ bareText }) => ({ toAngel: true, complete: true, stop: false, chat: /two/.test(bareText), question: bareText }) });
+  const replies = [{ say: "A.", details: "**Unchecked.**", sources: [], lookups: 1, failedLookups: 1, dollars: 0 }, { say: "B.", details: "**Chatter.**", sources: [], lookups: 1, failedLookups: 0, dollars: 0 }, { say: "Lost.", details: "Lost.", sources: [], lookups: 0, dollars: 0 }, { say: "C.", details: "**C.**", sources: [], lookups: 2, dollars: 0 }];
   s.answer = async q => { asked.push(q); return replies.shift(); };
   await s.start();
-  for (let i = 0; i < 3; i++) { speech(voice, "p1"); await settle(); await s.answering; }
+  for (let i = 0; i < 4; i++) { speech(voice, "p1"); await settle(); await s.answering; }
+  assert.doesNotMatch(asked[3].conversation, /last written answer/, "nor an answer that looked nothing up (her fallback line)");
   assert.doesNotMatch(asked[1].conversation, /last written answer/, "one a lookup failed for is not handed back as her answer");
   assert.doesNotMatch(asked[2].conversation, /last written answer/, "nor is small talk");
   assert.equal(s.lastWritten.text, "**C.**");
+});
+
+test("an answer cut off part way through what she was saying: she says so, the post says so, and it isn't kept as her last answer", async () => {
+  const { s, voice, posted } = setup({ heard: ["Angel, can I strike twice?"], cfg: { ackPhrase: "" } });
+  s.answer = async q => { q.onSay("You can Strike twice. But only if "); return { say: "You can Strike twice. But only if", details: "You can Strike twice. But only if", cut: true, sources: [], lookups: 1, dollars: 0.01 }; };
+  await s.start();
+  speech(voice, "p1"); await settle(); await s.answering;
+  assert.deepEqual(voice.spoken.map(String), ["clip:You can Strike twice.", "clip:But only if", "clip:Sorry, I got cut off there. Ask me again?"]);
+  assert.match(posted[0].edits[0], /But only if …\n-# \(I got cut off part way through this answer\. Ask me again\.\)/);
+  assert.match(s.transcript.lines.at(-1).text, /But only if … Sorry, I got cut off there/);
+  assert.equal(s.lastWritten, null);
 });

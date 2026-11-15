@@ -113,7 +113,18 @@ export class Claude {
              results, and one sent back empty is refused (live 2026-11-14: "each thinking block must contain thinking") */
           else if (ev.delta?.type === "thinking_delta") { block.thinking = (block.thinking ?? "") + ev.delta.thinking; return; }
           else if (ev.delta?.type === "signature_delta") { block.signature = (block.signature ?? "") + ev.delta.signature; return; }
-          else return;
+          else {
+            /* a kind of piece this code doesn't know yet is still kept, so the block goes back whole: text is
+               added on, anything else is put in a list of the same name */
+            for (const [k, v] of Object.entries(ev.delta ?? {})) {
+              if (k === "type") continue;
+              if (typeof v === "string") block[k] = (typeof block[k] === "string" ? block[k] : "") + v;
+              else if (Array.isArray(block[`${k}s`])) block[`${k}s`].push(v);
+              else if (Array.isArray(block[k])) block[k].push(v);
+              else if (block[`${k}s`] === undefined) block[`${k}s`] = [v];
+            }
+            return;
+          }
           try { onDelta({ index: ev.index, block, delta: ev.delta }); } catch { /* a listener's trouble is not the call's */ }
         } else if (ev.type === "content_block_stop") {
           const block = msg.content[ev.index];
@@ -121,7 +132,7 @@ export class Claude {
           /* a tool input streamed as written isn't checked by the API: it can be cut short or not be JSON */
           const text = raw.get(ev.index) ?? "";
           try { block.input = text.trim() ? JSON.parse(text) : {}; }
-          catch { block.input = {}; (msg.brokenInputs ??= []).push(ev.index); }
+          catch { block.input = {}; (msg.brokenInputs ??= []).push(ev.index); (msg.brokenBlocks ??= []).push(block); }
         } else if (ev.type === "message_delta") {
           Object.assign(msg, ev.delta);
           counted = true;

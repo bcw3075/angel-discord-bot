@@ -24,7 +24,7 @@ export const DEFAULTS = Object.freeze({
   guildId: "",
   answerModel: "claude-sonnet-5-5",
   gateModel: "claude-haiku-5-5",
-  maxAnswerTokens: 1500,
+  maxAnswerTokens: 3000,
   sttModel: "nova-3",
   ttsVoice: "aura-2-thalia-en",
   speak: true,

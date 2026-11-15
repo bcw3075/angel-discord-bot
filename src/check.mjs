@@ -18,6 +18,7 @@ import { createDecoder, decodePackets } from "./audio.mjs";
 import { inviteUrl, within } from "./setup.mjs";
 import { buildServices } from "./services.mjs";
 import { isIntentRefusal } from "./bot.mjs";
+import { runSelfTest, saveReport } from "./selftest.mjs";
 
 const SAMPLE = "Hi, I'm Angel. Grab your dice: the rules say you're off-guard, so that's a minus two to your armor class.";
 
@@ -160,10 +161,22 @@ async function ask(cfg, question) {
   console.log(`Prompt cache (${cfg.answerCacheTtl}): ${r.cache.written} tokens written, ${r.cache.read} read.`);
 }
 
+/* `Test Angel.cmd`: real questions through the real checking and answering, written to data/selftest/ */
+async function selfTest(cfg) {
+  if (!cfg.anthropicApiKey) { console.log("Save the Claude key first: double-click Install Angel.cmd"); failures++; return; }
+  const startedAt = Date.now();
+  const run = await runSelfTest({ services: buildServices(cfg), print: line => console.log(line) });
+  let version = "";
+  try { version = JSON.parse(fs.readFileSync(path.join(path.dirname(DATA_DIR), "package.json"), "utf8")).version; } catch { /* not shown */ }
+  const file = saveReport(path.join(DATA_DIR, "selftest"), run, { startedAt, version, models: `${cfg.answerModel} answers, ${cfg.gateModel} checks` });
+  console.log(`Saved: ${file}`);
+  if (run.failed) failures++;
+}
+
 let cfg;
 try { cfg = loadConfig(); }
 catch (e) { console.log(e.message); process.exit(1); }
 const askAt = process.argv.indexOf("--ask"), setAt = process.argv.indexOf("--set"), setEnv = process.argv.includes("--set-env");
 const setting = askAt < 0 && (setEnv || setAt >= 0);
-const job = setting ? Promise.resolve(setVoice(cfg, setEnv ? process.env.V : process.argv[setAt + 1])) : askAt >= 0 ? ask(cfg, process.argv.slice(askAt + 1).join(" ").trim()) : process.argv.includes("--voices") ? voices(cfg) : check(cfg);
+const job = setting ? Promise.resolve(setVoice(cfg, setEnv ? process.env.V : process.argv[setAt + 1])) : askAt >= 0 ? ask(cfg, process.argv.slice(askAt + 1).join(" ").trim()) : process.argv.includes("--voices") ? voices(cfg) : process.argv.includes("--selftest") ? selfTest(cfg) : check(cfg);
 job.catch(e => { console.log(`Failed: ${e.message}`); failures++; }).then(() => process.exit(failures ? 1 : process.exitCode ?? 0));

@@ -27,6 +27,26 @@ export function isStopRequest(text) {
   return (t.slice(m[0].length).match(/[a-z0-9']+/gi) ?? []).length <= 3;
 }
 
+/* "Angel, stop. What does stunned do?" → "What does stunned do?": their own words after the stop, or "" when the
+   line doesn't begin with a stop */
+export function afterStop(text) {
+  const t = String(text).trim().slice(0, 2000);
+  const m = STOP_HEAD.exec(t);
+  if (!m) return "";
+  let rest = t.slice(m[0].length);
+  /* the politeness that goes with a stop is not part of the question ("stop please. What does…", "that's enough, thanks. How…") */
+  for (let again = true; again;) {
+    again = false;
+    let i = 0;
+    while (i < rest.length && " ,.!?;:-".includes(rest[i])) i++;
+    rest = rest.slice(i);
+    for (const word of ["please", "thanks", "thank you", "now", "okay", "ok"]) {
+      if (rest.toLowerCase().startsWith(word) && !/[a-z]/i.test(rest[word.length] ?? "")) { rest = rest.slice(word.length); again = true; break; }
+    }
+  }
+  return rest.trim();
+}
+
 export const GATE_SYSTEM = `You watch the transcript of a tabletop game played over voice chat. The table has an AI assistant called Angel who answers rules questions. The transcriber sometimes writes her name as Angela, Angie or angle.
 Decide whether the LAST line was said to Angel herself: someone asking her something or telling her something. A line right after Angel spoke that answers or reacts to what she said ("ha, good one", "thanks", "wait, even with a buckler?") was said to her even without her name. Only a line that is nothing but an acknowledgement ("okay", "thanks", "got it") needs no reply: to_angel false. A line that starts with one and then asks something ("Okay. Good. What about stacking?") is to_angel true. It was NOT said to her when "angel" is part of the game (an angel creature, an angelic character or heritage, a statue, a spell), when people talk about her without addressing her ("Angel was right earlier"), or when the word is just "angle" in its normal meaning.
 Reply with JSON only, no other text:

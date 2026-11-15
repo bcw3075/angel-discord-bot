@@ -66,13 +66,13 @@ test("short spoken answer, fuller written one (Rhea, 2026-11-14)", async () => {
   assert.ok(tool.input_schema.properties.details, "the answer tool has the written part");
 });
 
-test("the last round offers only the answer tool (never a forced tool_choice, which Sonnet 5.5 refuses), and plain text counts as one", async () => {
+test("the last round says 'answer now' with the same tools (never a forced tool_choice, which Sonnet 5.5 refuses), and plain text counts as an answer", async () => {
   const loop = Array.from({ length: 2 }, (_, i) => ({ content: [{ type: "tool_use", id: `x${i}`, name: "aon_search", input: { query: "q" } }], usage: {} }));
   const claude = fakeClaude([...loop, { content: [{ type: "tool_use", id: "z", name: "answer", input: { say: "Forced." } }], usage: {} }]);
   const r = await answerQuestion({ claude, aon: fakeAon, model: "m", system: "S", conversation: "", question: "q", asker: "A", maxRounds: 3 });
   assert.equal(r.say, "Forced.");
   assert.equal(claude.requests[2].tool_choice, undefined, "no forced tool choice");
-  assert.deepEqual(claude.requests[2].tools.map(t => t.name), ["answer"], "only the answer tool on the last round");
+  assert.deepEqual(claude.requests[2].tools, claude.requests[0].tools, "the same tools in every round: her earlier thinking is only accepted back while what came before it is unchanged");
   assert.match(JSON.stringify(claude.requests[2].messages.at(-1).content), /give your answer now/);
   assert.ok(claude.requests.every(r => r.tool_choice === undefined), "never forced in any round");
   const plain = await answerQuestion({ claude: fakeClaude([{ content: [{ type: "text", text: "Just text." }], usage: {} }]), aon: fakeAon, model: "m", system: "S", conversation: "", question: "q", asker: "A" });
@@ -379,4 +379,134 @@ test("her thinking comes back whole from a streamed reply and goes back to Claud
   assert.deepEqual(back[1], hidden);
   assert.equal(back[2].type, "tool_use");
   assert.equal(heard.join(""), "They don't stack.", "her thinking is never spoken");
+});
+
+test("asked for another lookup on the last round, she is told no and gets one more round to answer; nothing more is looked up", async () => {
+  const search = i => ({ content: [{ type: "tool_use", id: `x${i}`, name: "aon_search", input: { query: "q" } }], usage: {} });
+  const counting = { n: 0, async search() { this.n++; return [{ id: "a", name: "A" }]; }, async get() { return null; } };
+  let claude = fakeClaude([search(0), search(1), search(2), { content: [{ type: "tool_use", id: "z", name: "answer", input: { say: "From what I have." } }], usage: {} }]);
+  const r = await answerQuestion({ claude, aon: counting, model: "m", system: "S", conversation: "", question: "q", asker: "A", maxRounds: 3 });
+  assert.equal(r.say, "From what I have.");
+  assert.equal(r.rounds, 4);
+  assert.equal(counting.n, 2, "the lookup asked for on the last round is not run");
+  assert.match(claude.requests[3].messages.at(-1).content[0].content, /Not looked up.*Give your answer now/);
+  assert.equal(claude.requests[3].messages.at(-1).content[0].tool_use_id, "x2");
+  /* still no answer: her apology, never an endless loop */
+  claude = fakeClaude([search(0), search(1), search(2), search(3)]);
+  const lost = await answerQuestion({ claude, aon: counting, model: "m", system: "S", conversation: "", question: "q", asker: "A", maxRounds: 3 });
+  assert.match(lost.say, /lost my train of thought/);
+  assert.equal(claude.requests.length, 4);
+});
+
+test("a streamed answer Claude refuses before she has spoken is worked out again the plain way; after she has spoken it is not", async () => {
+  const plainReply = input => ({ body: { content: [{ type: "tool_use", id: "p", name: "answer", input }], usage: { input_tokens: 1e5 } } });
+  /* round 1 streamed, round 2 refused with a 400; then the plain way: a lookup round and the answer */
+  let { c, f } = streamingClaude([
+    { events: streamEvents([{ type: "tool_use", id: "t1", name: "aon_search", input: { query: "q" } }], { usage: { input_tokens: 1e5 }, outputTokens: 0 }) },
+    { status: 400, body: { error: { message: "messages.1.content.0.thinking: each thinking block must contain thinking" } } },
+    { body: { content: [{ type: "thinking", thinking: "", signature: "c2ln" }, { type: "tool_use", id: "p1", name: "aon_search", input: { query: "q" } }], usage: { input_tokens: 1e5 } } },
+    plainReply({ say: "They don't stack." }),
+  ]);
+  const heard = [];
+  const r = await answerQuestion({ claude: c, aon: fakeAon, model: "m", system: "S", conversation: "", question: "q", asker: "A", onSay: t => heard.push(t) });
+  assert.equal(r.say, "They don't stack.");
+  assert.match(r.fellBack, /each thinking block must contain thinking/, "said in the log by the session");
+  assert.deepEqual(f.calls.map(x => JSON.parse(x.init.body).stream === true), [true, true, false, false]);
+  assert.deepEqual(JSON.parse(f.calls[3].init.body).messages[1].content[0], { type: "thinking", thinking: "", signature: "c2ln" }, "the plain way sends Claude's reply back exactly as it came");
+  assert.equal(JSON.parse(f.calls[2].init.body).messages.length, 1, "started again from the question");
+  assert.equal(r.lookups, 1, "counted for the answer that was given");
+  assert.ok(Math.abs(r.dollars - 0.6) < 1e-9, "every call that ran is paid for and counted: three of 100,000 tokens in");
+  assert.equal(heard.length, 0, "nothing was passed on to be spoken from the plain way");
+  /* refused after she began to speak: not started again (she would say it twice) */
+  ({ c, f } = streamingClaude([{ events: streamEvents([{ type: "tool_use", id: "t", name: "answer", input: { say: "Yes, and there is more to it." } }]).slice(0, 6) }, plainReply({ say: "x" })]));
+  const err = await answerQuestion({ claude: c, aon: fakeAon, model: "m", system: "S", conversation: "", question: "q", asker: "A", onSay: t => heard.push(t) }).catch(e => e);
+  assert.match(err.message, /broke off/);
+  assert.equal(f.calls.length, 1);
+  /* a refusal that isn't a 400 is not started again either */
+  ({ c, f } = streamingClaude([{ status: 401, body: { error: { message: "invalid x-api-key" } } }, plainReply({ say: "x" })]));
+  await assert.rejects(answerQuestion({ claude: c, aon: fakeAon, model: "m", system: "S", conversation: "", question: "q", asker: "A" }), /401/);
+  assert.equal(f.calls.length, 1);
+});
+
+test("a kind of piece the code doesn't know is still kept in a streamed reply", async () => {
+  const events = [
+    { type: "message_start", message: { content: [], usage: { input_tokens: 1 } } },
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "", citations: [] } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "See " } },
+    { type: "content_block_delta", index: 0, delta: { type: "citations_delta", citation: { cited_text: "x" } } },
+    { type: "content_block_stop", index: 0 },
+    { type: "content_block_start", index: 1, content_block: { type: "new_kind", note: "" } },
+    { type: "content_block_delta", index: 1, delta: { type: "note_delta", note: "kept " } },
+    { type: "content_block_delta", index: 1, delta: { type: "note_delta", note: "whole" } },
+    { type: "content_block_stop", index: 1 },
+    { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 3 } }, { type: "message_stop" },
+  ];
+  const { c } = streamingClaude([{ events }]);
+  const res = await c.stream({ model: "m" });
+  assert.deepEqual(res.content, [{ type: "text", text: "See ", citations: [{ cited_text: "x" }] }, { type: "new_kind", note: "kept whole" }]);
+});
+
+test("a reply cut off at its limit is asked once more with twice the room; a lookup cut mid-way is never run", async () => {
+  const cutLookup = streamEvents([{ type: "thinking", thinking: "", signature: "c2ln" }, { type: "tool_use", id: "t1", name: "aon_search", rawInput: '{"query": "retrib' }], { stop: "max_tokens" });
+  const searched = [];
+  const aon = { async search(q) { searched.push(q); return [{ id: "a", name: "A" }]; }, async get() { return null; } };
+  let { c, f } = streamingClaude([{ events: cutLookup }, { events: streamEvents([{ type: "tool_use", id: "t1", name: "aon_search", input: { query: "retributive strike" } }]) }, { events: streamEvents([{ type: "tool_use", id: "t2", name: "answer", input: { say: "In the aura." } }]) }]);
+  const r = await answerQuestion({ claude: c, aon, model: "m", maxTokens: 1000, system: "S", conversation: "", question: "q", asker: "A" });
+  assert.equal(r.say, "In the aura.");
+  assert.deepEqual(searched, ["retributive strike"], "the cut request was not run with nothing in it");
+  assert.deepEqual(f.calls.map(x => JSON.parse(x.init.body).max_tokens), [1000, 2000, 1000]);
+  assert.equal(JSON.parse(f.calls[1].init.body).messages.length, 1, "nothing of the cut reply is kept");
+  assert.equal(r.rounds, 2, "the second try is the same round");
+  /* cut again at twice the room: her fallback line, no lookup with nothing in it */
+  ({ c, f } = streamingClaude([{ events: cutLookup }, { events: cutLookup }]));
+  const lost = await answerQuestion({ claude: c, aon, model: "m", system: "S", conversation: "", question: "q", asker: "A" });
+  assert.match(lost.say, /lost my train of thought/);
+  assert.equal(searched.length, 1);
+  /* cut inside the written part after all she says came through: taken as it is, not asked again */
+  ({ c, f } = streamingClaude([{ events: streamEvents([{ type: "tool_use", id: "t", name: "answer", rawInput: '{"say": "Yes, with a free hand.", "details": "**Yes' }], { stop: "max_tokens" }) }]));
+  const part = await answerQuestion({ claude: c, aon, model: "m", system: "S", conversation: "", question: "q", asker: "A", onSay: () => {} });
+  assert.equal(part.say, "Yes, with a free hand.");
+  assert.equal(f.calls.length, 1);
+  /* the bot gives her at least 3,000 tokens of room whatever an old config says */
+  const { buildServices } = await import("../src/services.mjs");
+  const { DEFAULTS } = await import("../src/config.mjs");
+  const os = await import("node:os"), fs = await import("node:fs"), path = await import("node:path");
+  const sent = [];
+  const fetchImpl = async (url, init) => { sent.push(JSON.parse(init.body)); return { ok: true, status: 200, headers: { get: () => null }, body: sseBody(streamEvents([{ type: "tool_use", id: "t", name: "answer", input: { say: "Yes." } }])) }; };
+  await buildServices({ ...DEFAULTS, maxAnswerTokens: 1500, anthropicApiKey: "k", deepgramApiKey: "d" }, { fetchImpl, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), "angel-svc-")) }).answer({ conversation: "", question: "q", asker: "A", via: "text" });
+  assert.equal(sent[0].max_tokens, 3000);
+});
+
+test("cut off after she began to speak: what she said is returned marked as cut; a cut plain reply or a cut text reply is never taken as whole; a garbled lookup is never run", async () => {
+  const searched = [];
+  const aon = { async search(q) { searched.push(q); return [{ id: "a", name: "A", url: "https://2e.aonprd.com/a" }]; }, async get() { return null; } };
+  /* streamed, cut inside say after pieces were passed on */
+  let { c, f } = streamingClaude([{ events: streamEvents([{ type: "tool_use", id: "t", name: "answer", rawInput: '{"say": "You can Strike twice but only if' }], { stop: "max_tokens" }) }, { events: [] }]);
+  const heard = [];
+  const r = await answerQuestion({ claude: c, aon, model: "m", system: "S", conversation: "", question: "q", asker: "A", onSay: t => heard.push(t) });
+  assert.equal(r.cut, true);
+  assert.equal(r.say, "You can Strike twice but only if");
+  assert.equal(f.calls.length, 1, "not asked again: she would say it twice");
+  /* the same cut with nobody listening yet (nothing passed on): asked again with twice the room */
+  ({ c, f } = streamingClaude([{ events: streamEvents([{ type: "tool_use", id: "t", name: "answer", rawInput: '{"say": "You can Strike twice but only if' }], { stop: "max_tokens" }) }, { events: streamEvents([{ type: "tool_use", id: "t", name: "answer", input: { say: "You can Strike twice." } }]) }]));
+  const again = await answerQuestion({ claude: c, aon, model: "m", system: "S", conversation: "", question: "q", asker: "A" });
+  assert.equal(again.say, "You can Strike twice.");
+  assert.equal(again.cut, undefined);
+  /* the plain way: a cut answer with part of say is not whole */
+  let plain = fakeClaude([{ stop_reason: "max_tokens", content: [{ type: "tool_use", id: "t", name: "answer", input: { say: "Stunned means you lose" } }], usage: {} }, { content: [{ type: "tool_use", id: "t", name: "answer", input: { say: "Stunned means you lose actions." } }], usage: {} }]);
+  assert.equal((await answerQuestion({ claude: plain, aon, model: "m", system: "S", conversation: "", question: "q", asker: "A" })).say, "Stunned means you lose actions.");
+  /* a text reply cut twice is not an answer */
+  plain = fakeClaude([{ stop_reason: "max_tokens", content: [{ type: "text", text: "Stunned means you lose" }], usage: {} }, { stop_reason: "max_tokens", content: [{ type: "text", text: "Stunned means you lose" }], usage: {} }]);
+  assert.match((await answerQuestion({ claude: plain, aon, model: "m", system: "S", conversation: "", question: "q", asker: "A" })).say, /lost my train of thought/);
+  /* a lookup whose JSON didn't parse (not cut) is not run; she is told and can ask again */
+  ({ c, f } = streamingClaude([
+    { events: streamEvents([{ type: "tool_use", id: "bad", name: "aon_search", rawInput: '{"query": "grab"bed"}' }, { type: "tool_use", id: "good", name: "aon_search", input: { query: "grabbed" } }]) },
+    { events: streamEvents([{ type: "tool_use", id: "t", name: "answer", input: { say: "Held." } }]) },
+  ]));
+  const g = await answerQuestion({ claude: c, aon, model: "m", system: "S", conversation: "", question: "q", asker: "A" });
+  assert.deepEqual(searched, ["grabbed"], "never a search for nothing");
+  assert.equal(g.lookups, 1);
+  const results = JSON.parse(f.calls[1].init.body).messages[2].content;
+  assert.match(results[0].content, /garbled and was not run/);
+  assert.equal(results[0].tool_use_id, "bad");
 });

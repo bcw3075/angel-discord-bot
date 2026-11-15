@@ -1,6 +1,6 @@
 ---
 feature: setup
-files: [Install Angel.cmd, src/config.mjs, src/log.mjs, src/setup.mjs, src/check.mjs, src/services.mjs, src/main.mjs]
+files: [Install Angel.cmd, Test Angel.cmd, src/selftest.mjs, src/config.mjs, src/log.mjs, src/setup.mjs, src/check.mjs, src/services.mjs, src/main.mjs]
 functions: []
 dependsOn: []
 since: 0.1.0
@@ -8,6 +8,7 @@ since: 0.1.0
 Settings, keys and the owner's own files; the setup and check scripts; the logger; building the services; starting.
 
 ## Decisions
+- **`Test Angel.cmd`: a break-it suite with the owner's own keys** (Rhea, 2026-11-14, after two failed live rounds: "Would there be a way for you to get a test api just for testing?", then "you should come up with a whole bunch of tests to use with it" and "Think of every different possible way to break it"). A key in the build workspace would have to pass through the chat, so the test runs on her PC instead: `check.mjs --selftest` puts about thirty cases (`CASES` in `selftest.mjs`) through the real check and the real answering, three at a time, without Discord: rules of every kind, old names, two printings of one name, exact numbers, several questions in one, a player who is wrong, a rule that doesn't exist, a GM's call, "that" from the conversation, garbled and odd words, a very long question, typed, attempts to talk her out of her rules, small talk, and lines that are not for her. Each step notes the check's verdict, the times, rounds and lookups, both answers and the pages, and marks "look at" when a pattern for the right answer misses; the report is `data/selftest/selftest-<time>.md`. The patterns are a first sieve: Angel reads every answer against Archives of Nethys. Her hearing and her voice are not part of it. A run costs about a dollar and is not counted against the daily cap.
 - **Prices and floors are checked** (full code check, 2026-11-14): a price that isn't a number ("$2") made every total "not a number", which broke the caps; such an entry is replaced by the built-in price (or dropped, so the dearest known price counts) and named in the problems list. The caps, `memoryMinutes`, `maxAnswerTokens`, `silenceMs`, `maxUtteranceSeconds`, `replyWindowMs` and `followUpMs` below their floor fall back to the default, also named.
 - Runs on the owner's Windows PC beside her other tools, started by `Start Angel.cmd` with a restart loop (the bridge's pattern). It only connects out, so no tunnel or port. (Angel's choice, 2026-11-12, in the design.)
 - Its own Claude Console workspace and key with a monthly cap, separate from other API spend. (Angel's choice, 2026-11-12.)
@@ -31,6 +32,8 @@ Settings, keys and the owner's own files; the setup and check scripts; the logge
 - `setup.mjs` prints `Got it: <pasteSummary>` after each key; it stops with the plain message on a `config.json` it can't read; Ctrl+C at a question stops it without saving; a window that isn't a terminal (Git Bash's) gets a warning that pasted keys may show. Its Discord check has a 30-second limit (`within`), and only blames the token when Discord refused it (`tokenRefused`); anything else says the keys are saved and to check the connection. It exports `inviteUrl` and `INVITE_PERMISSIONS` (View Channel, Send Messages, Embed Links, Read Message History, Add Reactions, Connect, Speak, Use Voice Activity, Create Public Threads, Send Messages in Threads); it only runs its prompts when started as `src/setup.mjs`.
 
 ## Checks
+- (st-10) {live} `Test Angel.cmd` on the owner's PC runs to the end, prints a line per case and saves the report.
+- (st-11) {unit} the self-test's run, its marks, its report and its patterns' speed (`test/setup.test.mjs`).
 - (st-9) {unit} a price that isn't a number and a setting below its floor are replaced and named (`test/setup.test.mjs`).
 - (st-1) {live} `npm install` on the owner's Windows PC (Node 22.12 or newer) finishes without errors, and `@snazzah/davey-win32-x64-msvc` is in `node_modules`.
 - (st-2) {live} `npm run setup` on Windows: pasted keys don't show; it names the bot and the server and prints an invite link that adds the bot with the permissions above and the slash command.
@@ -40,6 +43,7 @@ Settings, keys and the owner's own files; the setup and check scripts; the logge
 - (st-5) {unit} the paste summary, asking again for a key that looks wrong, defaults and merging, what setup saves, settings typed as text, a broken, BOM-prefixed or UTF-16 `config.json`, the table's files and their report, the FAIL advice, odd-looking keys, the time limit, keys blanked in the log, the invite link (`test/setup.test.mjs`).
 
 ## Traps
+- A rules fact written into a self-test pattern from memory was wrong: "resistance to all damage applies to each type" is the old rule; Player Core's Resistance on Archives of Nethys now says it is used once, against one type the target chooses (read 2026-11-14). Every fact in `CASES` is read from the real entry before it goes in.
 - `npm install prism-media` as a direct dependency fails: prism-media 1.3.5 wants `opusscript ^0.0.8` as a peer and this package uses 0.1.1. Don't add it; `tts.mjs` has its own small Ogg reader for the checks, and playback uses the copy inside @discordjs/voice.
 - A time limit's timer must not be `unref`'d when it guards a step that may be the only thing running: a hung login would then end the process silently instead of with the reason (caught by its own test, 2026-11-13).
 - On Node 22, `node --test test/` treats the folder as a file; the test script uses the quoted glob `"test/*.test.mjs"`.

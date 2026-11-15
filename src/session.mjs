@@ -5,7 +5,7 @@
    the text channel) are passed in, so the whole flow runs in tests without Discord. */
 import { packetsToWav, createDecoder } from "./audio.mjs";
 import { Transcript } from "./transcript.mjs";
-import { mentionsAngel, isStopRequest } from "./wake.mjs";
+import { mentionsAngel, isStopRequest, afterStop } from "./wake.mjs";
 import { typedAnswer, shortQuestion } from "./answer.mjs";
 import { speakable, SentenceCutter } from "./speech.mjs";
 
@@ -159,11 +159,11 @@ export class Session {
     let asked = text; /* their own words */
     if (decision.stop) {
       this.stop(line.at);
-      /* "Angel, stop. What does stunned do?": stop, then answer the question (asked just after the stop). Here the
-         check's wording is the question: their own words still hold the "stop", which is already done */
+      /* "Angel, stop. What does stunned do?": stop, then answer the question (asked just after the stop): their own
+         words from after the stop, which is already done (the check's wording when the stop can't be cut off) */
       if (!(decision.complete && decision.question && /\?/.test(text))) return;
       at = line.at + 1;
-      asked = decision.question;
+      asked = afterStop(text) || decision.question;
     }
     /* what they said while the check ran is the rest of the question, finished or not */
     const rest = later.length ? ` ${later.join(" ")}` : "";
@@ -278,6 +278,7 @@ export class Session {
         question, meaning, asker, via, onSay,
       });
       this.costs.claude += result.dollars ?? 0;
+      if (result.fellBack) this.log.warn(`the answer was worked out a second time, the plain way, after: ${result.fellBack}`);
     } catch (e) {
       /* what the failed rounds cost still counts */
       this.costs.claude += e.dollars ?? 0;
@@ -292,9 +293,12 @@ export class Session {
        apology comes after whatever she had already begun) */
     const early = said.join(" ");
     const rest = result.failed ? "" : cutter.flush();
+    /* cut off part way through what she was saying: she says so, and so does the post */
+    const cutNote = result.cut ? "Sorry, I got cut off there. Ask me again?" : "";
     if (result.saidAll) { /* nothing more to say */ }
     else if (result.failed || (!said.length && !rest)) sayPiece(result.say);
     else if (rest) sayPiece(rest);
+    if (cutNote) { sayPiece(cutNote); result = { ...result, say: `${result.say} … ${cutNote}`, details: `${result.say} …\n-# (I got cut off part way through this answer. Ask me again.)` }; }
     const heard = result.failed && early && !result.saidAll ? `${early} ${result.say}` : result.say;
 
     /* the check may call a rules question small talk: one that looked something up is posted anyway */
@@ -304,7 +308,7 @@ export class Session {
       posted = true;
       const typed = typedAnswer({ asker, question: shown, say: result.details ?? result.say, sources: result.sources, unchecked: result.failedLookups > 0 });
       /* kept for the next question only when it is a checked rules answer: not small talk, not one a lookup failed for */
-      if (!result.failed && result.details && !chat && !(result.failedLookups > 0)) this.lastWritten = { at: this.now(), text: result.details };
+      if (!result.failed && result.details && !chat && !result.cut && result.lookups > 0 && !(result.failedLookups > 0)) this.lastWritten = { at: this.now(), text: result.details };
       const placeholder = await placed;
       try { if (placeholder?.edit) await placeholder.edit(typed); else await target.send(typed); }
       catch (e) { this.log.warn(`couldn't post the answer: ${e.message}`); }
