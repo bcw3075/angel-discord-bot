@@ -108,6 +108,43 @@ export const CASES = [
   { id: "check-name-at-the-end", steps: [{ say: "What does stunned do, Angel?", checkOnly: true }] },
   { id: "check-name-in-the-middle", steps: [{ say: "So, Angel, quick question, does raising a shield take an action?", checkOnly: true }] },
 
+  /* ---- third batch (Rhea, 2026-11-14: "Do you have any tests in there that ask for more detail, or clarification,
+     or a I don't understand?"). `fresh` means what she says must not be the same words as her answer before;
+     `asksBack` means the right reply is a question to them ---- */
+  { id: "asks-for-more-detail", steps: [
+    { say: "Angel, what does grabbed do?", want: [/immobilized/i], lookups: 1 },
+    { say: "Can you go into more detail on that?", replying: true, want: [/manipulate|flat check|move|escape/i], fresh: true, lookups: 0 },
+    { say: "And how do I get out of it?", replying: true, want: [/escape/i], lookups: 1 },
+  ] },
+  { id: "did-not-understand", steps: [
+    { say: "Angel, how does the multiple attack penalty work?", want: [/5/, /10/], lookups: 1 },
+    { say: "I don't understand. Can you explain that more simply?", replying: true, want: [/5/], fresh: true, lookups: 0 },
+    { say: "Wait, what?", replying: true, fresh: true, chat: "either", lookups: 0 },
+  ] },
+  { id: "asks-for-an-example", steps: [
+    { say: "Angel, how does flanking work?", want: [/off-guard/i, /opposite/i], lookups: 1 },
+    { say: "Can you give me an example?", replying: true, want: [/opposite|side|behind|across/i], fresh: true, lookups: 0 },
+  ] },
+  { id: "say-that-again", steps: [
+    { say: "Angel, what's the DC to recover from persistent damage?", want: [/15/], lookups: 1 },
+    { say: "Sorry, say that again?", replying: true, want: [/15/], chat: "either", lookups: 0 },
+  ] },
+  { id: "are-you-sure", steps: [
+    { say: "Angel, what does off-guard do?", want: [/2/], lookups: 1 },
+    { say: "Are you sure about that?", replying: true, want: [/2/], never: [/\b(4|four)\b/], chat: "either", lookups: 0 },
+    { say: "No, I'm pretty sure it's minus 4.", replying: true, want: [/2/], never: [/you'?re right|you are right|my mistake|i was wrong|it is (minus|-|−|–) ?4|it's (minus|-|−|–) ?4/i], chat: "either", lookups: 0 },
+  ] },
+  /* too vague to answer: she asks one short question back instead of guessing */
+  { id: "vague-no-context", steps: [{ say: "Angel, what's the DC?", asksBack: true, chat: "either", lookups: 0 }] },
+  { id: "vague-that", steps: [{ say: "Angel, can I do that as a reaction?", asksBack: true, chat: "either", lookups: 0 }] },
+  /* vague, but the table just said what "it" is: she answers, she doesn't ask */
+  { id: "vague-with-context", before: ["Mira: I'm going to Raise a Shield and then Stride."], steps: [{ say: "Angel, how many actions is that?", want: [/2|two/i], lookups: 1 }] },
+  /* a clarifying question answered: she uses the answer */
+  { id: "answers-her-question", steps: [
+    { say: "Angel, what's the DC?", asksBack: true, chat: "either", lookups: 0 },
+    { say: "To Treat Wounds.", replying: true, want: [/15/], chat: "either", lookups: 1 },
+  ] },
+
   /* small talk: spoken only, nothing looked up */
   { id: "small-talk", steps: [{ say: "Angel, how are you feeling tonight?", chat: true, lookups: 0 }] },
   /* was that for her? (the check only) */
@@ -126,7 +163,9 @@ const clock = ms => { const d = new Date(ms); return [d.getHours(), d.getMinutes
 const secs = (ms, from) => (ms == null ? "n/a" : `${((ms - from) / 1000).toFixed(1)} s`);
 
 /* one step of a case: the check, then the answer read as it is written */
-async function runStep({ services, asker, role = "GM", step, lines, now }) {
+const plain = t => String(t).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+async function runStep({ services, asker, role = "GM", step, lines, now, previous = "" }) {
   const r = { said: step.say, notes: [] };
   const wantForHer = step.forHer !== false;
   if (!step.typed) {
@@ -168,6 +207,9 @@ async function runStep({ services, asker, role = "GM", step, lines, now }) {
     if (a.say.length > 600 || (step.shortSay && a.say.length > 450)) r.notes.push(`what she says aloud is long (${a.say.length} characters)`);
     if ((a.details ?? "").length > 1500) r.notes.push(`what she writes is long (${a.details.length} characters)`);
     if (/lost my train of thought/.test(a.say)) r.notes.push("she gave no answer (her fallback line)");
+    if (step.fresh && previous && plain(previous) === plain(a.say)) r.notes.push("she said the same words again instead of explaining it another way");
+    if (step.asksBack && !a.say.includes("?")) r.notes.push("the question was too vague to answer: she should have asked what they meant");
+    if (step.asksBack && (a.lookups ?? 0) > 0) r.notes.push("she looked something up for a question too vague to answer");
     if ((a.lookups ?? 0) > 0 && !(a.sources ?? []).length) r.notes.push("looked things up but named no pages");
   } catch (e) {
     r.answer = { ms: now() - t0, error: e.message, dollars: e.dollars ?? 0 };
@@ -188,7 +230,7 @@ export async function runSelfTest({ services, asker = "The GM", cases = CASES, n
       const c = cases[i];
       const lines = (c.before ?? []).map(l => `[${clock(now())}] ${l}`);
       const steps = [];
-      for (const step of c.steps) steps.push(await runStep({ services, asker: c.as?.name ?? asker, role: c.as?.role ?? "GM", step, lines, now }));
+      for (const step of c.steps) steps.push(await runStep({ services, asker: c.as?.name ?? asker, role: c.as?.role ?? "GM", step, lines, now, previous: steps.at(-1)?.answer?.say ?? "" }));
       results[i] = { id: c.id, steps };
       const bad = steps.filter(s => s.failed).length, look = steps.filter(s => !s.failed && s.notes.length).length;
       print(`  ${bad ? "FAILED " : look ? "LOOK AT" : "ok     "} ${c.id}${bad ? `: ${steps.find(s => s.failed).failed}` : look ? `: ${steps.find(s => s.notes.length).notes[0]}` : ""}`);

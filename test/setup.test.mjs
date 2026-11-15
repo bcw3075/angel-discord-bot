@@ -324,6 +324,10 @@ test("the self-test runs every case through the check and the answering, marks w
   const refused = await runSelfTest({ services: { ...services, gate: async ({ lastText }) => ({ toAngel: true, complete: true, error: /first/.test(lastText) ? "Claude answered 400: no" : "its reply was cut off" }) }, cases: [{ id: "a", steps: [{ say: "Angel, first", checkOnly: true }] }, { id: "b", steps: [{ say: "Angel, second", checkOnly: true }] }] });
   assert.equal(refused.failed, 1);
   assert.equal(refused.look, 1);
+  /* the same words again, and a vague question answered instead of asked back, are marked */
+  const same = await runSelfTest({ services, cases: [{ id: "again", steps: [{ say: "Angel, what does off-guard do?" }, { say: "I don't understand.", replying: true, fresh: true }] }, { id: "vague", steps: [{ say: "Angel, what's the DC?", asksBack: true }] }] });
+  assert.match(same.results[0].steps[1].notes.join("|"), /same words again/);
+  assert.match(same.results[1].steps[0].notes.join("|"), /should have asked what they meant.*looked something up/);
   /* the real cases' patterns on answers that are right and answers that are wrong */
   const strike = CASES.find(c => c.id === "same-name-two-printings").steps[0];
   const right = "Your ally gets resistance equal to 2 plus your level, in your champion's aura (15 feet). It's used once, not applied to each type: they choose which damage type it goes against.";
