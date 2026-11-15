@@ -42,6 +42,7 @@ Answering: Claude with the conversation, the house rules and Archives of Nethys 
 - (an-5) {live} `npm run test:aon` passes against the real Archives of Nethys (runs from the cloud workspace too).
 
 ## Traps
+- A streamed reply can hold thinking blocks though none were asked for (Sonnet 5.5 decides for itself; live 2026-11-14, the follow-up "What about stacking?" failed with "each thinking block must contain thinking"). `stream` keeps `thinking_delta` and `signature_delta` whole, because the block goes back with the lookups' results. The stand-in replies in the tests now include one.
 - An old AoN entry does not always point to its replacement (`remaster_id`): same-name entries from before and after the Remaster can sit side by side, the old one ranked first. Check a ranking change against the real index (`npm run test:aon`): moving exact names up once put the old Attack of Opportunity above Reactive Strike, and only the live check caught it.
 - The cache file's write was meant to come a few seconds after the last lookup but came 3 s after the first, in the middle of an answer; it is now put off at each lookup.
 - A tool input streamed as written isn't checked by the API: it can be cut short or not parse. `stream` gives `{}` for it (and lists it in `brokenInputs`) and the answer falls back to what the field reader held.

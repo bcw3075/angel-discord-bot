@@ -363,3 +363,20 @@ test("a lookup that ran out of time is not tried again", async () => {
   assert.equal(tries, 1);
   assert.equal(r.failedLookups, 1);
 });
+
+test("her thinking comes back whole from a streamed reply and goes back to Claude with the lookups' results (live 2026-11-14)", async () => {
+  const thought = { type: "thinking", thinking: "Stacking: circumstance penalties don't stack with each other. Let me check.", signature: "c2lnbmF0dXJl" };
+  const hidden = { type: "redacted_thinking", data: "b3BhcXVl" };
+  const { c, f } = streamingClaude([
+    { events: streamEvents([thought, hidden, { type: "tool_use", id: "t1", name: "aon_search", input: { query: "circumstance penalty" } }]), pieceSize: 23 },
+    { events: streamEvents([{ type: "tool_use", id: "t2", name: "answer", input: { say: "They don't stack." } }]) },
+  ]);
+  const heard = [];
+  const r = await answerQuestion({ claude: c, aon: fakeAon, model: "m", system: "S", conversation: "", question: "What about stacking?", asker: "Rhea", onSay: t => heard.push(t) });
+  assert.equal(r.say, "They don't stack.");
+  const back = JSON.parse(f.calls[1].init.body).messages[1].content;
+  assert.deepEqual(back[0], thought, "the thinking and its signature, as written");
+  assert.deepEqual(back[1], hidden);
+  assert.equal(back[2].type, "tool_use");
+  assert.equal(heard.join(""), "They don't stack.", "her thinking is never spoken");
+});

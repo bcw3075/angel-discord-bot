@@ -74,7 +74,13 @@ export function streamEvents(blocks, { usage = { input_tokens: 10 }, outputToken
   /* the real start event already has output_tokens, a placeholder of 1; the true count comes with message_delta */
   const ev = [{ type: "message_start", message: { id: "m", role: "assistant", content: [], usage: { ...usage, output_tokens: 1 } } }, { type: "ping" }];
   blocks.forEach((b, index) => {
-    if (b.type === "text") {
+    if (b.type === "thinking") {
+      ev.push({ type: "content_block_start", index, content_block: { type: "thinking", thinking: "", signature: "" } });
+      for (let i = 0; i < b.thinking.length; i += 11) ev.push({ type: "content_block_delta", index, delta: { type: "thinking_delta", thinking: b.thinking.slice(i, i + 11) } });
+      ev.push({ type: "content_block_delta", index, delta: { type: "signature_delta", signature: b.signature } });
+    } else if (b.type === "redacted_thinking") {
+      ev.push({ type: "content_block_start", index, content_block: { type: "redacted_thinking", data: b.data } });
+    } else if (b.type === "text") {
       ev.push({ type: "content_block_start", index, content_block: { type: "text", text: "" } });
       ev.push({ type: "content_block_delta", index, delta: { type: "text_delta", text: b.text } });
     } else {

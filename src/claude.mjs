@@ -109,6 +109,10 @@ export class Claude {
           if (!block) return;
           if (ev.delta?.type === "text_delta") block.text = (block.text ?? "") + ev.delta.text;
           else if (ev.delta?.type === "input_json_delta") raw.set(ev.index, (raw.get(ev.index) ?? "") + ev.delta.partial_json);
+          /* her thinking and its signature must be kept whole: the block goes back to Claude with the lookups'
+             results, and one sent back empty is refused (live 2026-11-14: "each thinking block must contain thinking") */
+          else if (ev.delta?.type === "thinking_delta") { block.thinking = (block.thinking ?? "") + ev.delta.thinking; return; }
+          else if (ev.delta?.type === "signature_delta") { block.signature = (block.signature ?? "") + ev.delta.signature; return; }
           else return;
           try { onDelta({ index: ev.index, block, delta: ev.delta }); } catch { /* a listener's trouble is not the call's */ }
         } else if (ev.type === "content_block_stop") {
