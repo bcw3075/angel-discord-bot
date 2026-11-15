@@ -9,6 +9,14 @@ import { mentionsAngel, isStopRequest } from "./wake.mjs";
 import { typedAnswer, shortQuestion } from "./answer.mjs";
 import { speakable } from "./speech.mjs";
 
+/* does `heard` look like her own words coming back? most of its words are in what she just said */
+export function echoOf(heard, said = "") {
+  const words = t => String(t).toLowerCase().match(/[a-z0-9']+/g) ?? [];
+  const h = words(heard), mine = new Set(words(said));
+  if (!h.length || !mine.size) return false;
+  return h.filter(w => mine.has(w)).length / h.length >= 0.7;
+}
+
 export class Session {
   constructor({ cfg, voice, post, stt, tts, gate, answer, speakerOf, transcript = new Transcript(), keytermCount = 1, log, now = Date.now, newDecoder = createDecoder, dailyOver = () => false }) {
     Object.assign(this, { cfg, voice, post, stt, tts, gate, answer, speakerOf, transcript, keytermCount, log, now, newDecoder, dailyOver });
@@ -95,7 +103,10 @@ export class Session {
     if (inFlight && !byName) { inFlight.push(line.text); return; }
     const waiting = this.pending.get(uid);
     if (!waiting && !named) return;
-    if (!waiting && this.voice.inEchoWindow(line.at)) return;
+    /* her own voice coming back through a microphone. A reply without her name gets a closer look instead of the plain
+       time rule: right after she stops is exactly when people answer her (2026-11-14: "Nice. And does that stack...?"
+       began 2 s after she finished and was dropped). It's an echo only if its words are hers. */
+    if (!waiting && this.voice.inEchoWindow(line.at) && (byName || !replying || echoOf(line.text, this.lastSaid))) return;
     if (this.overCap()) return;
     let text = line.text;
     if (waiting) {
@@ -200,6 +211,7 @@ export class Session {
     };
     if (!quiet || result.failed || result.lookups > 0 || result.sources?.length) await post();
     this.transcript.add({ at: this.now(), speaker: "Angel", role: "angel", text: result.say, kind: "angel" });
+    this.lastSaid = result.say;
     /* told to stop while she was looking it up: the answer stays typed, but she doesn't say it */
     if (!this.cfg.speak || this.ended || this.stoppedSince(at) || this.overCap()) { if (quiet && !this.stoppedSince(at)) await post(); return; }
     const spoken = speakable(result.say);

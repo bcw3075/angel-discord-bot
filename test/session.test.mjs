@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { Session, summaryText } from "../src/session.mjs";
+import { Session, echoOf, summaryText } from "../src/session.mjs";
 import { DEFAULTS } from "../src/config.mjs";
 import { tonePackets, sleep } from "./helpers.mjs";
 
@@ -351,4 +351,18 @@ test('"Angel, stop" during the check on an unfinished question: what they say ne
   speech(voice, "p1", 1, Date.now() + 10); await settle(); await s.answering;
   assert.equal(asked.length, 0);
   assert.equal(calls, 1, "the next line wasn't treated as the rest of a question");
+});
+
+test("a reply right after she stops isn't taken for her echo unless its words are hers (2026-11-14)", async () => {
+  assert.equal(echoOf("No, it doesn't stack with other circumstance penalties", "No, it doesn't stack with other circumstance penalties. Only the worst applies."), true);
+  assert.equal(echoOf("Nice. And does that stack with other circumstance penalties?", "Off-guard means you take a minus 2 circumstance penalty to AC."), false);
+  const { s, voice, gates } = setup({ heard: ["Angel, what's off-guard?", "Nice. And does that stack?", "Off-guard means minus two"], gate: () => ({ toAngel: true, complete: true, stop: false, question: "q" }) });
+  s.answer = async () => ({ say: "Off-guard means minus two to AC.", sources: [], lookups: 0, dollars: 0.01 });
+  await s.start();
+  speech(voice, "p1"); await settle(); await s.answering; await settle();
+  voice.echo = true; /* both next lines begin just after she stopped */
+  speech(voice, "p1"); await settle(); await s.answering; await settle();
+  assert.equal(gates.length, 2, "the quick reply was checked");
+  speech(voice, "p1"); await settle(); await s.answering;
+  assert.equal(gates.length, 2, "her own words coming back were not");
 });

@@ -60,7 +60,8 @@ test("short spoken answer, fuller written one (Rhea, 2026-11-14)", async () => {
   assert.match(r.details, /buckler/);
   const prompt = systemPrompt({});
   assert.match(prompt, /one to three short sentences/);
-  assert.match(prompt, /posted in the text channel/);
+  assert.match(prompt, /posted in Discord/);
+  assert.match(prompt, /bullet points/, "the written part is formatted, not a wall of text");
   const tool = claude.requests[0].tools.find(t => t.name === "answer");
   assert.ok(tool.input_schema.properties.details, "the answer tool has the written part");
 });

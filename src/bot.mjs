@@ -229,6 +229,8 @@ export class AngelBot {
         made = () => thread;
         const me = textChannel.guild?.members?.me;
         const mayThread = !me || !textChannel.permissionsFor || textChannel.permissionsFor(me)?.has?.(["CreatePublicThreads", "SendMessagesInThreads"]) !== false;
+        if (cfg.sessionThread && !textChannel.threads?.create) log.info("no thread: this channel can't hold threads (a voice channel's chat or a thread); posting here");
+        else if (cfg.sessionThread && !mayThread) log.warn("no thread: Angel lacks Create Public Threads or Send Messages in Threads here; posting in the channel");
         if (cfg.sessionThread && textChannel.threads?.create && mayThread) {
           try {
             thread = await Promise.race([

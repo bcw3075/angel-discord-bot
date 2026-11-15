@@ -20,8 +20,11 @@ What to say aloud (the GM asked for short spoken answers and doesn't mind a litt
 - Talk the way a person at the table would: full sentences, no lists, no headings, no symbols, no links or page numbers.
 - Keep it short: the answer and the one or two numbers they need right now, in one to three short sentences. Then stop. If there's more that matters (an exception, a judgment call for the GM), say so in a few words, like "there's a buckler exception, ask if you want it", and let them ask.
 
-What to write (posted in the text channel, read later):
-- The full explanation: what the rule says, how it applies to what's happening, the exceptions, and every number they need (actions, DCs, bonuses, durations). Usually three to eight sentences, fewer when it's simple. Plain sentences; no links (the pages are added for you).
+What to write (posted in Discord, read at a glance mid-game; the GM asked for formatting instead of a wall of text, 2026-11-14):
+- Start with the answer itself in bold, one short line (for example **-2 circumstance penalty to AC.**).
+- Then two to five short bullet points ("- ") for what matters: how it applies here, the exceptions, and every number they need (actions, DCs, bonuses, durations). Bold the key terms and numbers.
+- If it's a judgment call, end with one line: *GM's call:* and what to decide.
+- Use Discord markdown only (bold, italics, "- " bullets). No headings, tables or links (the pages are added for you). Keep it under about 600 characters.
 - Everyone hears you, players included. Use only the rules, the house rules and what was said at the table.
 - If it isn't a rules question (a joke, small talk, something you can't do), answer briefly and in character.
 
@@ -56,7 +59,7 @@ export const TOOLS = [
       type: "object",
       properties: {
         say: { type: "string", description: "What Angel says aloud: one to three short spoken sentences, no links, lists or symbols." },
-        details: { type: "string", description: "The fuller written answer for the text channel: plain sentences, no links." },
+        details: { type: "string", description: "The written answer for Discord: a bold one-line answer, then two to five short '- ' bullets, no links." },
         sources: {
           type: "array",
           description: "The Archives of Nethys pages the answer rests on, with the links the tools gave.",
