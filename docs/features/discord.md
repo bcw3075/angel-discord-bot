@@ -48,6 +48,7 @@ The Discord side: logging in, the /angel commands, typed questions, a session pe
 
 ## Traps
 - A refused privileged intent (close code 4014) makes `client.login` reject with @discordjs/ws's `Error("Used disallowed intents")`, read in the installed library. discord.js also defines a `DisallowedIntents` code with other wording ("Privileged intent provided is not enabled or whitelisted."), which login doesn't throw today. `isIntentRefusal` accepts either; the bot and `npm run check` share it, and a test throws both. The first review (L10) claimed only the code form was thrown; the second review showed that was wrong, so read the library's throw site before trusting an error's wording.
+- `threads.fetchActive` lists only threads that aren't archived, and Angel archives a session's thread when it ends: a stand-in thread list must drop archived threads as Discord does, or a reuse test passes while every second join makes a new thread (review 7, 2026-11-14). Closed threads come from `threads.fetchArchived`.
 - An interaction must be answered within 3 seconds: `join` and `ask` call `deferReply` before any slow work, then `editReply`.
 - A question asked in another channel during a session is answered where it was asked (the `reply` target), not in the session's channel.
 
