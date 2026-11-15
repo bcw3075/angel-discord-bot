@@ -21,7 +21,7 @@ class FakeVoice extends EventEmitter {
 const made = [];
 afterEach(() => { for (const x of made.splice(0)) { try { x.end(); } catch { /* already ended */ } } });
 
-const FAST = { busyBlipMs: 30, busyPauseMs: 40, busyFirstWaitMs: 120, busyGapMs: 80, busyMaxHoldMs: 700, ackPhrase: "" };
+const FAST = { silenceMs: 0, busyBlipMs: 30, busyPauseMs: 40, busyFirstWaitMs: 400, busyGapMs: 80, busyMaxHoldMs: 1500, ackPhrase: "" };
 
 function setup({ heard = [], hold = () => ({ kind: "none" }), ready = () => ({ text: "Got it, whenever you're ready." }), cfg = {}, gate = a => ({ toAngel: true, complete: true, stop: false, question: a.bareText }) } = {}) {
   const voice = new FakeVoice();
@@ -384,4 +384,89 @@ test("(se-12) a pause while her words are still being written: she just answers,
   await until(() => answers(x.voice).length === 1, 300);
   await x.s.answering;
   assert.deepEqual(x.voice.spoken, ["clip:Answer to: Angel, what does grabbed do?"]);
+});
+
+/* ---- the second review of 0.1.3 ---- */
+test("(se-12) a quiet that comes right after a line doesn't release her before that line is heard and judged", async () => {
+  for (const [said, kind, want] of [["Oh, and with a shield?", "ask", "merged"], ["Hold on Angel, one sec.", "wait", "held"], ["Never mind, we got it.", "stop", "dropped"]]) {
+    const x = await started(setup({ heard: ["Angel, what does grabbed do?", said], hold: a => (a.bareText === said ? { kind, question: kind === "ask" ? "With a shield?" : "" } : { kind: "none" }) }));
+    x.voice.talk("p2", true, Date.now() - 500);
+    speech(x.voice, "p1");
+    await until(() => x.voice.spoken.length === 1);
+    /* real timing: hearing and judging the line take longer than the gap */
+    const stt = x.s.stt, hold = x.s.hold;
+    x.s.stt = async w => { await sleep(250); return stt(w); };
+    x.s.hold = async a => { await sleep(250); return hold(a); };
+    x.voice.talk("p2", false);
+    speech(x.voice, "p1");
+    await sleep(900);
+    const a = answers(x.voice);
+    if (want === "merged") assert.deepEqual(a, ["clip:Answer to: Angel, what does grabbed do? Oh, and with a shield?"], said);
+    else assert.deepEqual(a, [], `${said}: not released by the quiet`);
+    x.s.end();
+    await x.s.answering;
+  }
+});
+
+test("(se-12) after a merge, the held answer's post is not given to the fresh one as 'your last written answer'; nothing more of it is voiced", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Oh, and with a shield?"], hold: a => (/shield/.test(a.bareText) ? { kind: "ask", question: "With a shield?" } : { kind: "none" }) }));
+  let n = 0, late = null;
+  x.s.answer = async q => {
+    x.asked.push(q);
+    if (++n === 1) {
+      q.onSay("First sentence of the held one. ", {});
+      late = async () => { q.onSay("Second sentence of the held one. ", {}); q.onSay("Third. ", { end: true }); };
+      return { say: "First sentence of the held one.", details: "DETAILS of the held one", sources: [], lookups: 1, dollars: 0.02 };
+    }
+    return { say: `Answer to: ${q.question}`, details: "fresh details", sources: [], lookups: 1, dollars: 0.02 };
+  };
+  x.voice.talk("p2", true, Date.now() - 500);
+  speech(x.voice, "p1");
+  await until(() => x.voice.spoken.length === 1);
+  await until(() => x.s.lastWritten?.text === "DETAILS of the held one");
+  speech(x.voice, "p1");
+  await until(() => x.asked.length === 2);
+  const voiced = [], tts = x.s.tts;
+  x.s.tts = async t => { voiced.push(t); return tts(t); };
+  await late();
+  x.voice.talk("p2", false);
+  await x.s.answering;
+  assert.doesNotMatch(x.asked[1].conversation, /DETAILS of the held one/);
+  assert.ok(!x.voice.spoken.some(c => /held one|Third/.test(c)), "the dropped answer's later sentences are not voiced");
+  assert.ok(!voiced.some(t => /held one|Third/.test(t)), "nor paid to be voiced");
+  assert.equal(x.s.lastWritten.text, "fresh details");
+});
+
+test("(se-11) the note fits in Discord's 2,000 characters: the answer is shortened, never the note", async () => {
+  const { withNote } = await import("../src/session.mjs");
+  const out = withNote("x".repeat(1995), "\n-# (note)");
+  assert.equal(out.length, 2000);
+  assert.ok(out.endsWith("…\n-# (note)"));
+  assert.equal(withNote("short", "\n-# n"), "short\n-# n");
+});
+
+test("(se-12) a typed question held: the asker's own typed line doesn't release her; someone else's does", async () => {
+  const x = await started(setup());
+  x.voice.talk("p2", true, Date.now() - 500);
+  x.s.textQuestion({ userId: "p1", asker: "Mira", text: "what does grabbed do?" });
+  await until(() => x.voice.spoken.length === 1);
+  x.s.textQuestion({ userId: "p1", asker: "Mira", text: "and restrained?" });
+  await sleep(120);
+  assert.equal(answers(x.voice).length, 0, "her own follow-up waits its turn");
+  x.s.textQuestion({ userId: "gm", asker: "Dana", text: "what is flanking?" });
+  await until(() => answers(x.voice).length === 1);
+  x.s.end();
+  await x.s.answering;
+});
+
+test("(se-12) a gap is never shorter than it takes a piece of speech to reach her (silenceMs plus a fifth of a second)", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?"], cfg: { silenceMs: 600, busyGapMs: 80 } }));
+  x.voice.talk("p2", true, Date.now() - 500);
+  speech(x.voice, "p1");
+  await until(() => x.voice.spoken.length === 1);
+  const t0 = Date.now();
+  x.voice.talk("p2", false);
+  await until(() => answers(x.voice).length === 1);
+  assert.ok(Date.now() - t0 >= 780, `released after ${Date.now() - t0} ms`);
+  await x.s.answering;
 });
