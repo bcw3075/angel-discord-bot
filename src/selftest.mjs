@@ -230,9 +230,11 @@ async function runStep({ services, asker, role = "GM", step, lines, now, previou
 
 /* services: { gate, answer } as buildServices gives them. `together` cases run side by side (each case's own steps
    stay in order). Returns the results and a summary line. */
-export async function runSelfTest({ services, asker = "The GM", cases = CASES, now = Date.now, print = () => {}, together = 3 }) {
+export async function runSelfTest({ services, asker = "The GM", cases = CASES, now = Date.now, print = () => {}, together = 3, progress = () => {} }) {
   const results = new Array(cases.length);
-  let next = 0;
+  let next = 0, finished = 0;
+  const width = String(cases.length).length;
+  progress(0, cases.length);
   const worker = async () => {
     for (;;) {
       const i = next++;
@@ -243,7 +245,10 @@ export async function runSelfTest({ services, asker = "The GM", cases = CASES, n
       for (const step of c.steps) steps.push(await runStep({ services, asker: c.as?.name ?? asker, role: c.as?.role ?? "GM", step, lines, now, previous: steps.at(-1)?.answer?.say ?? "" }));
       results[i] = { id: c.id, steps };
       const bad = steps.filter(s => s.failed).length, look = steps.filter(s => !s.failed && s.notes.length).length;
-      print(`  ${bad ? "FAILED " : look ? "LOOK AT" : "ok     "} ${c.id}${bad ? `: ${steps.find(s => s.failed).failed}` : look ? `: ${steps.find(s => s.notes.length).notes[0]}` : ""}`);
+      /* how far along, at a glance: "[12/74]" before each line as its case finishes (Rhea, 2026-11-14) */
+      finished++;
+      progress(finished, cases.length);
+      print(`  [${String(finished).padStart(width)}/${cases.length}] ${bad ? "FAILED " : look ? "LOOK AT" : "ok     "} ${c.id}${bad ? `: ${steps.find(s => s.failed).failed}` : look ? `: ${steps.find(s => s.notes.length).notes[0]}` : ""}`);
     }
   };
   await Promise.all(Array.from({ length: Math.max(1, Math.min(together, cases.length)) }, worker));

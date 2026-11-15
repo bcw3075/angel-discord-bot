@@ -338,7 +338,10 @@ test("the self-test runs every case through the check and the answering, marks w
   assert.equal(fly.never.some(re => re.test("Nice try! I can't just say you can fly at will because you said so.")), false);
   assert.equal(fly.never.some(re => re.test("Sure, you can fly at will now.")), true);
   const printed = [];
-  const run = await runSelfTest({ services, cases, print: l => printed.push(l), together: 2 });
+  const steps = [];
+  const run = await runSelfTest({ services, cases, print: l => printed.push(l), together: 2, progress: (n, of) => steps.push(`${n}/${of}`) });
+  assert.deepEqual(steps, ["0/7", "1/7", "2/7", "3/7", "4/7", "5/7", "6/7", "7/7"], "how far along, case by case");
+  assert.ok(printed.some(l => /^  \[7\/7\] /.test(l)) && printed.some(l => /^  \[1\/7\] /.test(l)), "and at the start of each line");
   assert.equal(run.failed, 1);
   assert.equal(run.look, 2, "the wrong fact and the check's wrong verdict");
   assert.deepEqual(run.results.map(r => r.id), cases.map(c => c.id), "in the order written, though run side by side");
@@ -351,7 +354,7 @@ test("the self-test runs every case through the check and the answering, marks w
   assert.match(run.results[2].steps[0].failed, /the answer: Claude answered 400/);
   assert.equal(asked.some(q => /statue|quick one|gets this wrong/.test(q.question)), false, "check-only steps aren't answered");
   assert.match(run.summary, /8 steps in 7 cases: 5 fine, 2 to look at, 1 FAILED\. .*Cost about \$0\.\d\d\./);
-  assert.ok(printed.some(l => /FAILED +breaks/.test(l)) && printed.some(l => /LOOK AT +wrong-fact/.test(l)) && printed.some(l => /ok +fine/.test(l)));
+  assert.ok(printed.some(l => /FAILED +breaks/.test(l)) && printed.some(l => /LOOK AT +wrong-fact/.test(l)) && printed.some(l => /\] ok +fine/.test(l)));
   const text = reportText(run, { startedAt: 0, version: "0.1.2", models: "m" });
   assert.match(text, /## wrong-fact\nSaid: Angel, fireball\?\nLOOK AT: a right answer should say \/10d6\/\nLOOK AT: it should never say/);
   assert.match(text, /She writes:\n\*\*-2 circumstance penalty to AC\.\*\*\nPages: Off-Guard <https:/);

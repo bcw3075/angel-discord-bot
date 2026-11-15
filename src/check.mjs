@@ -165,7 +165,8 @@ async function ask(cfg, question) {
 async function selfTest(cfg) {
   if (!cfg.anthropicApiKey) { console.log("Save the Claude key first: double-click Install Angel.cmd"); failures++; return; }
   const startedAt = Date.now();
-  const run = await runSelfTest({ services: buildServices(cfg), print: line => console.log(line) });
+  /* the count is in the window's title bar too, so it shows even when the window is behind another */
+  const run = await runSelfTest({ services: buildServices(cfg), print: line => console.log(line), progress: (n, of) => { process.title = `Test Angel: ${n} of ${of} done`; } });
   let version = "";
   try { version = JSON.parse(fs.readFileSync(path.join(path.dirname(DATA_DIR), "package.json"), "utf8")).version; } catch { /* not shown */ }
   const file = saveReport(path.join(DATA_DIR, "selftest"), run, { startedAt, version, models: `${cfg.answerModel} answers, ${cfg.gateModel} checks` });
