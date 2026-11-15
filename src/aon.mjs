@@ -103,7 +103,10 @@ export class Aon {
     const q = String(query).trim();
     if (!q) return [];
     const body = {
-      size: limit + 4,
+      /* thirty are read so the right entry can be found among them: for a wordy search the index puts entries that
+         merely share a common word first ("resistance to all damage" gave three entries about damage dice, with
+         Resistance ninth), and that sent her hunting through six rounds of looking up (live 2026-11-14) */
+      size: Math.max(limit + 4, 30),
       query: {
         bool: {
           should: [
@@ -122,14 +125,24 @@ export class Aon {
     const want = plainName(q);
     /* an old entry is never moved up for its name: "attack of opportunity" must still give Reactive Strike first */
     const exact = d => !preRemaster(d) && (plainName(d.name) === want || (d.oldName && plainName(d.oldName) === want));
-    const top = newestPrintingFirst([...docs.filter(exact), ...docs.filter(d => !exact(d))]).slice(0, limit);
+    /* next, entries whose whole name is among the words searched for ("Resistance" in "resistance to all damage",
+       "Persistent Damage" in "persistent fire damage") */
+    const words = wordsOf(q), asked = new Set(words);
+    const nameWords = d => wordsOf(d.name);
+    const inside = d => !exact(d) && !preRemaster(d) && nameWords(d).length > 0 && nameWords(d).every(w => asked.has(w));
+    /* the one named earliest in the search first (people put the subject first: "resistance multiple damage types"
+       is about Resistance), then the longer name, then the index's own order */
+    const at = d => words.indexOf(nameWords(d)[0]);
+    const named = docs.filter(inside).map((d, i) => [d, i]).sort((a, b) => at(a[0]) - at(b[0]) || nameWords(b[0]).length - nameWords(a[0]).length || a[1] - b[1]).map(x => x[0]);
+    const top = newestPrintingFirst([...docs.filter(exact), ...named, ...docs.filter(d => !exact(d) && !inside(d))]).slice(0, limit);
     const out = top.map(brief);
     /* the text goes to the first `withText` different entries: a variant of one already chosen (the same name and
        kind again) would only repeat it */
     const chosen = new Set(), ids = [];
     for (const d of top) {
       const key = `${plainName(d.name)}|${d.category ?? ""}|${d.primary_source ?? ""}`;
-      if (ids.length >= Math.max(0, withText) || chosen.has(key)) continue;
+      /* nor does an old printing that a newer one has replaced: its text is the one not to read */
+      if (ids.length >= Math.max(0, withText) || chosen.has(key) || d.older) continue;
       chosen.add(key);
       ids.push(d._id);
     }
@@ -194,6 +207,18 @@ function newestPrintingFirst(docs) {
     if (!since.length) { out.push(...group); continue; }
     out.push(...group.filter(g => !preRemaster(g)), ...group.filter(preRemaster).map(g => ({ ...g, older: true })));
   }
+  return out;
+}
+
+/* the words of a name or a search, lower case, letters and digits only; plain steps, no regex on what was asked */
+function wordsOf(s) {
+  const out = [];
+  let cur = "";
+  for (const c of String(s ?? "").toLowerCase()) {
+    if ((c >= "a" && c <= "z") || (c >= "0" && c <= "9")) cur += c;
+    else if (cur) { out.push(cur); cur = ""; }
+  }
+  if (cur) out.push(cur);
   return out;
 }
 

@@ -186,3 +186,19 @@ test("the texts go to different entries, and a broken cache entry is asked again
   assert.equal((await broken.search("blind"))[0].name, "Blind-Fight");
   assert.equal(g.calls.length, 1);
 });
+
+test("for a wordy search, the entry whose name is among the words asked comes first, the one named earliest leading (live 2026-11-14)", async () => {
+  const mk = (id, name, category = "rules", extra = {}) => ({ _id: id, name, category, url: `/${id}`, primary_source: "Player Core", release_date: "2023-11-15", ...extra });
+  const index = [mk("r1", "Counting Damage Dice"), mk("r2", "Adding Damage Dice"), mk("r3", "Increasing Die Size"), mk("r4", "Multiple Types"), mk("r5", "Damage Types", "sidebar"), mk("r6", "Damage"), mk("r7", "Resistance"), mk("f1", "Resistance", "familiar-ability"), mk("o1", "Resistance", "rules", { release_date: "2019-08-01", primary_source: "Core Rulebook" })];
+  const f = scriptedFetch([hits(index), hits([{ ...index[6], text: "the subject can choose which damage type" }, index[3], index[4]].map((d, i) => ({ ...d, text: d.text ?? `t${i}` })))]);
+  const aon = new Aon({ userAgent: "t", fetchImpl: f });
+  const r = await aon.search("resistance multiple damage types", { withText: 3 });
+  assert.equal(JSON.parse(f.calls[0].body).size, 30, "enough are read to find it among them");
+  assert.deepEqual(r.map(e => `${e.name}/${e.category}`), ["Resistance/rules", "Resistance/rules", "Resistance/familiar-ability", "Multiple Types/rules", "Damage Types/sidebar", "Damage/rules"], "named in the search first, the earliest named leading; the dice entries that only share a word are gone from the six");
+  assert.equal(r[1].older, true, "the old printing follows the new one and is marked");
+  assert.match(r[0].text, /choose which damage type/, "and its text comes with the search");
+  assert.deepEqual(JSON.parse(f.calls[1].body).query.ids.values, ["r7", "f1", "r4"], "the texts go to different entries");
+  const f2 = scriptedFetch([hits([mk("d1", "Counting Damage Dice"), mk("d2", "Damage"), mk("c1", "Persistent Damage", "condition"), mk("t1", "Fire", "trait")])]);
+  const r2 = await new Aon({ userAgent: "t", fetchImpl: f2 }).search("persistent fire damage");
+  assert.deepEqual(r2.map(e => e.name), ["Persistent Damage", "Fire", "Damage", "Counting Damage Dice"]);
+});

@@ -91,29 +91,31 @@ ${asker} ${via === "text" ? "typed" : "said"} to you: "${question}"${hint}`;
 
 /* A lookup that fails is tried once more at once (a dropped connection is the usual cause); if it fails again
    Claude is told, and the failure is counted so the post can say the answer couldn't be fully checked. */
-async function runTool(aon, use, failed, seen) {
+async function runTool(aon, use, failed, seen, looked) {
   const fail = e => {
     failed.count++;
     return `The lookup failed: ${e.message}. Answer from what you know only if you're sure, and say plainly that you couldn't check Archives of Nethys.`;
   };
-  try { return await lookUp(aon, use, seen); }
+  try { return await lookUp(aon, use, seen, looked); }
   catch (first) {
     /* one that ran out of time is not tried again: the table has already waited for it */
     if (first?.name === "TimeoutError") return fail(first);
-    try { return await lookUp(aon, use, seen); }
+    try { return await lookUp(aon, use, seen, looked); }
     catch (e) { return fail(e); }
   }
 }
 
-async function lookUp(aon, use, seen) {
+async function lookUp(aon, use, seen, looked) {
   if (use.name === "aon_search") {
     const hits = await aon.search(use.input?.query ?? "", { category: use.input?.category || null, withText: 3 });
     for (const h of hits) if (h.url) seen.add(h.url);
+    looked.push(`search "${String(use.input?.query ?? "").slice(0, 60)}"${use.input?.category ? ` [${use.input.category}]` : ""}: ${hits.slice(0, 3).map(h => h.name).join(", ") || "nothing"}`);
     return hits.length ? JSON.stringify(hits) : "No entries found. Try other words, or no category.";
   }
   if (use.name === "aon_get") {
     const doc = await aon.get(use.input?.ref ?? "");
     if (doc?.url) seen.add(doc.url);
+    looked.push(`page "${String(use.input?.ref ?? "").slice(0, 60)}": ${doc?.name ?? "nothing"}`);
     return doc ? JSON.stringify(doc) : "No entry with that id or link.";
   }
   return `Unknown tool ${use.name}.`;
@@ -127,6 +129,7 @@ export async function answerQuestion({ claude, aon, model, maxTokens = 1500, sys
   const fetched = [];
   const failed = { count: 0 };
   const seen = new Set(); /* the page links the lookups gave: only those can be posted as sources */
+  const looked = [];      /* what was looked up and what came back, for the log: a slow answer can be explained */
   let lookups = 0, dollars = 0;
   const cache = { written: 0, read: 0 };
   const done = (input, rounds) => {
@@ -137,7 +140,7 @@ export async function answerQuestion({ claude, aon, model, maxTokens = 1500, sys
       .map(s => ({ name: String(s.name || "Archives of Nethys").slice(0, 80), url: s.url }));
     if (!sources.length) sources = fetched.slice(0, 3);
     const unique = [...new Map(sources.map(s => [s.url, s])).values()].slice(0, 5);
-    return { say, details, sources: unique, rounds, lookups, failedLookups: failed.count, dollars, cache, fellBack };
+    return { say, details, sources: unique, rounds, lookups, failedLookups: failed.count, dollars, cache, fellBack, looked };
   };
   let spoke = false;    /* some of `say` has been passed on (and may already be heard) */
   let roomy = false;    /* this round is being asked again with twice the room, after a reply cut off at its limit */
@@ -153,7 +156,7 @@ export async function answerQuestion({ claude, aon, model, maxTokens = 1500, sys
        question is worked out once more the plain way, where Claude's replies go back exactly as they came. */
     if (claude.stream && !spoke && /^Claude answered 400/.test(e.message)) {
       fellBack = e.message;
-      messages.length = 1; fetched.length = 0; lookups = 0; failed.count = 0; seen.clear(); roomy = false;
+      messages.length = 1; fetched.length = 0; lookups = 0; failed.count = 0; seen.clear(); looked.length = 0; roomy = false;
       try { return await rounds(false); }
       catch (again) { if (again.usage) dollars += claude.cost(model, again.usage); again.dollars = dollars; throw again; }
     }
@@ -240,7 +243,7 @@ export async function answerQuestion({ claude, aon, model, maxTokens = 1500, sys
       /* a request whose JSON didn't come through whole is never run (it would be a search for nothing): she is told */
       const garbled = new Set(res.brokenBlocks ?? []);
       lookups -= uses.filter(u => garbled.has(u)).length;
-      const outs = await Promise.all(uses.map(use => (garbled.has(use) ? "That request came through garbled and was not run. Ask for it again." : runTool(aon, use, failed, seen))));
+      const outs = await Promise.all(uses.map(use => (garbled.has(use) ? "That request came through garbled and was not run. Ask for it again." : runTool(aon, use, failed, seen, looked))));
       const results = uses.map((use, i) => {
         if (use.name === "aon_get") {
           try { const d = JSON.parse(outs[i]); if (d?.url) fetched.push({ name: d.name, url: d.url }); } catch { /* not a page */ }

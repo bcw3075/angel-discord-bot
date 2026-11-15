@@ -151,7 +151,7 @@ export class Session {
       const holdMs = this.cfg.maxUtteranceSeconds * 1000 + this.cfg.followUpMs;
       const timer = setTimeout(() => this.pending.delete(uid), holdMs);
       timer.unref?.();
-      this.pending.set(uid, { text, at: this.now(), timer, holdMs });
+      this.pending.set(uid, { text, at: this.now(), timer, holdMs, byName: byName || waiting?.byName === true });
       this.log.info(`${line.speaker} is still talking: waiting for the rest before the check`);
       return;
     }
@@ -166,7 +166,7 @@ export class Session {
     if (decision.error) this.log.warn(`the "was that for me?" check failed (${decision.error}); the plain rule decided`);
     else if (decision.fallback) this.log.warn(`the "was that for me?" check gave a reply that couldn't be read; the plain rule decided`);
     /* what the check decided goes in the log (no words, just the verdict), so a line she didn't answer can be explained */
-    this.log.info(`check on ${line.speaker}'s line${byName ? "" : " (a reply, no name)"}: ${decision.toAngel ? (decision.chat ? "for Angel, small talk" : decision.complete === false ? "for Angel, waiting for the rest" : "for Angel") : "not for Angel"}`);
+    this.log.info(`check on ${line.speaker}'s line${byName || waiting?.byName ? "" : " (a reply, no name)"}: ${decision.toAngel ? (decision.chat ? "for Angel, small talk" : decision.complete === false ? "for Angel, waiting for the rest" : "for Angel") : "not for Angel"}`);
     if (!decision.toAngel || this.ended || this.stoppedSince(line.at)) return;
     let at = line.at;
     let asked = text; /* their own words */
@@ -291,6 +291,8 @@ export class Session {
         question, meaning, asker, via, onSay,
       });
       this.costs.claude += result.dollars ?? 0;
+      /* three or more lookups make a slow answer: what she searched for and what came back, so it can be mended */
+      if ((result.looked?.length ?? 0) >= 3) this.log.info(`lookups for ${asker}'s question: ${result.looked.join(" | ")}`);
       if (result.fellBack) this.log.warn(`the answer was worked out a second time, the plain way, after: ${result.fellBack}`);
     } catch (e) {
       /* what the failed rounds cost still counts */
