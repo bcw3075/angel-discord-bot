@@ -173,8 +173,9 @@ export const CASES = [
     { say: "Can you give me an example?", replying: true, want: [/opposite|side|behind|across/i], fresh: true, lookups: 0 },
   ] },
   { id: "say-that-again", steps: [
-    { say: "Angel, what's the DC to recover from persistent damage?", want: [/15/], lookups: 1 },
-    { say: "Sorry, say that again?", replying: true, want: [/15/], chat: "either", lookups: 0 },
+    /* "once per round" for the extra check from help is not in the rule (Player Core, Persistent Damage; the self-test of 2026-11-15) */
+    { say: "Angel, what's the DC to recover from persistent damage?", want: [/15/], never: [/once (per|a|each) round/i], lookups: 1 },
+    { say: "Sorry, say that again?", replying: true, want: [/15/], chat: "either", lookups: 0, never: [/once (per|a|each) round/i] },
   ] },
   { id: "are-you-sure", steps: [
     { say: "Angel, what does off-guard do?", want: [/2/], lookups: 1 },
