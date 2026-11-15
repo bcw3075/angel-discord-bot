@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { Session, echoOf, summaryText } from "../src/session.mjs";
+import { Session, echoOf, ACKS, summaryText } from "../src/session.mjs";
 import { DEFAULTS } from "../src/config.mjs";
 import { tonePackets, sleep } from "./helpers.mjs";
 
@@ -38,7 +38,7 @@ const speech = (voice, userId, seconds = 1, at = Date.now()) => voice.emit("spee
 const settle = async () => { for (let i = 0; i < 20; i++) await sleep(5); };
 
 test("a spoken question is checked, answered in the channel and spoken aloud", async () => {
-  const { s, voice, posted, gates, asked } = setup({ heard: ["Angel, what does grabbed do?"], gate: () => ({ toAngel: true, complete: true, stop: false, question: "What does the grabbed condition do?" }) });
+  const { s, voice, posted, gates, asked } = setup({ heard: ["Angel, what does grabbed do?"], gate: () => ({ toAngel: true, complete: true, stop: false, question: "What does the grabbed condition do?", ack: "Grabbed, a classic. Checking." }) });
   await s.start();
   speech(voice, "p1");
   await settle(); await s.answering;
@@ -51,7 +51,7 @@ test("a spoken question is checked, answered in the channel and spoken aloud", a
   assert.equal(posted.length, 1);
   assert.match(posted[0].text, /Looking it up/, "a placeholder at once");
   assert.match(posted[0].edits[0], /^\*\*Mira asked:\*\* What does the grabbed condition do\?\nAnswer to: .*\n-# \[Grabbed\]/);
-  assert.deepEqual(voice.spoken.map(String), ["clip:One sec, let me check.", "clip:Answer to: What does the grabbed condition do?"], "the 'checking' phrase, then the full answer");
+  assert.deepEqual(voice.spoken.map(String), ["clip:Grabbed, a classic. Checking.", "clip:Answer to: What does the grabbed condition do?"], "her own quick reaction from the check, then the answer");
   assert.equal(s.transcript.lines.at(-1).kind, "angel", "her answer is in the transcript");
   const st = s.status();
   assert.equal(st.questions, 1);
@@ -253,7 +253,8 @@ test('"Angel, stop" while she looks something up: the answer is typed but not sp
   assert.equal(voice.stops, 1);
   release(); await settle(); await s.answering;
   assert.match(posted[0].edits[0], /Answer to: Angel, what's grabbed\?/, "the first answer is still typed");
-  assert.deepEqual(voice.spoken.map(String), ["clip:One sec, let me check."], "but not spoken");
+  assert.equal(voice.spoken.length, 1, "only her quick reaction, the answer not spoken");
+  assert.ok(ACKS.includes(String(voice.spoken[0]).replace("clip:", "")), "no reaction from the check: one of the varied lines");
   assert.equal(posted.length, 1, "the queued question was dropped, not answered");
 });
 

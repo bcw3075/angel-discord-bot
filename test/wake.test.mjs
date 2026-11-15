@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { GATE_SYSTEM, mentionsAngel, isStopRequest, parseGate, gate, gateUser } from "../src/wake.mjs";
+import { GATE_SYSTEM, FOLLOWUP_SYSTEM, mentionsAngel, isStopRequest, parseGate, gate, gateUser } from "../src/wake.mjs";
 import { Claude } from "../src/claude.mjs";
 import { scriptedFetch } from "./helpers.mjs";
 
@@ -16,12 +16,14 @@ test('"Angel, stop" and friends are caught without the model', () => {
 
 test("the model's answer is read, even inside a code fence", () => {
   assert.deepEqual(parseGate('{"to_angel": true, "complete": true, "stop": false, "question": "What is off-guard?"}'),
-    { toAngel: true, complete: true, stop: false, chat: false, question: "What is off-guard?", fallback: false });
+    { toAngel: true, complete: true, stop: false, chat: false, ack: "", question: "What is off-guard?", fallback: false });
+  assert.equal(parseGate('{"to_angel": true, "ack": "Stacking, my favourite headache."}').ack, "Stacking, my favourite headache.");
   assert.equal(parseGate('{"to_angel": true, "complete": true, "stop": false, "chat": true, "question": "Thanks!"}').chat, true, "small talk is marked");
   assert.match(GATE_SYSTEM, /answers or reacts to what she said/, "a reply to her counts without her name");
   assert.match(GATE_SYSTEM, /starts with one and then asks something/, "\"Okay. Good. What about stacking?\" is for her (2026-11-14)");
   assert.match(gateUser("x", "Rhea: Okay. What about stacking?", true), /just answered this person/);
   assert.doesNotMatch(gateUser("x", "Rhea: hi"), /just answered/);
+  assert.match(FOLLOWUP_SYSTEM, /Lean to yes/, "a follow-up is judged by a check that leans to yes");
   assert.equal(parseGate('```json\n{"to_angel": false, "complete": true, "stop": false, "question": ""}\n```').toAngel, false);
   assert.equal(parseGate('{"to_angel": true, "complete": false, "stop": false, "question": ""}').complete, false);
 });
@@ -82,4 +84,13 @@ test("no text, however odd, makes the readers slow (a slow regex would freeze ev
       assert.ok(ms < 50, `${name} took ${ms.toFixed(0)} ms on odd text #${i}`);
     }
   }
+});
+
+test("a follow-up goes to the leaning-yes check, anything else to the general one", async () => {
+  const seen = [];
+  const claude = { create: async r => { seen.push(r.system[0].text); return { content: [{ type: "text", text: '{"to_angel": true}' }], usage: {} }; }, cost: () => 0 };
+  await gate({ claude, model: "m", contextText: "", lastText: "Rhea: Okay. What about stacking?", replying: true });
+  await gate({ claude, model: "m", contextText: "", lastText: "Rhea: Angel, hi" });
+  assert.equal(seen[0], FOLLOWUP_SYSTEM);
+  assert.equal(seen[1], GATE_SYSTEM);
 });

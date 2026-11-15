@@ -8,6 +8,8 @@ since: 0.1.0
 Knowing when someone is talking to Angel: a free text check for her name, then a cheap model decides.
 
 ## Decisions
+- **A follow-up has its own check** (`FOLLOWUP_SYSTEM`, 2026-11-14: even with the note, the general check judged "Okay. What about stacking?" not for her, 19:14): for the person she just answered, it leans to yes and says no only for a line plainly for someone else or a bare acknowledgement.
+- **Her quick reaction** comes from the check (`ack`: three to ten words in her voice about this question, different each time), replacing the fixed "One sec, let me check" (Rhea, 2026-11-14: "getting repetitive. I'd love your personality to come through... I'm ok with using more tokens"). Typed questions and failed checks use one of a few varied lines (`ACKS`); `ackPhrase: ""` still turns it off.
 - A follow-up that starts with an acknowledgement and then asks something is for her; only a bare "okay"/"thanks" isn't. A reply without her name is sent to the check with a note that she just answered this person (2026-11-14: "Okay. Good. What about stacking with other penalties or bonuses?" was judged not for her).
 - The check also says whether a line is small talk (`chat`), and counts a reply to what she just said as said to her even without her name (2026-11-14, for the back and forth Rhea asked for).
 - Two steps (Angel's design, 2026-11-12): a line is looked at only when it names her or a word the transcriber makes of her name (Angela, Angie, angle and the like); then Haiku 5.5 reads the last few lines and decides. An angel in the story (a creature, "angelic", a statue) or talk about her doesn't set her off.

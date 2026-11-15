@@ -10,6 +10,9 @@ import { typedAnswer, shortQuestion } from "./answer.mjs";
 import { speakable } from "./speech.mjs";
 
 /* does `heard` look like her own words coming back? most of its words are in what she just said */
+/* when the check gave no reaction of its own (a typed question, a failed check) */
+export const ACKS = ["Ooh, good one. Let me look.", "Hang on, pulling the page.", "One moment, checking the books.", "On it.", "Let me make sure I get this right.", "Give me a second with that one."];
+
 export function echoOf(heard, said = "") {
   const words = t => String(t).toLowerCase().match(/[a-z0-9']+/g) ?? [];
   const h = words(heard), mine = new Set(words(said));
@@ -143,7 +146,7 @@ export class Session {
       this.pending.set(uid, { text, at: this.now(), timer });
       return;
     }
-    this.ask({ question: `${decision.question || text}${rest}`, asker: line.speaker, role: line.role, via: "voice", at, userId: uid, chat: decision.chat === true, turn: byName ? 0 : (r?.turn ?? 0) + 1 });
+    this.ask({ question: `${decision.question || text}${rest}`, asker: line.speaker, role: line.role, via: "voice", at, userId: uid, chat: decision.chat === true, ack: decision.ack || "", turn: byName ? 0 : (r?.turn ?? 0) + 1 });
   }
 
   /* A typed question (@Angel, "Angel, …" in chat, or /angel ask): no check needed, they meant her. */
@@ -164,7 +167,7 @@ export class Session {
     return this.answering;
   }
 
-  async runAsk({ question, asker, via, reply, at, userId = null, chat = false, turn = 0 }) {
+  async runAsk({ question, asker, via, reply, at, userId = null, chat = false, turn = 0, ack = "" }) {
     const target = reply ?? this.post;
     if (this.ended) {
       /* a deferred /angel ask must still hear back */
@@ -185,7 +188,13 @@ export class Session {
     let placeholder = null;
     if (!quiet) {
       try { placeholder = await target.send(`**${asker} asked:** ${shortQuestion(question)}\n-# Looking it up…`); } catch (e) { this.log.warn(`couldn't post in the channel: ${e.message}`); }
-      if (this.cfg.speak && this.ackClips) this.voice.speak(this.ackClips);
+      /* her own quick reaction to this question (the check writes it), else one of a few, so it isn't the same line
+         every time (Rhea, 2026-11-14: "the 'one sec, let me check' on every reply is getting repetitive") */
+      if (this.cfg.speak && this.cfg.ackPhrase !== "") {
+        const line = ack || ACKS[this.counts.questions % ACKS.length];
+        try { const clips = await this.tts(line); this.costs.tts += this.ttsCost(line); if (!this.stoppedSince(at)) this.voice.speak(clips); }
+        catch (e) { if (this.ackClips) this.voice.speak(this.ackClips); }
+      }
     }
     let result;
     try {
