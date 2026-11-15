@@ -20,9 +20,6 @@ export function echoOf(heard, said = "") {
   return h.filter(w => mine.has(w)).length / h.length >= 0.7;
 }
 
-/* said when three small-talk replies in a row close the reply window */
-export const REPLY_LIMIT_NUDGE = "Say my name if you need me again.";
-
 export class Session {
   constructor({ cfg, voice, post, stt, tts, gate, answer, speakerOf, transcript = new Transcript(), keytermCount = 1, log, now = Date.now, newDecoder = createDecoder, dailyOver = () => false }) {
     Object.assign(this, { cfg, voice, post, stt, tts, gate, answer, speakerOf, transcript, keytermCount, log, now, newDecoder, dailyOver });
@@ -328,6 +325,8 @@ export class Session {
       result = await this.answer({
         conversation: Transcript.format(this.transcript.recent(this.cfg.memoryMinutes, this.now())) + wrote,
         question, meaning, asker, via, onSay,
+        /* this reply, if it stays small talk, closes the window: she says so in her own words (Rhea, 2026-11-15) */
+        lastReply: via === "voice" && !!userId && unnamed && chat && turn + 1 >= 3,
       });
       this.costs.claude += result.dollars ?? 0;
       /* three or more lookups make a slow answer: what she searched for and what came back, so it can be mended */
@@ -357,16 +356,12 @@ export class Session {
     /* only small talk counts toward the limit of three unnamed replies in a row, so banter can't run on at the
        table's expense; rules follow-ups ("can you elaborate?", "yes please") never use it up (Rhea, 2026-11-15:
        her fourth reply in a row, a question after three rules answers, was left unanswered) */
-    /* a failed or cut-off answer doesn't count: she has already asked them to try again (review 8) */
-    const smallTalk = chat && !(result.lookups > 0) && !result.failed && !result.cut;
+    /* a failed or cut-off answer doesn't count: she has already asked them to try again (review 8); one that failed
+       only after all she had to say was spoken does, since she said it (review 9) */
+    const smallTalk = chat && !(result.lookups > 0) && !(result.failed && !result.saidAll) && !result.cut;
     const run = unnamed && smallTalk ? turn + 1 : turn;
-    /* and when that limit closes the window she says so instead of going quiet (Rhea, 2026-11-15: "I also would
-       like her to not just go silent") */
-    /* only after an answer that reached the voice: never the nudge alone (review 8) */
-    const nudge = via === "voice" && userId && run >= 3 && said.length ? REPLY_LIMIT_NUDGE : "";
-    if (nudge) sayPiece(nudge);
-    const heard0 = result.failed && early && !result.saidAll ? `${early} ${result.say}` : result.say;
-    const heard = nudge && said.includes(nudge) ? `${heard0} ${nudge}` : heard0;
+    /* when that limit closes the window she has said so in her own reply (`lastReply` above), not with a fixed line */
+    const heard = result.failed && early && !result.saidAll ? `${early} ${result.say}` : result.say;
 
     /* the check may call a rules question small talk: one that looked something up is posted anyway */
     let posted = false;
@@ -399,13 +394,14 @@ export class Session {
       + `${until ? ` (taken up ${((began - until) / 1000).toFixed(1)} s after they stopped talking)` : ""}; ${result.rounds ?? "?"} round(s), ${result.lookups ?? 0} lookup(s)${early ? "" : ", not spoken as written"}${gaps()}`);
     /* nothing of the answer reached the voice (told to stop, the session ended, a cap, or the voice failed): a
        small-talk reply that was only going to be spoken is typed instead, unless she was told to stop */
+    /* the limit reached closes their window whether or not her voice got it out (review 9) */
+    if (via === "voice" && userId && run >= 3 && this.replyTo?.userId === userId) this.replyTo = null;
     if (!lastPlayed) {
       if (this.cfg.speak) startLog();
       if (quiet && !this.stoppedSince(at)) await post();
       return;
     }
     /* the person she answered may reply without her name, from when this answer ends (the limit is set above) */
-    if (via === "voice" && userId && run >= 3 && this.replyTo?.userId === userId) this.replyTo = null;
     Promise.resolve(lastPlayed).then(() => {
       startLog();
       if (this.ended || this.stoppedSince(at)) return;

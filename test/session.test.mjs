@@ -3,7 +3,7 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { Session, echoOf, ACKS, summaryText, REPLY_LIMIT_NUDGE } from "../src/session.mjs";
+import { Session, echoOf, ACKS, summaryText } from "../src/session.mjs";
 import { DEFAULTS } from "../src/config.mjs";
 import { tonePackets, sleep } from "./helpers.mjs";
 
@@ -115,38 +115,38 @@ test("rules follow-ups without her name never use up the reply window; only smal
   // "How hard was it to look all that up?" (small talk) was left unanswered under the old count of three
   const heard = ["Angel, does leftover resistance carry over?", "And weakness?", "Can you elaborate?", "Yes please", "How hard was that to look up?", "Ha, fair.", "One more.", "Too many."];
   const { s, voice, gates } = setup({ heard, gate: a => (/look up|Ha|more|many/.test(a.lastText) ? { toAngel: true, complete: true, stop: false, chat: true, question: a.bareText } : { toAngel: true, complete: true, stop: false, question: a.bareText }) });
-  s.answer = async q => ({ say: `Answer to: ${q.question}`, sources: [], lookups: /look up|Ha|more|many/.test(q.question) ? 0 : 1, dollars: 0.01 });
+  const told = [];
+  s.answer = async q => { told.push(q.lastReply === true); return { say: `Answer to: ${q.question}`, sources: [], lookups: /look up|Ha|more|many/.test(q.question) ? 0 : 1, dollars: 0.01 }; };
   await s.start();
   for (let i = 0; i < 8; i++) { speech(voice, "p1"); await settle(); await s.answering; await settle(); }
   assert.equal(gates.length, 7, "the named question, three rules follow-ups and three small-talk replies are checked; the eighth line is not");
   assert.equal(voice.spoken.filter(c => String(c).startsWith("clip:Answer to: How hard")).length, 1, "the small-talk question after three rules follow-ups is answered");
   assert.equal(s.replyTo, null, "three small-talk replies in a row close the window");
-  assert.equal(String(voice.spoken.at(-1)), `clip:${REPLY_LIMIT_NUDGE}`, "and she says so instead of going quiet");
-  assert.equal(voice.spoken.filter(c => String(c) === `clip:${REPLY_LIMIT_NUDGE}`).length, 1, "only once, when it closes");
-  assert.match(s.transcript.lines.filter(l => l.kind === "angel").at(-1).text, /Answer to: .*One more.* Say my name/, "the transcript has it after her answer");
+  assert.deepEqual(told, [false, false, false, false, false, false, true], "only the reply that closes the window is told to say so, in her own words (Rhea, 2026-11-15: no stock line)");
 });
 
 test("review 8: a named question in two parts counts as named, with its own count; a failed small-talk answer doesn't count", async () => {
   // another player's window is open at two small-talk replies; Mira names her in a first part the check calls unfinished
-  const { s, voice, gates } = setup({ heard: ["Angel, um", "how are you doing today?"], gate: a => (/um$/.test(a.lastText) ? { toAngel: true, complete: false, stop: false, question: "" } : { toAngel: true, complete: true, stop: false, chat: true, question: "how are you?" }) });
-  s.answer = async q => ({ say: `Answer to: ${q.question}`, sources: [], lookups: 0, dollars: 0.01 });
+  const { s, voice, gates, asked } = setup({ heard: ["Angel, um", "how are you doing today?"], gate: a => (/um$/.test(a.lastText) ? { toAngel: true, complete: false, stop: false, question: "" } : { toAngel: true, complete: true, stop: false, chat: true, question: "how are you?" }) });
+  s.answer = async q => { asked.push(q); return { say: `Answer to: ${q.question}`, sources: [], lookups: 0, dollars: 0.01 }; };
   await s.start();
   s.replyTo = { userId: "p9", from: Date.now(), turn: 2 };
   speech(voice, "p1"); await settle();
   speech(voice, "p1"); await settle(); await s.answering; await settle();
   assert.equal(gates.length, 2);
   assert.equal(gates[1].replying, false, "told it is a named question, not a reply");
-  assert.equal(voice.spoken.filter(c => String(c) === `clip:${REPLY_LIMIT_NUDGE}`).length, 0, "no 'say my name': she was named");
+  assert.equal(asked.at(-1)?.lastReply, false, "not told to ask for her name: she was named");
   assert.equal(s.replyTo?.userId, "p1", "and her own reply window opens");
   assert.equal(s.replyTo.turn, 0, "with the count started again");
   // an unnamed line taken as the rest of this speaker's waiting line counts from their own window, not another player's
   const c = setup({ heard: ["how are you doing?"], gate: () => ({ toAngel: true, complete: true, stop: false, chat: true, question: "how are you?" }) });
-  c.s.answer = async q => ({ say: `Answer to: ${q.question}`, sources: [], lookups: 0, dollars: 0.01 });
+  const cAsked = [];
+  c.s.answer = async q => { cAsked.push(q); return { say: `Answer to: ${q.question}`, sources: [], lookups: 0, dollars: 0.01 }; };
   await c.s.start();
   c.s.replyTo = { userId: "p9", from: Date.now(), turn: 2 };
   c.s.pending.set("p1", { text: "so", at: Date.now(), timer: null, byName: false });
   speech(c.voice, "p1"); await settle(); await c.s.answering; await settle();
-  assert.equal(c.voice.spoken.filter(x => String(x) === `clip:${REPLY_LIMIT_NUDGE}`).length, 0, "another player's count isn't hers");
+  assert.equal(cAsked.at(-1)?.lastReply, false, "another player's count isn't hers");
   assert.equal(c.s.replyTo?.userId, "p1");
   // a small-talk reply whose answer fails doesn't use one up, so the window doesn't close silently on it
   const b = setup({ heard: ["one more thing"], gate: () => ({ toAngel: true, complete: true, stop: false, chat: true, question: "one more thing" }) });
@@ -155,7 +155,23 @@ test("review 8: a named question in two parts counts as named, with its own coun
   b.s.replyTo = { userId: "p1", from: Date.now() - 10, turn: 2 };
   speech(b.voice, "p1", 1, Date.now()); await settle(); await b.s.answering; await settle();
   assert.equal(b.s.replyTo?.turn, 2, "the failed answer isn't counted");
-  assert.equal(b.voice.spoken.filter(c => String(c) === `clip:${REPLY_LIMIT_NUDGE}`).length, 0);
+});
+
+test("review 9: the third small-talk reply closes the window even when her voice failed, or when only the written part failed", async () => {
+  const a = setup({ heard: ["ha, fair"], gate: () => ({ toAngel: true, complete: true, stop: false, chat: true, question: "ha" }) });
+  a.s.tts = async () => { throw new Error("Deepgram is down"); };
+  a.s.answer = async () => ({ say: "Ha. Use my name next time, I'll be around.", sources: [], lookups: 0, dollars: 0.01 });
+  await a.s.start();
+  a.s.replyTo = { userId: "p1", from: Date.now() - 10, turn: 2 };
+  speech(a.voice, "p1", 1, Date.now()); await settle(); await a.s.answering; await settle();
+  assert.equal(a.s.replyTo, null, "closed though nothing was spoken");
+  const b = setup({ heard: ["ha, fair"], gate: () => ({ toAngel: true, complete: true, stop: false, chat: true, question: "ha" }) });
+  b.s.answer = async q => { q.onSay?.("Ha, fair. Grab me by name next time.", { end: true }); throw new Error("the written part broke off"); };
+  await b.s.start();
+  b.s.replyTo = { userId: "p1", from: Date.now() - 10, turn: 2 };
+  speech(b.voice, "p1", 1, Date.now()); await settle(); await b.s.answering; await settle();
+  assert.ok(b.voice.spoken.some(c => /Grab me by name/.test(String(c))), "all she had to say was spoken");
+  assert.equal(b.s.replyTo, null, "so it counts and the window closes, as she said");
 });
 
 test("the log gives the gaps between the clips of a spoken answer (Rhea, 2026-11-15: a choppy-sounding answer)", async () => {

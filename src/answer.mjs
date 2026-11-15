@@ -80,13 +80,18 @@ export const TOOLS = [
 ];
 
 /* `meaning` is the check's quick reading of a spoken question (a small model's paraphrase): a hint, never the quote */
-export function userMessage({ conversation, question, asker, via, meaning = "" }) {
+/* `lastReply`: the third bit of small talk in a row without her name, after which she won't hear them without it.
+   She tells them so herself, in her own words (Rhea, 2026-11-15: "I'd like her to feel natural in everything she
+   does"; not a fixed line, and never silence: "I also would like her to not just go silent"). */
+export const LAST_REPLY_NOTE = "(This is their third bit of chat with you without saying your name since they last said it. If you are just chatting, end your reply by letting them know, briefly and in your own words, that they'll need to say your name to get your attention again: say it differently each time, never as a stock phrase. If this turned into a rules question, answer it and don't mention it.)";
+
+export function userMessage({ conversation, question, asker, via, meaning = "", lastReply = false }) {
   const hint = meaning && meaning !== question
     ? `\n(Their words come from a speech transcriber and can be garbled. A quick first reading of what they want: "${meaning}". Go by their own words and the conversation where that reading differs.)` : "";
   return `What the table said in the last few minutes (oldest first):
 ${conversation || "(nothing yet)"}
 
-${asker} ${via === "text" ? "typed" : "said"} to you: "${question}"${hint}`;
+${asker} ${via === "text" ? "typed" : "said"} to you: "${question}"${hint}${lastReply ? `\n${LAST_REPLY_NOTE}` : ""}`;
 }
 
 /* A lookup that fails is tried once more at once (a dropped connection is the usual cause); if it fails again
@@ -125,9 +130,9 @@ async function lookUp(aon, use, seen, looked) {
 
 /* onSay(text) is given each new piece of `say` as it is written, and onSay("", { end: true }) once when `say` is
    whole, which is before the rest of the answer is (only with a Claude client that can stream) */
-export async function answerQuestion({ claude, aon, model, maxTokens = 1500, system, conversation, question, asker, via = "voice", maxRounds = 6, cacheTtl = "5m", onSay = null, meaning = "" }) {
+export async function answerQuestion({ claude, aon, model, maxTokens = 1500, system, conversation, question, asker, via = "voice", maxRounds = 6, cacheTtl = "5m", onSay = null, meaning = "", lastReply = false }) {
   const cacheControl = cacheTtl === "1h" ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" };
-  const messages = [{ role: "user", content: userMessage({ conversation, question, asker, via, meaning }) }];
+  const messages = [{ role: "user", content: userMessage({ conversation, question, asker, via, meaning, lastReply }) }];
   const fetched = [];
   const failed = { count: 0 };
   const seen = new Set(); /* the page links the lookups gave: only those can be posted as sources */

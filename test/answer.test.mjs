@@ -99,6 +99,11 @@ test("the system prompt carries the house rules and the GM; the tools are the th
   assert.match(systemPrompt(), /\(none given\)/);
   assert.deepEqual(TOOLS.map(t => t.name), ["aon_search", "aon_get", "answer"]);
   assert.match(userMessage({ conversation: "", question: "q", asker: "Tobin", via: "text" }), /Tobin typed to you/);
+  // the reply that closes the window: she is asked to say so in her own words, not given a line to say (Rhea, 2026-11-15)
+  const last = userMessage({ conversation: "", question: "ha, fair", asker: "Mira", via: "voice", lastReply: true });
+  assert.match(last, /say your name to get your attention again/);
+  assert.match(last, /own words/);
+  assert.doesNotMatch(userMessage({ conversation: "", question: "ha", asker: "Mira", via: "voice" }), /your name/, "only on that reply");
 });
 
 test("the typed copy names who asked, links the pages and stays under 2,000 characters", () => {

@@ -16,6 +16,14 @@ import { SentenceCutter } from "./speech.mjs";
    The patterns mark an answer "to look at": they are a first sieve, not the judge. The rules facts in them were
    checked against Archives of Nethys (Remaster) when they were written, 2026-11-14. */
 export const CASES = [
+  /* three bits of chat without her name: on the third she tells them, in her own words, to use her name again
+     (Rhea, 2026-11-15: never silence, never a stock line). `lastReply` is what the session passes on that reply. */
+  { id: "chat-closes-the-window", steps: [
+    { say: "Angel, how's your morning going?", chat: true, lookups: 0 },
+    { say: "Ha, same here.", replying: true, chat: true, lookups: 0, never: [/(say|use|need) my name/i] },
+    { say: "Do you like being a bot?", replying: true, chat: true, lookups: 0, never: [/(say|use|need) my name/i] },
+    { say: "Fair enough, I get that.", replying: true, chat: true, lookups: 0, lastReply: true, want: [/\bname\b/i], never: [/say my name if you need me again/i] },
+  ] },
   /* the plain run of a table: a rule, then follow-ups without her name, three deep */
   { id: "rule-then-follow-ups", steps: [
     { say: "Angel, what does off-guard do?", want: [/2/, /circumstance/i, /\bAC\b|armor class/i], lookups: 1 },
@@ -200,7 +208,7 @@ async function runStep({ services, asker, role = "GM", step, lines, now, previou
   const t0 = now(), t = {};
   try {
     const a = await services.answer({
-      conversation: lines.slice(0, -1).join("\n"), question: step.say, meaning: r.check?.question || "", asker, via: step.typed ? "text" : "voice",
+      conversation: lines.slice(0, -1).join("\n"), question: step.say, meaning: r.check?.question || "", asker, via: step.typed ? "text" : "voice", lastReply: step.lastReply === true,
       onSay: (piece, { end = false } = {}) => { if (piece) t.first ??= now(); if (cutter.push(piece).length) t.sentence ??= now(); if (end) { t.sentence ??= now(); t.said = now(); } },
     });
     r.answer = { ms: now() - t0, firstWordsMs: t.first ? t.first - t0 : null, firstSentenceMs: t.sentence ? t.sentence - t0 : null, sayDoneMs: t.said ? t.said - t0 : null,
