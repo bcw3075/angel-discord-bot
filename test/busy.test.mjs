@@ -947,3 +947,88 @@ test("(se-12) a long talk that named her, kept through one hold: the next hold j
   await until(() => answers(x.voice).length === 1, 4000);
   await x.s.answering;
 });
+
+/* ---- the tenth review of 0.1.3 ---- */
+async function heldThenNext(x, p3pieces) {
+  /* Mira's question held; p3's long talk naming her says "never mind" in its first piece: judged there */
+  x.voice.talk("p2", true, Date.now() - 500);
+  speech(x.voice, "p1");
+  await until(() => x.voice.spoken.length === 1);
+  x.voice.emit("speech", { userId: "p3", packets: tonePackets(1), startedAt: Date.now(), final: false });
+  await until(() => !x.s.holding);
+  await x.s.answering;
+  return p3pieces;
+}
+
+test("(se-12) a long talk that named her: a later piece arriving with nobody holding keeps what was judged; the next hold judges only the new part", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Angel, never mind, forget it, so the thing is", "and more and more", "Angel, how does flanking work?", "and that's all."], hold: holdOn }));
+  await heldThenNext(x);
+  x.voice.emit("speech", { userId: "p3", packets: tonePackets(1), startedAt: Date.now(), final: false }); /* nobody holding */
+  await until(() => x.s.pending.get("p3")?.text.includes("and more"));
+  speech(x.voice, "gm");
+  await until(() => x.s.holding?.asker === "Dana", 3000);
+  x.voice.emit("speech", { userId: "p3", packets: tonePackets(1), startedAt: Date.now(), final: true });
+  await until(() => x.holds.length >= 2);
+  assert.equal(x.holds.at(-1).bareText, "and more and more and that's all.");
+  assert.ok(x.s.holding, "Dana's answer still held");
+  stops(x, "p2");
+  await until(() => answers(x.voice).length === 1, 4000);
+  await x.s.answering;
+});
+
+test("(se-12) a long talk that named her, still going on in the next hold: that hold judges only the new piece", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Angel, never mind, forget it, so the thing is", "Angel, how does flanking work?", "and more and more"], hold: holdOn }));
+  await heldThenNext(x);
+  speech(x.voice, "gm");
+  await until(() => x.s.holding?.asker === "Dana", 3000);
+  x.voice.emit("speech", { userId: "p3", packets: tonePackets(1), startedAt: Date.now(), final: false });
+  await until(() => x.holds.length >= 2);
+  assert.equal(x.holds.at(-1).bareText, "and more and more");
+  assert.ok(x.s.holding, "not stopped by the old 'never mind'");
+  x.s.end(); await x.s.answering;
+});
+
+test("(se-12) a long talk that named her whose rest never comes in the next hold: the old part can't stop that hold", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Angel, never mind, forget it, so the thing is", "Angel, how does flanking work?"], hold: holdOn }));
+  await heldThenNext(x);
+  speech(x.voice, "gm");
+  await until(() => x.s.holding?.asker === "Dana", 3000);
+  x.s.releaseHold("p3", "the rest never came");
+  await until(() => x.holds.length >= 2);
+  await sleep(50);
+  assert.ok(x.s.holding, "Dana's answer still held");
+  x.s.end(); await x.s.answering;
+});
+
+test("(se-11) her own answer coming back through a mic is not kept as a table line for the next question", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Grabbed makes you off guard and immobilized.", "Angel, what about restrained?"] }));
+  x.s.answer = async q => ({ say: /grabbed/.test(q.question) ? "Grabbed makes you off guard and immobilized." : `Answer to: ${q.question}`, sources: [], lookups: 1, dollars: 0.02 });
+  speech(x.voice, "p1");
+  await until(() => x.voice.spoken.length === 1);
+  await x.s.answering;
+  x.voice.echo = true;
+  speech(x.voice, "p3");      /* her answer, echoed */
+  await until(() => x.s.transcript.lines.length === 3);
+  x.voice.echo = false;
+  assert.equal(x.s.saidSince.length, 0);
+  speech(x.voice, "gm");
+  await until(() => answers(x.voice).length === 1);
+  await x.s.answering;
+  assert.equal(x.holds.length, 0, "no check, no hold");
+});
+
+test("(se-12) a lively table: at most six lines said since the question are judged, and others' unnamed chatter never becomes a question", async () => {
+  const chatter = ["one?", "two?", "three?", "four?", "five?", "six?", "seven?", "eight?"];
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", ...chatter], hold: () => ({ kind: "ask", question: "Is it?" }) }));
+  let release; const later = new Promise(r => { release = r; });
+  x.s.answer = async q => { if (x.asked.push(q) === 1) await later; return { say: `Answer to: ${q.question}`, sources: [], lookups: 1, dollars: 0.02 }; };
+  speech(x.voice, "p1");
+  await until(() => x.asked.length === 1);
+  for (let i = 0; i < 8; i++) speech(x.voice, "p2", Date.now() + i);
+  await until(() => x.s.saidSince.length === 8);
+  release();
+  await until(() => answers(x.voice).length === 1, 3000);
+  await x.s.answering;
+  assert.equal(x.holds.length, 6);
+  assert.equal(x.asked.length, 1, "no questions made of chatter");
+});

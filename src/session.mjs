@@ -198,24 +198,26 @@ export class Session {
     const h = this.holding;
     if (h && Math.max(line.at, until ?? line.at) > h.at && !(uid === h.userId && line.at <= h.at)) {
       const before = released ?? this.pending.get(uid);
+      /* all they have said in this talk, and the part no hold has judged yet: an earlier hold's verdict on it (an old
+         "never mind") is not given again (review 9 and 10 of 0.1.3) */
+      const judged = before?.held ? (before.judgedTo ?? 0) : 0;
+      const all = released ? released.text : before ? `${before.text} ${line.text}` : line.text;
+      const newPart = all.slice(judged).trim();
+      const firstAt = before?.held ? before.firstAt : (before?.firstAt ?? line.at);
       if (more) {
         /* still talking: kept, the rest to come; what is said so far may already be "hold on" */
         if (before && !released) clearTimeout(before.timer);
-        const text = before?.held ? `${before.text} ${line.text}` : line.text;
-        const firstAt = before?.held ? before.firstAt : line.at;
         const holdMs = this.cfg.maxUtteranceSeconds * 1000 + this.cfg.followUpMs;
-        const kept = { text, at: this.now(), holdMs, byName: mentionsAngel(line.text) || before?.byName === true, held: true, firstAt, line: { ...line, at: firstAt }, until, keptFor: h, judgedTo: before?.judgedTo ?? 0 };
+        const kept = { text: all, at: this.now(), holdMs, byName: mentionsAngel(line.text) || before?.byName === true, held: true, firstAt, line: { ...line, at: firstAt }, until, keptFor: h, judgedTo: judged };
         kept.timer = setTimeout(() => this.releaseHold(uid, "the rest never came"), holdMs);
         kept.timer.unref?.();
         this.pending.set(uid, kept);
-        return this.onHeldLine(h, { ...line, at: firstAt, text }, until, { partial: true });
+        return this.onHeldLine(h, { ...line, at: firstAt, text: newPart }, until, { partial: true });
       }
       if (before && !released) { this.pending.delete(uid); clearTimeout(before.timer); }
-      /* what an earlier hold already judged of it is not judged again (review 9 of 0.1.3: an old "never mind" ended
-         the next question's hold) */
-      const fresh = w => (w.judgedTo ? w.text.slice(w.judgedTo).trim() : w.text);
-      const whole = released ? { ...line, text: fresh(released) || line.text } : before ? { ...line, at: before.firstAt ?? line.at, text: `${fresh(before)} ${line.text}`.trim() } : line;
-      return this.onHeldLine(h, whole, until);
+      /* nothing new since an earlier hold judged it: only a question in it still counts */
+      if (!newPart) return this.onHeldLine(h, { ...line, at: firstAt, text: all }, until, { askOnly: true });
+      return this.onHeldLine(h, { ...line, at: firstAt, text: newPart }, until, { askText: all });
     }
     /* the person she just answered may reply without her name for a little while after she stops talking (Rhea,
        2026-11-14: "you replied first but not when I replied to you"); the check still decides it was for her */
@@ -230,7 +232,11 @@ export class Session {
     if (!waiting && !named) {
       /* not for her by the usual rule, but a question of hers may be on its way: kept for a little while, so a "wait,
          hold on" heard before her answer is ready is judged when she holds it (review 9 of 0.1.3) */
-      if (!more) { this.saidSince.push({ line, until, added: this.now() }); while (this.saidSince.length > 20) this.saidSince.shift(); }
+      /* not her own voice coming back (review 10 of 0.1.3: her answer, echoed, was judged as "hold on") */
+      if (!(this.voice.inEchoWindow(line.at) && echoOf(line.text, this.lastSaid))) {
+        this.saidSince.push({ line, until, added: this.now() });
+        while (this.saidSince.length > 20) this.saidSince.shift();
+      }
       return;
     }
     /* her own voice coming back through a microphone. A reply without her name gets a closer look instead of the plain
@@ -260,7 +266,7 @@ export class Session {
     if (more) {
       if (this.stoppedSince(firstAt)) return;
       const holdMs = this.cfg.maxUtteranceSeconds * 1000 + this.cfg.followUpMs;
-      const held = { text, at: this.now(), holdMs, byName: wasNamed, held: true, firstAt, line: { ...line, at: firstAt }, until };
+      const held = { text, at: this.now(), holdMs, byName: wasNamed, held: true, firstAt, line: { ...line, at: firstAt }, until, judgedTo: waiting?.judgedTo ?? 0 };
       /* the rest may never become a line (too short, too quiet, nothing transcribed): then what was said is checked
          as it is, not dropped (review 7) */
       held.timer = setTimeout(() => this.releaseHold(uid, "the rest never came"), holdMs);
@@ -665,7 +671,8 @@ export class Session {
     /* lines said since the question, heard already but not judged (nobody was holding yet) */
     const now0 = this.now();
     this.saidSince = this.saidSince.filter(u => now0 - u.added < 20000);
-    const early = this.saidSince.filter(u => Math.max(u.line.at, u.until ?? u.line.at) > qc.at && !(u.line.userId === qc.userId && u.line.at <= qc.at));
+    /* the last six at most: a lively table waits a check's time, not one per line (review 10 of 0.1.3) */
+    const early = this.saidSince.filter(u => Math.max(u.line.at, u.until ?? u.line.at) > qc.at && !(u.line.userId === qc.userId && u.line.at <= qc.at)).slice(-6);
     if (!busyAtStart && !early.length && !this.unheard(qc.at)) return "go";
     let signalled, kicked;
     const h = { ...qc, since: this.now(), mode: "gap", cutIn: "", signal: null, waiter: null, goAsked: false,
@@ -688,7 +695,9 @@ export class Session {
       this.saidSince.splice(this.saidSince.indexOf(u), 1);
       const no = ++this.pieceNo;
       this.hearingNow.set(no, { end: this.now(), added: this.now() });
-      this.onHeldLine(h, u.line, u.until).catch(e => this.log.warn(`couldn't judge a line said while she waits: ${e.message}`)).finally(() => this.hearingNow.delete(no));
+      /* it didn't name her and isn't the asker's: it may make her wait or stop, never become a question of its own */
+      const noAsk = u.line.userId !== qc.userId && !mentionsAngel(u.line.text);
+      this.onHeldLine(h, u.line, u.until, { noAsk }).catch(e => this.log.warn(`couldn't judge a line said while she waits: ${e.message}`)).finally(() => this.hearingNow.delete(no));
     }
     const who = qc.asker;
     this.log.info(busyAtStart ? `the table is busy as ${who}'s answer is ready: waiting for a gap` : `something was just said as ${who}'s answer is ready: waiting to hear it`);
@@ -843,11 +852,11 @@ export class Session {
   }
 
   /* A line said while she holds an answer: a go-ahead, a "hold on", a stop, a question, or nothing for her. */
-  async onHeldLine(h, line, until, { partial = false } = {}) {
+  async onHeldLine(h, line, until, { partial = false, askOnly = false, noAsk = false, askText = null } = {}) {
     const uid = line.userId;
     /* her own "I'm ready" coming back through a microphone */
     /* her own words for this question coming back through a microphone: the quick reaction or the "I'm ready" */
-    const mine = `${h.ackText ?? ""} ${h.cutIn}`.trim();
+    const mine = `${h.ackText ?? ""} ${h.cutIn} ${this.lastSaid ?? ""}`.trim();
     if (mine && this.voice.inEchoWindow(line.at) && echoOf(line.text, mine)) return;
     if (this.overCap()) return;
     const context = Transcript.format(this.transcript.before(line, 7).slice(0, -1));
@@ -862,6 +871,9 @@ export class Session {
     if (this.ended) return;
     /* still holding the same answer, nothing has ended the wait yet */
     const live = this.holding === h && !h.signal;
+    /* an earlier hold already acted on all of it: only a question in it is new */
+    if (askOnly && v.kind !== "ask") return;
+    if (noAsk && v.kind === "ask") return;
     /* "never mind" about the held answer drops only that one: another player's question waiting behind it is still
        answered (review of 0.1.3). After the hold it is a stop like any the check reads, with the reply window kept. */
     if (v.kind === "stop") { if (live) h.poke("stop"); else this.stop(line.at, { keepReplyWindow: true }); return; }
@@ -885,8 +897,8 @@ export class Session {
       this.counts.merged++;
       this.log.info(`${line.speaker} said more while she waited: answering it all as one`);
       const merged = this.withEntry(uid, {
-        question: `${h.question} ${line.text}`,
-        meaning: h.meaning || v.question ? `${h.meaning || h.question} ${v.question || line.text}` : "",
+        question: `${h.question} ${askText ?? line.text}`,
+        meaning: h.meaning || v.question ? `${h.meaning || h.question} ${v.question || askText || line.text}` : "",
         asker: h.asker, role: h.role, via: "voice", at: h.at, userId: uid, until: until ?? h.until,
         chat: h.chat === true && v.chat === true, unnamed: h.unnamed === true, turn: h.turn ?? 0, noAck: true,
       });
@@ -899,7 +911,7 @@ export class Session {
     }
     /* anyone else asking her counts as a go-ahead: the held answer first, then theirs */
     if (live) h.poke("go");
-    this.ask({ question: line.text, meaning: v.question || "", asker: line.speaker, role: line.role, via: "voice", at: line.at, userId: uid, until, chat: v.chat === true, turn: 0, unnamed: false });
+    this.ask({ question: askText ?? line.text, meaning: v.question || "", asker: line.speaker, role: line.role, via: "voice", at: line.at, userId: uid, until, chat: v.chat === true, turn: 0, unnamed: false });
   }
 
   /* "Angel, stop": cut her off, drop questions still waiting, and don't speak an answer still being looked up.
