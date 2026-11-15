@@ -87,20 +87,14 @@ test("a stretch that never got its end stops counting after maxSpellMs, and the 
   assert.equal(f.busy(), true, "talking again counts");
 });
 
-test("a short sound after the talk is not talk, but a wait counts from it until it would have reached her (review 3 of 0.1.3)", async () => {
-  let t = 0;
-  const f = new Floor({ now: () => t, blipMs: 500, mergeMs: 100, pollMs: 2 });
-  f.talk("a", true); t = 1000; f.talk("a", false);
-  t = 1450; f.talk("b", true); t = 1650; f.talk("b", false); /* a 200 ms "Wait." */
-  assert.equal(f.busy(), false, "not talk");
-  t = 2600;
-  assert.ok(f.quietFor() >= 1500);
-  assert.equal(f.sinceAnyTalk(), 950);
-  const w = f.waitForQuiet(1500, { maxMs: 10_000, minSinceAnyMs: 1100 });
-  await sleep(10);
-  let done = false; w.promise.then(() => { done = true; });
-  await sleep(10);
-  assert.equal(done, false, "held back until the short sound would have reached her");
-  t = 2760; await sleep(10);
-  assert.equal(await w.promise, "quiet");
+test("each speaker's latest stretch long enough to be words, for waiting until it has been heard (review 4 of 0.1.3)", () => {
+  const { f, own, at, step } = clocked();
+  f.talk("a", true); step(1000); f.talk("a", false);
+  step(500); f.talk("a", true); step(200); f.talk("a", false); /* a click after it: not words */
+  f.talk("b", true); step(300); f.talk("b", false);           /* only a blip */
+  own.push([at(), null]); f.talk("c", true); step(1000); own[0] = [own[0][0], at()]; f.talk("c", false); /* her own echo */
+  f.talk("d", true); step(100);                               /* still talking: not finished */
+  const ends = f.lastEnds(400);
+  assert.deepEqual([...ends.keys()], ["a"]);
+  assert.equal(ends.get("a"), 1_000_000 + 1000);
 });
