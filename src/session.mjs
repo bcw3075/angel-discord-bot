@@ -56,6 +56,7 @@ export class Session {
     this.unheardCapMs = 10000;    /* longer unbroken talk than this isn't waited for (see `unheard`) */
     this.saidSince = [];          /* lines not for her by the usual rule, kept briefly for a hold that may begin */
     this.carry = null;            /* the watch of a question merged into a fuller one, for that one's watch to go on from */
+    this.pastWatches = [];        /* the last few ended watches, so a late stop finds the one it was said during */
     this.pieceNo = 0;
   }
 
@@ -293,16 +294,20 @@ export class Session {
        check could say "none" and she spoke); someone else's drops only the watched answer, as in a hold (review 1) */
     const aStop = decision.stop && (decision.toAngel || wasNamed || replying);
     let watchStopped = false;
-    if (h2 && (!h2.signal || h2.signal === "stop") && aStop && uid !== h2.userId && this.sinceHeld(h2, { ...line, at: firstAt }, until)) {
-      this.log.info(`check on ${line.speaker}'s line: read as "stop" for ${h2.asker}'s answer`);
-      h2.poke("stop");
+    /* the watch a stop belongs to is the one it was said during, not the one current when its check came back (review
+       15 of 0.1.3: a "forget it" meant for Mira's answer, already dropped, dropped Sam's next, or everything) */
+    let owner = aStop ? this.watchOf({ ...line, at: firstAt }, until) : null;
+    while (owner?.next) owner = owner.next; /* merged since: the fuller question's watch */
+    if (owner && uid !== owner.userId && (owner === h2 ? !owner.signal || owner.signal === "stop" : owner.signal === "stop")) {
+      if (!owner.signal) { this.log.info(`check on ${line.speaker}'s line: read as "stop" for ${owner.asker}'s answer`); owner.poke("stop"); }
       watchStopped = true;
     } else if (h2 && !h2.signal && !aStop && this.sinceHeld(h2, { ...line, at: firstAt }, until)) {
       if (!aQuestion || (h2.ready && uid === h2.userId)) {
         const all = later.length ? `${text} ${later.join(" ")}` : text;
         /* the usual check said it isn't for her: it may still be "hold on", never a question (review 14 of 0.1.3: a
            reply it declined was asked anyway) */
-        return this.onHeldLine(h2, { ...line, at: firstAt, text: all }, until, { noAsk: !decision.toAngel });
+        /* (only what the check saw: what they added while it ran may still be a question, review 15) */
+        return this.onHeldLine(h2, { ...line, at: firstAt, text: all }, until, { noAsk: !decision.toAngel && !later.length });
       }
       if (uid !== h2.userId) h2.poke("go");
     }
@@ -784,6 +789,15 @@ export class Session {
     return h;
   }
 
+  /* the watch a line was said during: the earliest whose question came before it and that hadn't ended when it was said
+     (one still current, or one of the last few ended) */
+  watchOf(line, until) {
+    for (const w of [...this.pastWatches, this.watch]) {
+      if (w && this.sinceHeld(w, line, until) && (w.endedAt == null || line.at < w.endedAt)) return w;
+    }
+    return null;
+  }
+
   /* the watch is over: she speaks, lets it go, or the question was dropped. Talk kept only for it is dropped, so
      nothing judged here is judged again (review 9 to 11 of 0.1.3; a question spoken at length across two of her
      holds is lost: rare). */
@@ -793,6 +807,11 @@ export class Session {
     if (h.entry?.replacement) this.carry = h;
     if (this.watch === h) this.watch = null;
     if (this.holding === h) this.holding = null;
+    if (h.endedAt == null) {
+      h.endedAt = this.now();
+      this.pastWatches.push(h);
+      while (this.pastWatches.length > 4) this.pastWatches.shift();
+    }
     h.waiter?.wake("end");
     for (const [uid, p] of [...this.pending]) {
       if (p.keptFor !== h) continue;
