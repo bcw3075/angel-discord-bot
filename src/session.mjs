@@ -293,14 +293,16 @@ export class Session {
        check could say "none" and she spoke); someone else's drops only the watched answer, as in a hold (review 1) */
     const aStop = decision.stop && (decision.toAngel || wasNamed || replying);
     let watchStopped = false;
-    if (h2 && !h2.signal && aStop && uid !== h2.userId && this.sinceHeld(h2, { ...line, at: firstAt }, until)) {
+    if (h2 && (!h2.signal || h2.signal === "stop") && aStop && uid !== h2.userId && this.sinceHeld(h2, { ...line, at: firstAt }, until)) {
       this.log.info(`check on ${line.speaker}'s line: read as "stop" for ${h2.asker}'s answer`);
       h2.poke("stop");
       watchStopped = true;
     } else if (h2 && !h2.signal && !aStop && this.sinceHeld(h2, { ...line, at: firstAt }, until)) {
       if (!aQuestion || (h2.ready && uid === h2.userId)) {
         const all = later.length ? `${text} ${later.join(" ")}` : text;
-        return this.onHeldLine(h2, { ...line, at: firstAt, text: all }, until);
+        /* the usual check said it isn't for her: it may still be "hold on", never a question (review 14 of 0.1.3: a
+           reply it declined was asked anyway) */
+        return this.onHeldLine(h2, { ...line, at: firstAt, text: all }, until, { noAsk: !decision.toAngel });
       }
       if (uid !== h2.userId) h2.poke("go");
     }
@@ -750,7 +752,10 @@ export class Session {
        was forgotten when Mira's addition merged) */
     const from = this.carry;
     this.carry = null;
-    if (from && from.entry?.replacement?.entry && from.entry.replacement.entry === qc.entry) {
+    /* merged again before the first merge's watch began: follow the chain (review 14 of 0.1.3) */
+    let link = from?.entry;
+    while (link?.replacement?.entry && link.replacement.entry !== qc.entry) link = link.replacement.entry;
+    if (from && link?.replacement?.entry === qc.entry) {
       if (from.mode === "invite") h.mode = "invite";
       if (from.named) h.named = new Set(from.named);
       from.next = h;
@@ -955,7 +960,7 @@ export class Session {
   }
 
   /* A line said while she holds an answer: a go-ahead, a "hold on", a stop, a question, or nothing for her. */
-  async onHeldLine(h, line, until, { partial = false } = {}) {
+  async onHeldLine(h, line, until, { partial = false, noAsk = false } = {}) {
     const uid = line.userId;
     /* her own "I'm ready" coming back through a microphone */
     /* her own words for this question coming back through a microphone: the quick reaction or the "I'm ready" */
@@ -984,10 +989,12 @@ export class Session {
     if (named && uid) (h.named ??= new Set()).add(uid);
     /* (someone who named her earlier in this wait may go on without her name: "Hold on Angel, one sec." … "okay, does
        it end if I move away?") */
-    if (uid !== h.userId && !named && !replying && !h.named?.has(uid) && v.kind === "ask") return;
+    if ((noAsk || (uid !== h.userId && !named && !replying && !h.named?.has(uid))) && v.kind === "ask") return;
     /* "never mind" about the held answer drops only that one: another player's question waiting behind it is still
        answered (review of 0.1.3). After the hold it is a stop like any the check reads, with the reply window kept. */
-    if (v.kind === "stop") { if (live) h.poke("stop"); else this.stop(line.at, { keepReplyWindow: true }); return; }
+    /* a second "never mind" about an answer already dropped does nothing more (review 14 of 0.1.3: it became a global
+       stop and dropped another player's waiting question) */
+    if (v.kind === "stop") { if (live) h.poke("stop"); else if (h.signal !== "stop") this.stop(line.at, { keepReplyWindow: true }); return; }
     /* only the start of a question, the rest still to come ("Angel, about the grab,"): kept as a call is, so the rest
        joins it (review 12 of 0.1.3: it was asked on its own, half a question) */
     const callOnly = v.kind === "ask" && v.complete === false && !partial;

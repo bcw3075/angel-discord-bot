@@ -187,3 +187,106 @@ test("(se-12) someone else's stop read by the usual check drops only the watched
   assert.deepEqual(answers(x.voice), [], "Mira's spoken answer dropped");
   assert.equal(x.s.lastStopAt, -Infinity, "no global stop");
 });
+
+/* ---- review 14 of 0.1.3 ---- */
+test("(se-12) a second 'never mind' about an answer already dropped doesn't drop another player's waiting question", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Angel, how does flanking work?", "Never mind that.", "Yeah, forget it."],
+    hold: a => (/flanking/.test(a.bareText) ? { kind: "ask", question: a.bareText } : /Never mind|forget/.test(a.bareText) ? { kind: "stop" } : { kind: "none" }) }));
+  const realHold = x.s.hold;
+  x.s.hold = async a => { await sleep(/forget/.test(a.bareText) ? 900 : /Never/.test(a.bareText) ? 500 : 300); return realHold(a); };
+  let release; const later = new Promise(r => { release = r; });
+  x.s.answer = async q => { x.asked.push(q); if (x.asked.length === 1) await later; return { say: `Answer to: ${q.question}`, sources: [], lookups: 1, dollars: 0.02 }; };
+  speech(x.voice, "p1");
+  await until(() => x.asked.length === 1);
+  speech(x.voice, "p2");                       /* Sam's own question, named: queued behind Mira's */
+  await until(() => x.s.counts.questions === 2);
+  await sleep(50);
+  speech(x.voice, "gm");                       /* "Never mind that." */
+  await sleep(100);
+  speech(x.voice, "p3");                       /* "Yeah, forget it." */
+  await sleep(1200);
+  console.log("A: lastStopAt set?", x.s.lastStopAt > 0, "watch signal", x.s.watch?.signal);
+  release();
+  await x.s.answering; await sleep(100);
+  console.log("A: spoken", answers(x.voice));
+  assert.deepEqual(answers(x.voice), ["clip:Answer to: Angel, how does flanking work?"], "Sam's question answered");
+});
+
+/* B: the person she just answered replies without her name while another question is looked up; the usual check
+   (told it is a reply) says not for her; the hold check then says "ask". */
+test("(se-12) a reply the usual check declines is not asked anyway by the check while she waits", async () => {
+  const x = await started(setup({ heard: ["Angel, how are you?", "Angel, what does grabbed do?", "Haha nice, what else?"],
+    hold: a => ({ kind: "ask", chat: true, question: a.bareText }),
+    gate: a => (/what else/.test(a.bareText) ? { toAngel: false, complete: true, stop: false, question: "" } : { toAngel: true, complete: true, stop: false, chat: !/grabbed/.test(a.bareText), question: a.bareText }) }));
+  x.voice.speakMs = 100;
+  let release; const later = new Promise(r => { release = r; });
+  x.s.answer = async q => { x.asked.push(q); if (x.asked.length === 2) await later; return { say: `Answer to: ${q.question}`, sources: [], lookups: 0, dollars: 0.02 }; };
+  speech(x.voice, "p1");
+  await until(() => answers(x.voice).length === 1);
+  speech(x.voice, "gm");
+  await until(() => x.asked.length === 2);
+  await until(() => x.s.replyTo?.userId === "p1", 2000);
+  speech(x.voice, "p1");
+  await sleep(300);
+  release();
+  await x.s.answering; await sleep(300);
+  console.log("B: gates", x.gates.map(g => [g.bareText, g.replying]), "holds", x.holds.map(h => h.bareText), "questions", x.s.counts.questions, "asked", x.asked.map(q => [q.question, q.unnamed, q.turn]), "replyTo", x.s.replyTo);
+  assert.equal(x.s.counts.questions, 2, "declined by the usual check: not asked");
+});
+
+test("(se-12) a 'hold on' survives two additions from the asker merged one after the other", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Hold on Angel, one sec.", "and with a shield?", "Angel, and prone too?"],
+    hold: a => (/Hold on/.test(a.bareText) ? { kind: "wait" } : /shield|prone/.test(a.bareText) ? { kind: "ask", question: a.bareText } : { kind: "none" }) }));
+  const send = x.s.post.send;
+  let first = true;
+  x.s.post.send = async text => { const m = await send(text); if (first) { first = false; m.edit = async t => { await sleep(1200); m.edits.push(t); }; } return m; };
+  let release; const later = new Promise(r => { release = r; });
+  x.s.answer = async q => { x.asked.push(q); if (x.asked.length === 1) await later; return { say: `Answer to: ${q.question}`, sources: [], lookups: 1, dollars: 0.02 }; };
+  speech(x.voice, "p1");
+  await until(() => x.asked.length === 1);
+  speech(x.voice, "p2");                       /* Sam: hold on (while she looks it up) */
+  await until(() => x.s.watch?.mode === "invite");
+  release();                                   /* answer ready: held for a go-ahead; its post edit takes 1.2 s */
+  await until(() => x.s.holding);
+  speech(x.voice, "p1");                       /* Mira adds, unnamed: merged by the hold check */
+  await until(() => x.s.counts.merged === 1);
+  speech(x.voice, "p1");                       /* Mira adds again, named: usual path, merged by ask() */
+  await until(() => x.s.counts.merged === 2);
+  await until(() => x.asked.length === 2, 3000);
+  console.log("C: asked", x.asked.map(q => q.question), "watch mode", x.s.watch?.mode);
+  await sleep(600);
+  assert.deepEqual(answers(x.voice), [], "Sam said hold on: the twice-merged answer must still wait");
+});
+
+test("(se-12) someone else's 'stop, then a question' read by the usual check: the watched answer dropped, theirs asked", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Angel, skip that. What does stunned do?"],
+    gate: a => (/skip/.test(a.bareText) ? { toAngel: true, complete: true, stop: true, question: "What does stunned do?" } : { toAngel: true, complete: true, stop: false, question: a.bareText }) }));
+  const realGate = x.s.gate;
+  x.s.gate = async a => { await sleep(/skip/.test(a.bareText) ? 300 : 100); return realGate(a); };
+  speech(x.voice, "p1");
+  speech(x.voice, "p2");
+  await until(() => x.gates.length === 2);
+  await until(() => x.s.counts.questions === 2);
+  await x.s.answering; await sleep(100); await x.s.answering; await sleep(100);
+  console.log("E: asked", x.asked.map(q => q.question), "spoken", answers(x.voice), "lastStopAt", x.s.lastStopAt, "holds", x.holds.length);
+  assert.deepEqual(answers(x.voice), ["clip:Answer to: What does stunned do?"]);
+  assert.equal(x.s.lastStopAt, -Infinity);
+});
+
+test("(se-12) two others' stops read by the usual check while she looks it up: the watched answer dropped once, no global stop", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Okay, we sorted that out Angel.", "Yeah, forget it Angel."],
+    gate: a => (/sorted|forget/.test(a.bareText) ? { toAngel: true, complete: true, stop: true, question: "" } : { toAngel: true, complete: true, stop: false, question: a.bareText }) }));
+  const realGate = x.s.gate;
+  x.s.gate = async a => { await sleep(/sorted/.test(a.bareText) ? 300 : /forget/.test(a.bareText) ? 450 : 100); return realGate(a); };
+  let release; const later = new Promise(r => { release = r; });
+  x.s.answer = async q => { await later; return { say: `Answer to: ${q.question}`, sources: [], lookups: 1, dollars: 0.02 }; };
+  speech(x.voice, "p1");
+  speech(x.voice, "p2");                          /* both said while Mira's own check runs; she is still looking it up */
+  speech(x.voice, "gm");
+  await until(() => x.gates.length === 3);
+  await sleep(600);
+  release();
+  await x.s.answering;
+  assert.deepEqual(answers(x.voice), [], "Mira's spoken answer dropped");
+  assert.equal(x.s.lastStopAt, -Infinity, "no global stop");
+});
