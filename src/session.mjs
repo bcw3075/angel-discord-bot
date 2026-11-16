@@ -316,7 +316,9 @@ export class Session {
     if (!decision.toAngel && !(decision.stop && (wasNamed || replying))) {
       /* kept as any line not for her is, for a hold that may begin ("Hold on Angel, one sec." while she looks something
          up: review 11 of 0.1.3) */
-      this.saidSince.push({ line: { ...line, text: later.length ? `${text} ${later.join(" ")}` : text }, until, added: this.now() });
+      /* declined by the usual check: when a watch takes it up later it can still be "hold on", never a question
+         (review 16 of 0.1.3: review 14's rule held only for a watch already running) */
+      this.saidSince.push({ line: { ...line, text: later.length ? `${text} ${later.join(" ")}` : text }, until, added: this.now(), declined: !later.length });
       while (this.saidSince.length > 20) this.saidSince.shift();
       return;
     }
@@ -359,7 +361,7 @@ export class Session {
   /* A line said since the question she is looking up or holding, by anyone and however it arrives (the end of a long
      talk, the rest of an "Angel?", a line said while their earlier one is still being checked, the asker's own): it goes
      to the check while she waits (review 8 and 12 of 0.1.3). */
-  onSince(h, line, until, more = false, released = null) {
+  onSince(h, line, until, more = false, released = null, { noAsk = false } = {}) {
     const uid = line.userId;
     const before = released ?? this.pending.get(uid);
     const all = released ? released.text : before ? `${before.text} ${line.text}` : line.text;
@@ -377,7 +379,7 @@ export class Session {
       return this.onHeldLine(h, { ...line, at: firstAt, text: all }, until, { partial: true });
     }
     if (before && !released) { this.pending.delete(uid); clearTimeout(before.timer); }
-    return this.onHeldLine(h, { ...line, at: firstAt, text: all }, until);
+    return this.onHeldLine(h, { ...line, at: firstAt, text: all }, until, { noAsk: noAsk && !before });
   }
 
   /* a held piece of a long question whose rest didn't come as a line: checked and answered as it stands */
@@ -778,7 +780,7 @@ export class Session {
       this.hearingNow.set(no, { end: this.now(), added: this.now() });
       Promise.resolve().then(work).catch(e => this.log.warn(`couldn't judge ${what}: ${e.message}`)).finally(() => this.hearingNow.delete(no));
     };
-    for (const u of since.slice(-6)) judge(() => this.onSince(h, u.line, u.until, u.more === true), "a line said since the question");
+    for (const u of since.slice(-6)) judge(() => this.onSince(h, u.line, u.until, u.more === true, null, { noAsk: u.declined === true }), "a line said since the question");
     /* a call waiting for the rest ("Angel, about the grab," or "Hold on Angel, one sec." read as a call), said since the
        question by someone else: it stays waiting, so the rest still joins it (review 12: taken away, the rest was a
        question of its own or lost), and what it says so far is judged now (it may be "hold on") */
