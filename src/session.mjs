@@ -55,6 +55,7 @@ export class Session {
     this.lastArrived = new Map(); /* userId → when their latest piece of speech reached her */
     this.unheardCapMs = 10000;    /* longer unbroken talk than this isn't waited for (see `unheard`) */
     this.saidSince = [];          /* lines not for her by the usual rule, kept briefly for a hold that may begin */
+    this.carry = null;            /* the watch of a question merged into a fuller one, for that one's watch to go on from */
     this.pieceNo = 0;
   }
 
@@ -205,12 +206,15 @@ export class Session {
     /* Every line said since the question she is looking up or holding goes to the check while she waits; the asker's
        own lines while she looks it up go the usual way first (more to their question is answered all in one, d-6), and
        to the watch only if the usual way would set them aside */
-    const h = this.watch;
-    if (h && this.sinceHeld(h, line, until) && (h.ready || uid !== h.userId)) return this.onSince(h, line, until, more, released);
     /* the person she just answered may reply without her name for a little while after she stops talking (Rhea,
        2026-11-14: "you replied first but not when I replied to you"); the check still decides it was for her */
     const r = this.replyTo;
     const replying = !!r && r.userId === uid && line.at >= r.from && line.at <= r.from + this.cfg.replyWindowMs;
+    /* (and so do replies to her last answer, which the usual check reads as replies: review 13 of 0.1.3). A watch
+       already stopped catches nothing more (review 13: it judged lines until the lookup ended, and a stop read there
+       dropped another player's question). */
+    const h = this.watch;
+    if (h && !h.signal && this.sinceHeld(h, line, until) && (h.ready || (uid !== h.userId && !replying))) return this.onSince(h, line, until, more, released);
     const byName = mentionsAngel(line.text) || released?.byName === true;
     const named = byName || replying || !!released;
     /* the check on this speaker's last line is still running: keep the line, it may be the rest of the question */
@@ -222,7 +226,7 @@ export class Session {
          hold on" heard before her answer is ready is judged when she holds it (review 9 of 0.1.3) */
       /* not her own voice coming back (review 10 of 0.1.3: her answer, echoed, was judged as "hold on") */
       if (!(this.voice.inEchoWindow(line.at) && echoOf(line.text, this.lastSaid))) {
-        if (this.watch && this.sinceHeld(this.watch, line, until)) return this.onSince(this.watch, line, until, more);
+        if (this.watch && !this.watch.signal && this.sinceHeld(this.watch, line, until)) return this.onSince(this.watch, line, until, more);
         this.saidSince.push({ line, until, added: this.now(), more });
         while (this.saidSince.length > 20) this.saidSince.shift();
       }
@@ -285,7 +289,15 @@ export class Session {
        d-6; anyone else's is a go-ahead, the held answer first); once her answer is held the asker's goes to the check
        while she waits, to be worked into one fresh answer */
     const aQuestion = decision.toAngel && decision.complete && !decision.stop;
-    if (h2 && !h2.signal && this.sinceHeld(h2, { ...line, at: firstAt }, until)) {
+    /* a stop the usual check reads goes on the usual way, not judged a second time (review 13 of 0.1.3: the second
+       check could say "none" and she spoke); someone else's drops only the watched answer, as in a hold (review 1) */
+    const aStop = decision.stop && (decision.toAngel || wasNamed || replying);
+    let watchStopped = false;
+    if (h2 && !h2.signal && aStop && uid !== h2.userId && this.sinceHeld(h2, { ...line, at: firstAt }, until)) {
+      this.log.info(`check on ${line.speaker}'s line: read as "stop" for ${h2.asker}'s answer`);
+      h2.poke("stop");
+      watchStopped = true;
+    } else if (h2 && !h2.signal && !aStop && this.sinceHeld(h2, { ...line, at: firstAt }, until)) {
       if (!aQuestion || (h2.ready && uid === h2.userId)) {
         const all = later.length ? `${text} ${later.join(" ")}` : text;
         return this.onHeldLine(h2, { ...line, at: firstAt, text: all }, until);
@@ -307,10 +319,12 @@ export class Session {
       /* in the log, so a line taken as a stop can be explained (live 2026-11-15: "Cut me off there." was read as one,
          her answer was never spoken and the lines after it went unheard). A stop only the check read into the line
          gives them a reply window, so a wrong reading costs one answer, not the conversation. */
-      this.log.info(`check on ${line.speaker}'s line: read as "stop": she stops`);
-      this.stop(line.at, { keepReplyWindow: true });
-      /* a fresh minute from now, not what was left of the last one (review 11), with the small-talk count kept */
-      if (uid) this.replyTo = { userId: uid, from: this.now(), turn: r?.userId === uid ? r.turn : 0 };
+      if (!watchStopped) {
+        this.log.info(`check on ${line.speaker}'s line: read as "stop": she stops`);
+        this.stop(line.at, { keepReplyWindow: true });
+        /* a fresh minute from now, not what was left of the last one (review 11), with the small-talk count kept */
+        if (uid) this.replyTo = { userId: uid, from: this.now(), turn: r?.userId === uid ? r.turn : 0 };
+      }
       if (!decision.toAngel) return;
       /* "Angel, stop. What does stunned do?": stop, then answer the question (asked just after the stop): their own
          words from after the stop, which is already done (the check's wording when the stop can't be cut off) */
@@ -731,6 +745,16 @@ export class Session {
       kicked(reason);
       h.waiter?.wake(reason);
     };
+    /* a question merged with more from the asker goes on from where its first watch stood: a "hold on" still holds,
+       who named her still counts, and verdicts still on their way act on this one (review 13 of 0.1.3: Sam's "hold on"
+       was forgotten when Mira's addition merged) */
+    const from = this.carry;
+    this.carry = null;
+    if (from && from.entry?.replacement?.entry && from.entry.replacement.entry === qc.entry) {
+      if (from.mode === "invite") h.mode = "invite";
+      if (from.named) h.named = new Set(from.named);
+      from.next = h;
+    }
     this.watch = h;
     /* lines said since the question before it was taken up (it waited in line, or they came while its own check ran),
        heard already: handed to the same path now, the last six at most (review 10: a lively table waits a check's
@@ -760,6 +784,8 @@ export class Session {
      holds is lost: rare). */
   endWatch(h) {
     if (!h) return;
+    /* merged into a fuller question: its watch goes on from this one */
+    if (h.entry?.replacement) this.carry = h;
     if (this.watch === h) this.watch = null;
     if (this.holding === h) this.holding = null;
     h.waiter?.wake("end");
@@ -946,6 +972,8 @@ export class Session {
     if (v.error) this.log.warn(`the check while she waits failed (${v.error}); the plain rule decided`);
     this.log.info(`check on ${line.speaker}'s line while she waits: ${{ go: "a go-ahead", wait: "hold on", stop: "a stop", ask: v.chat ? "a question, small talk" : "a question", none: "not for her" }[v.kind] ?? v.kind}`);
     if (this.ended) return;
+    /* a verdict on a watch merged into a fuller question since acts on that one */
+    while (h.next) h = h.next;
     /* still watching the same question (looking it up or holding it), nothing has ended the wait yet */
     const live = this.watch === h && !h.signal;
     /* someone else's line that didn't name her (and isn't a reply she invited): it may make her wait or stop, never
