@@ -125,19 +125,20 @@ export async function gate({ claude, model, contextText, lastText, bareText = la
 
 /* While Angel holds an answer at a busy table (Rhea, 2026-11-15, design d-7): what a line said meanwhile means for her.
    Only lines said while she waits are checked, so it costs a fraction of a cent. */
-export const HOLD_SYSTEM = `You watch the transcript of a tabletop game played over voice chat. The table has an AI assistant called Angel who answers rules questions. The transcriber sometimes writes her name as Angela, Angie or angle. Angel has an answer ready but people are talking, so she is waiting for a chance to say it (she may already have said, briefly, that she is ready).
+export const HOLD_SYSTEM = `You watch the transcript of a tabletop game played over voice chat. The table has an AI assistant called Angel who answers rules questions. The transcriber sometimes writes her name as Angela, Angie or angle. Angel is looking up the answer to a question, or has it ready and is waiting for a chance to say it while people talk (she may already have said, briefly, that she is ready).
 Decide what the LAST line means for her. Reply with JSON only, no other text:
-{"kind": "go" or "wait" or "stop" or "ask" or "none", "chat": true or false, "question": "..."}
+{"kind": "go" or "wait" or "stop" or "ask" or "none", "chat": true or false, "complete": true or false, "question": "..."}
 - go: someone invites her to speak now ("go ahead", "yeah?", "what'd you find?", "okay Angel", "sure, let's hear it", her name on its own).
 - wait: someone asks her to hold off for now but still wants the answer ("hold on", "not now", "one sec, Angel", "after this", "in a minute").
 - stop: they don't want the answer any more ("never mind", "forget it", "stop", "we sorted it out", "don't worry about it").
 - ask: a new question for Angel, or more added to the question she is holding ("oh, and with a shield?", "Angel, what about flanking?"). Use the earlier lines to tell.
 - none: anything else: the table talking among themselves, the game, narration, or talk about Angel that isn't to her. "angel" can be part of the game (an angel creature, an angelic heritage, a statue).
 - chat: for "ask", true when it is small talk that needs no rules lookup; false otherwise.
+- complete: for "ask", false when the line only starts a question that is still to come ("Angel, about the grab,", "Hey Angel, quick one"); true otherwise.
 - question: for "ask", what they want from her in one sentence of at most 40 words, written to stand on its own using the earlier lines, as the question itself ("Does that work with a shield?"); "" otherwise.`;
 
-export function holdUser(contextLines, last, { asker = "someone", question = "", cutIn = "" } = {}) {
-  const note = `\n\n(Angel is holding her answer to ${asker}'s question${question ? `: "${String(question).slice(0, 200)}"` : ""}.${cutIn ? ` She said: "${cutIn}"` : ""})`;
+export function holdUser(contextLines, last, { asker = "someone", question = "", cutIn = "", ready = true } = {}) {
+  const note = `\n\n(Angel is ${ready ? "holding her answer to" : "looking up the answer to"} ${asker}'s question${question ? `: "${String(question).slice(0, 200)}"` : ""}.${cutIn ? ` She said: "${cutIn}"` : ""})`;
   return `Earlier lines:\n${contextLines || "(none)"}\n\nLAST line:\n${last}${note}`;
 }
 
@@ -152,27 +153,27 @@ export function parseHold(text, lastLineText = "") {
   if (m) {
     try {
       const j = JSON.parse(m[0]);
-      if (HOLD_KINDS.has(j.kind)) return { kind: j.kind, chat: j.chat === true, question: typeof j.question === "string" ? j.question.trim() : "", fallback: false };
+      if (HOLD_KINDS.has(j.kind)) return { kind: j.kind, chat: j.chat === true, complete: j.complete !== false, question: typeof j.question === "string" ? j.question.trim() : "", fallback: false };
     } catch { /* fall through */ }
   }
   const t = String(lastLineText).slice(0, 300);
-  if (isStopRequest(t)) return { kind: "stop", chat: false, question: "", fallback: true };
-  if (!mentionsAngel(t)) return { kind: "none", chat: false, question: "", fallback: true };
+  if (isStopRequest(t)) return { kind: "stop", chat: false, complete: true, question: "", fallback: true };
+  if (!mentionsAngel(t)) return { kind: "none", chat: false, complete: true, question: "", fallback: true };
   /* review of 0.1.3: "Hold on Angel." was read as a go-ahead and "Angel?" as a question */
-  if (HOLD_WORDS.test(t)) return { kind: "wait", chat: false, question: "", fallback: true };
+  if (HOLD_WORDS.test(t)) return { kind: "wait", chat: false, complete: true, question: "", fallback: true };
   /* her name and little else ("Angel?", "Okay Angel, go") invites her; her name with a question is a question */
   const words = (t.replace(new RegExp(NAME, "gi"), " ").match(/[a-z0-9']+/gi) ?? []).filter(w => !/^(hey|ok|okay|so|um+|uh+|oh|yeah|yes|sure|go|ahead|right)$/i.test(w));
-  if (words.length <= 1 || !/\?/.test(t)) return { kind: "go", chat: false, question: "", fallback: true };
-  return { kind: "ask", chat: false, question: t, fallback: true };
+  if (words.length <= 1 || !/\?/.test(t)) return { kind: "go", chat: false, complete: true, question: "", fallback: true };
+  return { kind: "ask", chat: false, complete: true, question: t, fallback: true };
 }
 
-export async function holdCheck({ claude, model, contextText, lastText, bareText = lastText, asker, question, cutIn }) {
+export async function holdCheck({ claude, model, contextText, lastText, bareText = lastText, asker, question, cutIn, ready = true }) {
   try {
     const json = await claude.create({
       model,
       max_tokens: 400,
       system: [{ type: "text", text: HOLD_SYSTEM, cache_control: { type: "ephemeral" } }],
-      messages: [{ role: "user", content: holdUser(contextText, lastText, { asker, question, cutIn }) }],
+      messages: [{ role: "user", content: holdUser(contextText, lastText, { asker, question, cutIn, ready }) }],
     }, { timeoutMs: 8000, retries: 1, maxWaitMs: 1500 });
     const text = (json.content ?? []).filter(b => b.type === "text").map(b => b.text).join("");
     if (json.stop_reason === "max_tokens") return { ...parseHold("", bareText), error: "its reply was cut off", dollars: claude.cost(model, json.usage) };

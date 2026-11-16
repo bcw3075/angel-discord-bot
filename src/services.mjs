@@ -24,7 +24,7 @@ export function buildServices(cfg, { fetchImpl = fetch, dataDir = DATA_DIR } = {
     },
     gate: ({ contextText, lastText, bareText, replying }) => gate({ claude, model: cfg.gateModel, contextText, lastText, bareText, replying }),
     /* a busy table (0.1.3): what a line said while she holds an answer means, and her own "I'm ready" words */
-    hold: ({ contextText, lastText, bareText, asker, question, cutIn }) => holdCheck({ claude, model: cfg.gateModel, contextText, lastText, bareText, asker, question, cutIn }),
+    hold: ({ contextText, lastText, bareText, asker, question, cutIn, ready }) => holdCheck({ claude, model: cfg.gateModel, contextText, lastText, bareText, asker, question, cutIn, ready }),
     readyLine: ({ question, asker, earlier }) => readyLine({ claude, model: cfg.gateModel, question, asker, earlier }),
     /* house rules are read for each question, so an edit to house-rules.md counts at once */
     answer: ({ conversation, question, asker, via, gmName, onSay, meaning, lastReply }) => answerQuestion({

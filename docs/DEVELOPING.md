@@ -46,6 +46,7 @@ code, comments, tests, fixtures or docs (the privacy scan checks against a priva
   stopped" and "its piece of speech reached her", which is where most of the holes were. Use the live values (or a
   silence longer than the breath window), send the piece a stopping speaker makes, and give stand-in calls real delays.
 - **When patches to one rule keep opening the next hole, replace the rule** (0.1.3): three rounds of fixes to "is this
+- **When handing state from one phase to the next keeps leaking, move the boundary** (0.1.3, review 12): lines said while she looked an answer up were handed to the hold when her answer was ready, by three paths, and five reviews each found one leaking; starting the watch when the question is taken up gave one path from the start. A check the code relies on needs every reading the model can give: the hold check had no "only the start of a question", so a call could only be misread as a whole question or as nothing.
   quiet safe" and three to "what has been judged" each left a path; one plain rule (nothing said since the question is
   unknown) and dropping the bookkeeping (kept talk ends with its hold) closed them. A new test is also run against the
   code from before its fix (a git worktree), not only by breaking the fix.

@@ -129,7 +129,10 @@ test("their own words after a stop are cut out for the question that follows it"
 });
 
 test("(wk-11) while she waits: the check's verdict is read; an unreadable one falls back to the plain rule", () => {
-  assert.deepEqual(parseHold('```json\n{"kind": "go", "chat": false, "question": ""}\n```'), { kind: "go", chat: false, question: "", fallback: false });
+  assert.deepEqual(parseHold('```json\n{"kind": "go", "chat": false, "question": ""}\n```'), { kind: "go", chat: false, complete: true, question: "", fallback: false });
+  /* only the start of a question, the rest to come (review 12 of 0.1.3); a missing flag means whole */
+  assert.equal(parseHold('{"kind": "ask", "complete": false, "question": ""}').complete, false);
+  assert.equal(parseHold("", "Angel, what about flanking?").complete, true);
   assert.equal(parseHold('{"kind": "ask", "chat": true, "question": "How are you?"}').question, "How are you?");
   assert.equal(parseHold('{"kind": "maybe"}', "hm").kind, "none", "an unknown kind is not trusted");
   assert.equal(parseHold("", "Angel, stop.").kind, "stop");
@@ -146,6 +149,10 @@ test("(wk-11) the check while she waits is told whose answer she holds and what 
   assert.equal(seen[0].r.system[0].text, HOLD_SYSTEM);
   assert.match(seen[0].r.messages[0].content, /LAST line:\nDana: hold on Angel/);
   assert.match(seen[0].r.messages[0].content, /Mira's question: "What does grabbed do\?"\. She said: "Got it, whenever\."/);
+  /* while she still looks it up, the check is told so (review 12 of 0.1.3) */
+  await holdCheck({ claude, model: "m", contextText: "", lastText: "Dana: hold on Angel", bareText: "hold on Angel", asker: "Mira", question: "What does grabbed do?", ready: false });
+  assert.match(seen[1].r.messages[0].content, /Angel is looking up the answer to Mira's question/);
+  assert.match(seen[0].r.messages[0].content, /Angel is holding her answer to Mira's question/);
   assert.equal(seen[0].o.timeoutMs, 8000, "the table is waiting: a short limit");
   const down = { create: async () => { throw new Error("overloaded"); }, cost: () => 0 };
   const f = await holdCheck({ claude: down, model: "m", lastText: "Dana: go ahead Angel", bareText: "go ahead Angel" });
