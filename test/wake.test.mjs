@@ -182,3 +182,48 @@ test("(wk-11) the plain rule while she waits: 'hold on' is a wait, her name alon
   assert.equal(parseHold("", "Angel, what about flanking?").kind, "ask");
   assert.equal(parseHold("", "wait, so I move here").kind, "none", "not to her");
 });
+
+/* ---- 0.1.3, the self-test of 2026-11-15 (wk-13): "Hey Angel, quick one." cut the check off and the plain rule said go ---- */
+test("(wk-14) the plain rule: her name with only words that announce a question is the start of one, not a go-ahead", () => {
+  for (const t of ["Hey Angel, quick one.", "Angel, quick question", "Angel, got a sec?", "Angela, quick one", "Hey Angel, I have a question.", "Okay Angel, one more thing",
+    /* the review of the fix (2026-11-16) */
+    "Angel, I've got a question", "Angel, I've got a quick question.", "Angel, quick question for you", "Alright Angel, quick one", "Sorry Angel, quick question", "Angel, I have one more question", "Angel, do you have a sec?"]) {
+    const v = parseHold("", t);
+    assert.deepEqual([v.kind, v.complete, v.question], ["ask", false, ""], t);
+  }
+  /* the rest of the line must be all call: anything more is read as before */
+  assert.equal(parseHold("", "Hold on Angel, quick question").kind, "wait", "a hold-on stays a wait");
+  assert.equal(parseHold("", "Angel?").kind, "go", "her name alone still invites her");
+  assert.deepEqual([parseHold("", "Angel, quick one: does grab need a free hand?").kind, parseHold("", "Angel, quick one: does grab need a free hand?").complete], ["ask", true]);
+  assert.equal(parseHold("", "A quick question for the GM").kind, "none", "not to her");
+});
+
+test("(wk-14) a reply cut off at the limit: a whole verdict before the cut still counts, a broken one falls back", async () => {
+  const reply = text => ({ cost: () => 0.0003, async create(body) { this.body = body; return { stop_reason: "max_tokens", content: [{ type: "text", text }], usage: {} }; } });
+  const whole = reply('{"kind": "ask", "chat": false, "complete": false, "question": ""}\nThe line only opens a question {they will finish it}, so');
+  const v = await holdCheck({ claude: whole, model: "m", lastText: "Sam: Hey Angel, quick one.", bareText: "Hey Angel, quick one." });
+  assert.deepEqual([v.kind, v.complete, v.fallback, v.error], ["ask", false, false, undefined]);
+  assert.ok(whole.body.max_tokens >= 600, "room enough for the verdict");
+  const broken = reply('{"kind": "go", "chat": false, "comp');
+  const f = await holdCheck({ claude: broken, model: "m", lastText: "Sam: go ahead Angel", bareText: "go ahead Angel" });
+  assert.deepEqual([f.kind, f.fallback, f.error], ["go", true, "its reply was cut off"]);
+  assert.equal(f.dollars, 0.0003, "a cut-off reply is still paid for");
+  assert.equal(v.cutOff, true, "a used cut-off reply is marked, so the log shows it");
+  /* it changed its mind before the cut: the first verdict is not trusted (review of the fix) */
+  const turned = reply('{"kind": "go", "chat": false, "complete": true, "question": ""} actually they only opened one: {"kind": "ask", "comp');
+  const g = await holdCheck({ claude: turned, model: "m", lastText: "Sam: Hey Angel, quick one.", bareText: "Hey Angel, quick one." });
+  assert.deepEqual([g.kind, g.complete, g.fallback, g.error], ["ask", false, true, "its reply was cut off"]);
+});
+
+test("(wk-14) the check's prompt names the bare call and asks for the JSON alone", () => {
+  assert.match(HOLD_SYSTEM, /"Hey Angel, quick one"[^\n]*is "ask" with complete false, not "go"/);
+  assert.match(HOLD_SYSTEM, /JSON object alone, on one line, and nothing after it/);
+});
+
+test("(wk-14) the plain rule's call words are quick on odd text", () => {
+  for (const text of ["angel quick ".repeat(400), "quick one ".repeat(400), "angel " + "a ".repeat(2000), "got a sec ".repeat(400) + "angel"]) {
+    const t0 = performance.now();
+    parseHold("", text);
+    assert.ok(performance.now() - t0 < 50);
+  }
+});

@@ -94,5 +94,5 @@ nothing from her: defaults fill the gap.
 | setup | `docs/features/setup.md` | Install Angel.cmd, Test Angel.cmd, src/selftest.mjs, src/config.mjs, src/log.mjs, src/setup.mjs, src/check.mjs, src/services.mjs, src/main.mjs | 10 |
 | transcript | `docs/features/transcript.md` | src/transcript.mjs | 3 |
 | voice | `docs/features/voice.md` | src/voice.mjs, src/capture.mjs, src/audio.mjs | 6 |
-| wake | `docs/features/wake.md` | src/wake.mjs | 8 |
+| wake | `docs/features/wake.md` | src/wake.mjs | 9 |
 <!-- feature-index:end -->

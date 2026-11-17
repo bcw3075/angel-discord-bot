@@ -8,7 +8,8 @@ import path from "node:path";
 import { SentenceCutter } from "./speech.mjs";
 
 /* The cases. Each is its own conversation: its steps are said one after another, as at a table. For a step:
-   - `forHer` (default true), `chat`, `complete` are what the "was that for me?" check should say;
+   - `forHer` (default true), `chat`, `complete` are what the "was that for me?" check should say ("either" when a
+     line can fairly be read both ways; the step is still answered);
    - `checkOnly` stops after the check; `replying` means she has just answered this person;
    - `want` are things a right answer says and `never` things it must not say (patterns over what she says and
      writes together); `lookups` is the least number of lookups a rules answer needs (0 for small talk);
@@ -32,7 +33,7 @@ export const CASES = [
     { say: "Angel, how's your morning going?", chat: true, lookups: 0 },
     { say: "Ha, same here.", replying: true, chat: true, lookups: 0, never: [/(say|use|need) my name/i] },
     { say: "Do you like being a bot?", replying: true, chat: true, lookups: 0, never: [/(say|use|need) my name/i] },
-    { say: "Fair enough, I get that.", replying: true, chat: true, lookups: 0, lastReply: true, want: [/\bname\b/i], never: [/say my name if you need me again/i] },
+    { say: "Fair enough, I get that.", replying: true, forHer: "either", chat: true, lookups: 0, lastReply: true, want: [/\bname\b/i], never: [/say my name if you need me again/i] },
   ] },
   /* from the live rounds of 2026-11-15 (each rule read on Archives of Nethys that day) */
   /* an announced question is waited for, not answered as small talk */
@@ -42,7 +43,7 @@ export const CASES = [
   ] },
   /* two lines said close together reach her as one question: she answers the question, not just the first remark */
   { id: "joined-remark-and-question", steps: [
-    { say: "Angel, does Reactive Strike count toward my multiple attack penalty?", want: [/doesn'?t|does not|no\b|never/i], never: [/takes? (the|your|a) (multiple attack )?penalty/i], lookups: 1 },
+    { say: "Angel, does Reactive Strike count toward my multiple attack penalty?", want: [/doesn'?t|does not|no\b|never/i], never: [/(?<!(?:nor|not|n't|n’t|never|neither) )takes? (the|your|a) (multiple attack )?penalty/i], lookups: 1 },
     { say: "Interesting. How hard is it for you to search for these things?", replying: true, chat: true, lookups: 0, want: [/search|look|archives|nethys|find/i] },
   ] },
   { id: "joined-two-questions", steps: [
@@ -209,7 +210,7 @@ export const CASES = [
      says what she can't check and never makes up what "most GMs" do or a figure for it ---- */
   { id: "her-judgment-crit-trip-swarm", steps: [{ say: "Angel, a swarm can't be knocked prone, but I rolled a critical success to Trip it. The rules don't say if the 1d6 damage still happens. How would you rule it?", want: [/GM|your call|you decide|up to you/i, /I'?d|I would|my (read|take|call|ruling|suggestion)|usual reading|suggest|lean/i], lookups: 1 }] },
   { id: "her-judgment-vague-rule", steps: [{ say: "Angel, my player wants to use Demoralize on a mindless zombie by screaming at it. The rules feel unclear to me. What's your judgment?", want: [/mental|mindless/i, /GM|your call|you decide|up to you/i], lookups: 1 }] },
-  { id: "her-judgment-no-rule-at-all", steps: [{ say: "Angel, there's no rule for this: my player wants to swing on a chandelier and kick two goblins in one go. How should I run it?", want: [/GM|your call|you decide|up to you/i, /I'?d|I would|suggest|could|one way|option/i], never: [/the rules? (say|state)s? (that )?you (must|have to)/i], lookups: 0 }] },
+  { id: "her-judgment-no-rule-at-all", steps: [{ say: "Angel, there's no rule for this: my player wants to swing on a chandelier and kick two goblins in one go. How should I run it?", want: [/GM|your call|you decide|up to you/i, /I'?d|I would|suggest|could|one way|option|usual (way|reading|pick)|have (them|him|her) (roll|make|attempt)|treat (each|it|the)/i], never: [/the rules? (say|state)s? (that )?you (must|have to)/i, /second\b(?![^.]*(?:[–−-] ?4\b|minus four|agile))[^.]{0,60}?(?:[–−-] ?|minus )(?:5|five)\b/i], lookups: 0 }] },
   { id: "what-other-gms-think", steps: [{ say: "Angel, what do other GMs usually do about players wanting to Recall Knowledge for free every round?", want: [/can'?t (check|look|see|speak)|don'?t have|not (in|something)|only (have|know)|rule(s|book)|as written|usual reading|common/i], never: [/\d+ ?(%|percent)|most GMs on|reddit (says|thread)|according to (the )?(forums?|reddit)/i], chat: "either", lookups: 0 }] },
   { id: "what-the-community-thinks", steps: [{ say: "Angel, is it true most tables house-rule free archetype? What does the community think?", want: [/can'?t (check|look|see|speak|tell)|don'?t have|not (in|something)|only (have|know)|variant|GM|your (call|table)/i], never: [/\d+ ?(%|percent)|according to (the )?(forums?|reddit|a poll)/i], chat: "either", lookups: 0 }] },
 
@@ -294,6 +295,7 @@ async function runStep({ services, asker, role = "GM", step, lines, now, previou
       r.hold = { ms: now() - t0, kind: v.kind, complete: v.complete !== false, question: v.question ?? "", error: v.error ?? "", dollars: v.dollars ?? 0 };
       if (/^Claude answered 4/.test(v.error ?? "")) r.failed = `the check while she waits: ${v.error}`;
       else if (v.error) r.notes.push(`the check while she waits failed and the plain rule decided: ${v.error}`);
+      else if (v.cutOff) r.notes.push("the check while she waits ran past its limit; its verdict, written before the cut, was used");
       /* only the start of a question: "ask" marked not complete, or a go-ahead (both keep it waiting for the rest) */
       if (step.holdComplete === false) { if (!(v.kind === "go" || (v.kind === "ask" && v.complete === false))) r.notes.push(`the check while she waits said "${v.kind}"${v.kind === "ask" ? " (a whole question)" : ""}, expected the start of a question`); }
       else if (v.kind !== step.holdKind) r.notes.push(`the check while she waits said "${v.kind}", expected "${step.holdKind}"`);
@@ -311,7 +313,8 @@ async function runStep({ services, asker, role = "GM", step, lines, now, previou
       if (/^Claude answered 4/.test(d.error ?? "")) r.failed = `the check: ${d.error}`;
       else if (d.error) r.notes.push(`the check failed and the plain rule decided: ${d.error}`);
       if (typeof step.stop === "boolean" && r.check.stop !== step.stop) r.notes.push(`the check said ${r.check.stop ? "stop" : "not a stop"}, expected ${step.stop ? "stop" : "not a stop"}`);
-      if (r.check.toAngel !== wantForHer) r.notes.push(`the check said ${r.check.toAngel ? "for Angel" : "not for Angel"}, expected ${wantForHer ? "for Angel" : "not for Angel"}`);
+      if (step.forHer !== "either" && r.check.toAngel !== wantForHer) r.notes.push(`the check said ${r.check.toAngel ? "for Angel" : "not for Angel"}, expected ${wantForHer ? "for Angel" : "not for Angel"}`);
+      else if (!r.check.toAngel) { /* "either", read as not for her: nothing more to judge in the check */ }
       else if (wantForHer && step.complete === false && r.check.complete) r.notes.push("the check called it a finished question; it was only a call");
       else if (wantForHer && step.complete !== false && step.complete !== "either" && !r.check.complete) r.notes.push("the check is waiting for more, but the question was whole");
       else if (wantForHer && step.complete !== false && step.complete !== "either" && step.chat !== "either" && r.check.chat !== (step.chat === true)) r.notes.push(`the check called it ${r.check.chat ? "small talk" : "a rules question"}`);

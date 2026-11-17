@@ -135,7 +135,9 @@ Decide what the LAST line means for her. Reply with JSON only, no other text:
 - none: anything else: the table talking among themselves, the game, narration, or talk about Angel that isn't to her. "angel" can be part of the game (an angel creature, an angelic heritage, a statue).
 - chat: for "ask", true when it is small talk that needs no rules lookup; false otherwise.
 - complete: for "ask", false when the line only starts a question that is still to come ("Angel, about the grab,", "Hey Angel, quick one"); true otherwise.
-- question: for "ask", what they want from her in one sentence of at most 40 words, written to stand on its own using the earlier lines, as the question itself ("Does that work with a shield?"); "" otherwise.`;
+- question: for "ask", what they want from her in one sentence of at most 40 words, written to stand on its own using the earlier lines, as the question itself ("Does that work with a shield?"); "" otherwise.
+- Her name with only words that announce a question still to come ("Hey Angel, quick one", "Angel, quick question", "Angel, got a sec?") is "ask" with complete false, not "go".
+Reply with the JSON object alone, on one line, and nothing after it.`;
 
 export function holdUser(contextLines, last, { asker = "someone", question = "", cutIn = "", ready = true } = {}) {
   const note = `\n\n(Angel is ${ready ? "holding her answer to" : "looking up the answer to"} ${asker}'s question${question ? `: "${String(question).slice(0, 200)}"` : ""}.${cutIn ? ` She said: "${cutIn}"` : ""})`;
@@ -146,19 +148,42 @@ const HOLD_KINDS = new Set(["go", "wait", "stop", "ask", "none"]);
 /* a plain alternation of fixed words: no backtracking on what the table says */
 const HOLD_WORDS = /\b(?:hold on|hang on|wait|not now|not yet|one sec|one second|a sec|a second|in a minute|after this)\b/i;
 
-/* The model's reply → { kind, chat, question }. When it can't be read, the plain rule: a stop phrase stops her, her
-   name with a question mark is a question, her name otherwise is a go-ahead, anything else is nothing for her. */
-export function parseHold(text, lastLineText = "") {
-  const m = String(text).match(/\{[\s\S]*\}/);
-  if (m) {
+/* the reply's JSON object: the whole span first; if words with braces follow it, the first object alone */
+function holdJson(text) {
+  const s = String(text);
+  for (const re of [/\{[\s\S]*\}/, /\{[^{}]*\}/]) {
+    const m = s.match(re);
+    if (!m) continue;
     try {
       const j = JSON.parse(m[0]);
-      if (HOLD_KINDS.has(j.kind)) return { kind: j.kind, chat: j.chat === true, complete: j.complete !== false, question: typeof j.question === "string" ? j.question.trim() : "", fallback: false };
-    } catch { /* fall through */ }
+      if (HOLD_KINDS.has(j.kind)) return j;
+    } catch { /* try the next */ }
   }
+  return null;
+}
+
+/* her name with only words that announce a question ("Hey Angel, quick one.", "Angel, got a sec?"): the start of a
+   question, the rest to come (0.1.3 self-test: the check's reply was cut off on "Hey Angel, quick one." and the plain
+   rule called it a go-ahead). The whole rest of the line must be one of these, so "hold on Angel, quick question"
+   stays a wait. A fixed, anchored alternation: no backtracking on what the table says. */
+/* review of the fix (2026-11-16): "I've" is one word, "for you" can follow, "alright"/"sorry" can lead */
+const CALL_ONLY = /^(?:(?:(?:a |one )?quick (?:one|question|thing)|real quick|(?:a |one )?question|(?:i|i've) (?:have |got )?(?:a|one more|another) (?:quick )?question|(?:do |have )?(?:you )?(?:have |got )?a (?:sec|second|minute|moment)|(?:can|could) i ask (?:you )?(?:something|a question)|one more(?: question| thing)?|another (?:one|question))(?: for you)?)$/;
+const CALL_FILLER = /^(?:hey|hi|ok|okay|so|um+|uh+|oh|yo|alright|sorry|right)$/;
+function callOnly(t) {
+  const words = (t.toLowerCase().replace(new RegExp(String.raw`(?<![a-z'])${NAME}(?![a-z])`, "g"), " ").match(/[a-z0-9']+/g) ?? []).filter(w => !CALL_FILLER.test(w));
+  return words.length > 0 && CALL_ONLY.test(words.join(" "));
+}
+
+/* The model's reply → { kind, chat, complete, question }. When it can't be read, the plain rule: a stop phrase stops
+   her, a line not to her is nothing, a bare call is the start of a question, a hold-on is a wait, her name and little
+   else is a go-ahead, her name with a question is a question. */
+export function parseHold(text, lastLineText = "") {
+  const j = holdJson(text);
+  if (j) return { kind: j.kind, chat: j.chat === true, complete: j.complete !== false, question: typeof j.question === "string" ? j.question.trim() : "", fallback: false };
   const t = String(lastLineText).slice(0, 300);
   if (isStopRequest(t)) return { kind: "stop", chat: false, complete: true, question: "", fallback: true };
   if (!mentionsAngel(t)) return { kind: "none", chat: false, complete: true, question: "", fallback: true };
+  if (callOnly(t)) return { kind: "ask", chat: false, complete: false, question: "", fallback: true };
   /* review of 0.1.3: "Hold on Angel." was read as a go-ahead and "Angel?" as a question */
   if (HOLD_WORDS.test(t)) return { kind: "wait", chat: false, complete: true, question: "", fallback: true };
   /* her name and little else ("Angel?", "Okay Angel, go") invites her; her name with a question is a question */
@@ -171,12 +196,18 @@ export async function holdCheck({ claude, model, contextText, lastText, bareText
   try {
     const json = await claude.create({
       model,
-      max_tokens: 400,
+      max_tokens: 600,
       system: [{ type: "text", text: HOLD_SYSTEM, cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: holdUser(contextText, lastText, { asker, question, cutIn, ready }) }],
     }, { timeoutMs: 8000, retries: 1, maxWaitMs: 1500 });
     const text = (json.content ?? []).filter(b => b.type === "text").map(b => b.text).join("");
-    if (json.stop_reason === "max_tokens") return { ...parseHold("", bareText), error: "its reply was cut off", dollars: claude.cost(model, json.usage) };
+    /* cut off at the limit: a whole verdict written before it still counts (words after the JSON ran on), a broken one not */
+    if (json.stop_reason === "max_tokens") {
+      /* a second "kind" after the first means it changed its mind before the cut: not trusted */
+      const kinds = String(text).match(/"kind"/g)?.length ?? 0;
+      if (!holdJson(text) || kinds > 1) return { ...parseHold("", bareText), error: "its reply was cut off", dollars: claude.cost(model, json.usage) };
+      return { ...parseHold(text, bareText), cutOff: true, dollars: claude.cost(model, json.usage) };
+    }
     return { ...parseHold(text, bareText), dollars: claude.cost(model, json.usage) };
   } catch (e) {
     return { ...parseHold("", bareText), error: e.message };

@@ -395,3 +395,33 @@ test("(st-12) the self-test's busy-table cases: the check while she waits agains
   assert.match(text, /Check while she waits: go/);
   assert.match(text, /Her "I'm ready" lines: "Got it/);
 });
+
+/* 0.1.3, the self-test of 2026-11-15: three patterns judged right answers wrong, and one wrong answer went unmarked */
+test("(an-10) the narrowed self-test patterns: right answers pass, the wrong ones are still caught", async () => {
+  const { runSelfTest, CASES } = await import("../src/selftest.mjs");
+  const step = (id, i = 0) => CASES.find(c => c.id === id).steps[i];
+  const passes = (s, text) => (s.want ?? []).every(re => re.test(text)) && !(s.never ?? []).some(re => re.test(text));
+  const rs = step("joined-remark-and-question");
+  assert.ok(passes(rs, "No: Reactive Strike neither adds to nor takes your multiple attack penalty."), "the right answer, said both ways");
+  assert.ok(passes(rs, "No, it doesn't take your multiple attack penalty."));
+  assert.equal(passes(rs, "No, but it takes your multiple attack penalty."), false, "the wrong one still caught");
+  const gm = step("her-judgment-no-rule-at-all");
+  assert.ok(passes(gm, "No chandelier rule, so it's your call as GM. Here's a usual way to run it: have them roll Athletics."), "a suggestion without 'I'd' or 'could'");
+  /* a kick uses the fist's statistics, and the fist is agile: a second kick is -4 (Player Core pg. 275, 277; AoN 2026-11-16) */
+  assert.equal(passes(gm, "Your call as GM. I'd have them roll, and the second one takes the multiple attack penalty of minus five."), false);
+  assert.equal(passes(gm, "Your call as GM. The **second takes –5** (multiple attack penalty)."), false);
+  assert.ok(passes(gm, "Your call as GM. I'd treat each kick as a Strike: the second at –4, since kicks are agile like a fist."));
+  /* the review of the fix: a right answer that names the usual -5 beside the -4 is not marked; nor a curly apostrophe */
+  assert.ok(passes(gm, "Your call as GM. I'd make the second kick at –4, not the usual –5, since a kick is agile."));
+  assert.ok(passes(gm, "Your call as GM. I'd say second kick: the multiple attack penalty is −5 normally, but with agile it's −4."));
+  assert.ok(passes(rs, "No, it doesn’t take your multiple attack penalty."));
+  /* "once per round" is not in Assisted Recovery: the pattern stays as it was */
+  assert.ok(step("say-that-again", 1).never.some(re => re.test("That grants an extra flat check before the end of your turn, once per round.")));
+  /* a line that can fairly be read either way: no mark, whatever the check says, and it is still answered */
+  const fair = step("chat-closes-the-window", 3);
+  assert.equal(fair.forHer, "either");
+  let answered = 0;
+  const services = { gate: async () => ({ toAngel: false, complete: true, chat: false, question: "", dollars: 0 }), answer: async q => { answered++; q.onSay("Say my name when you need me.", { end: true }); return { say: "Say my name when you need me.", details: "", sources: [], rounds: 1, lookups: 0, failedLookups: 0, dollars: 0 }; } };
+  const run = await runSelfTest({ services, cases: [{ id: "x", steps: [{ say: "Fair enough.", replying: true, forHer: "either", chat: true, lookups: 0 }] }] });
+  assert.deepEqual([run.results[0].steps[0].notes, answered], [[], 1]);
+});

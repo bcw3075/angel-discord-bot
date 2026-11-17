@@ -996,6 +996,7 @@ export class Session {
     } else v = parseHold("", line.text);
     if (typeof v.dollars === "number") this.costs.claude += v.dollars;
     if (v.error) this.log.warn(`the check while she waits failed (${v.error}); the plain rule decided`);
+    else if (v.cutOff) this.log.warn(`the check while she waits ran past its limit; its verdict (${v.kind}) was written before the cut and used`);
     this.log.info(`check on ${line.speaker}'s line while she waits: ${{ go: "a go-ahead", wait: "hold on", stop: "a stop", ask: v.chat ? "a question, small talk" : "a question", none: "not for her" }[v.kind] ?? v.kind}`);
     if (this.ended) return;
     /* a verdict on a watch merged into a fuller question since acts on that one */

@@ -553,3 +553,10 @@ test("(an-15) a note on a typed answer takes its room from the answer: the page 
   assert.equal(cutWhole("ab😀", 3), "ab", "no half of an emoji");
   assert.equal(cutWhole("ab😀", 4), "ab😀");
 });
+
+/* 0.1.3, the self-test of 2026-11-15 read again against Archives of Nethys: two wrong side remarks, both numbers or limits */
+test("(an-4) her prompt: every number or limit must come from a page looked up for this question and fit the thing asked", () => {
+  const p = systemPrompt({});
+  assert.match(p, /Numbers, penalties, limits and how often something can be done[^\n]*must be on a page you looked up for this question and must fit the exact thing asked about/);
+  assert.match(p, /check those traits[^\n]*If you haven't looked it up, leave it out\./);
+});
