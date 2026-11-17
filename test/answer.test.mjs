@@ -559,4 +559,6 @@ test("(an-4) her prompt: every number or limit must come from a page looked up f
   const p = systemPrompt({});
   assert.match(p, /Numbers, penalties, limits and how often something can be done[^\n]*must be on a page you looked up for this question and must fit the exact thing asked about/);
   assert.match(p, /check those traits[^\n]*If you haven't looked it up, leave it out\./);
+  /* "only once per round" is in Assisted Recovery (Player Core pg. 445): her prompt must never call it a mistake */
+  assert.doesNotMatch(p, /once per round/i);
 });

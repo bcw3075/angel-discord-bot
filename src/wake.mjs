@@ -78,10 +78,13 @@ export function gateUser(contextLines, last, replying = false) {
 /* The model's reply → a decision. When it can't be read, fall back to the plain rule: her name first, then a request. */
 export function parseGate(text, lastLineText = "") {
   lastLineText = String(lastLineText).slice(0, 300); /* the plain rule only needs the start of the line */
-  const m = String(text).match(/\{[\s\S]*\}/);
-  if (m) {
+  /* the whole {...} span first; if words with braces follow it, the first object alone (as `holdJson`; review 19) */
+  for (const [i, re] of [/\{[\s\S]*\}/, /\{[^{}]*\}/].entries()) {
+    const m = String(text).match(re);
+    if (!m) continue;
     try {
       const j = JSON.parse(m[0]);
+      if (i > 0 && typeof j.to_angel !== "boolean") continue; /* the second pass only for a real verdict */
       return {
         toAngel: j.to_angel === true,
         complete: j.complete !== false,
@@ -97,6 +100,9 @@ export function parseGate(text, lastLineText = "") {
   return { toAngel: direct, complete: true, stop: isStopRequest(lastLineText), chat: false, ack: "", question: direct ? lastLineText : "", fallback: true };
 }
 
+/* the start of a reply that couldn't be used, for the self-test report: one line, short */
+export const replyStart = text => String(text).replace(/\s+/g, " ").trim().slice(0, 160);
+
 /* Ask the gate model. Returns the decision and what it cost. `lastText` is the line as the model sees it
    ("Mira: Angel, ..."); `bareText` is what was said, which the fallback rule reads (it looks for her name first). */
 export async function gate({ claude, model, contextText, lastText, bareText = lastText, replying = false }) {
@@ -111,9 +117,15 @@ export async function gate({ claude, model, contextText, lastText, bareText = la
       messages: [{ role: "user", content: gateUser(contextText, lastText, replying) }],
     }, { timeoutMs: 8000, retries: 1, maxWaitMs: 1500 });
     const text = (json.content ?? []).filter(b => b.type === "text").map(b => b.text).join("");
-    /* a reply cut off at the limit (a long question written back) has no JSON to read: the plain rule decides and the
-       log says why; the call was still paid for */
-    if (json.stop_reason === "max_tokens") return { ...parseGate("", bareText), error: "its reply was cut off", dollars: claude.cost(model, json.usage) };
+    /* a reply cut off at the limit: a whole verdict written before the cut is still used (marked, so the log shows it),
+       unless a second one began after it (it changed its mind); otherwise the plain rule decides and the log says
+       why (Test Angel.cmd, 2026-11-16: "Hold on, I wasn't done." ran past 600 tokens). The call was still paid for.
+       `replyStart` is for the self-test report only: the session's log keeps verdicts, never words. */
+    if (json.stop_reason === "max_tokens") {
+      const d = parseGate(text, bareText);
+      if (!d.fallback && (String(text).match(/"to_angel"/g)?.length ?? 0) === 1) return { ...d, cutOff: true, dollars: claude.cost(model, json.usage) };
+      return { ...parseGate("", bareText), error: "its reply was cut off", replyStart: replyStart(text), dollars: claude.cost(model, json.usage) };
+    }
     /* this call's own cost: a delta of the running total would be wrong while an answer runs at the same time */
     return { ...parseGate(text, bareText), dollars: claude.cost(model, json.usage) };
   } catch (e) {
@@ -205,7 +217,7 @@ export async function holdCheck({ claude, model, contextText, lastText, bareText
     if (json.stop_reason === "max_tokens") {
       /* a second "kind" after the first means it changed its mind before the cut: not trusted */
       const kinds = String(text).match(/"kind"/g)?.length ?? 0;
-      if (!holdJson(text) || kinds > 1) return { ...parseHold("", bareText), error: "its reply was cut off", dollars: claude.cost(model, json.usage) };
+      if (!holdJson(text) || kinds > 1) return { ...parseHold("", bareText), error: "its reply was cut off", replyStart: replyStart(text), dollars: claude.cost(model, json.usage) };
       return { ...parseHold(text, bareText), cutOff: true, dollars: claude.cost(model, json.usage) };
     }
     return { ...parseHold(text, bareText), dollars: claude.cost(model, json.usage) };

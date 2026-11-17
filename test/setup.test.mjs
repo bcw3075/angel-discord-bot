@@ -415,8 +415,13 @@ test("(an-10) the narrowed self-test patterns: right answers pass, the wrong one
   assert.ok(passes(gm, "Your call as GM. I'd make the second kick at –4, not the usual –5, since a kick is agile."));
   assert.ok(passes(gm, "Your call as GM. I'd say second kick: the multiple attack penalty is −5 normally, but with agile it's −4."));
   assert.ok(passes(rs, "No, it doesn’t take your multiple attack penalty."));
-  /* "once per round" is not in Assisted Recovery: the pattern stays as it was */
-  assert.ok(step("say-that-again", 1).never.some(re => re.test("That grants an extra flat check before the end of your turn, once per round.")));
+  /* "only once per round" IS in Assisted Recovery (Player Core pg. 445, AoN 2026-11-16): a right answer is not marked */
+  assert.ok(passes(step("say-that-again", 1), "DC 15. Help gets you an extra flat check right away, but only once per round."));
+  assert.ok(passes(step("spanish"), "Off-guard te da una penalización de circunstancia de -2 a la CA."), "the Spanish word for circumstance");
+  const grab = step("one-word");
+  assert.equal(passes(grab, "Roll Athletics against their Fortitude DC. Fail and nothing happens."), false, "a failure ends a grab you had");
+  assert.ok(passes(grab, "Roll Athletics against their Fortitude DC. On a failure, a grab you already had ends."));
+  assert.equal(passes(step("told-to-ignore-her-rules"), "Ask the GM. Fledgling Wings gives you a short burst of flying."), false, "a feat that doesn't exist");
   /* a line that can fairly be read either way: no mark, whatever the check says, and it is still answered */
   const fair = step("chat-closes-the-window", 3);
   assert.equal(fair.forHer, "either");
@@ -424,4 +429,13 @@ test("(an-10) the narrowed self-test patterns: right answers pass, the wrong one
   const services = { gate: async () => ({ toAngel: false, complete: true, chat: false, question: "", dollars: 0 }), answer: async q => { answered++; q.onSay("Say my name when you need me.", { end: true }); return { say: "Say my name when you need me.", details: "", sources: [], rounds: 1, lookups: 0, failedLookups: 0, dollars: 0 }; } };
   const run = await runSelfTest({ services, cases: [{ id: "x", steps: [{ say: "Fair enough.", replying: true, forHer: "either", chat: true, lookups: 0 }] }] });
   assert.deepEqual([run.results[0].steps[0].notes, answered], [[], 1]);
+  /* a cut-off check: the report shows how its reply began, so the next reading can tell why (2026-11-16) */
+  const cut = await runSelfTest({ services: { ...services, gate: async () => ({ toAngel: false, complete: true, error: "its reply was cut off", replyStart: "The speaker is", dollars: 0 }), hold: async () => ({ kind: "go", error: "its reply was cut off", replyStart: "Thinking about", dollars: 0 }) },
+    cases: [{ id: "c", steps: [{ say: "Hold on, I wasn't done.", forHer: false, checkOnly: true }, { say: "Hey Angel, quick one.", holdKind: "go" }] }] });
+  assert.match(cut.results[0].steps[0].notes.join("|"), /plain rule decided: its reply was cut off \(its reply began: "The speaker is"\)/);
+  assert.match(cut.results[0].steps[1].notes.join("|"), /its reply began: "Thinking about"/);
+  const used = await runSelfTest({ services: { ...services, gate: async () => ({ toAngel: false, complete: true, cutOff: true, dollars: 0 }), hold: async () => ({ kind: "go", cutOff: true, dollars: 0 }) },
+    cases: [{ id: "u", steps: [{ say: "Hold on, I wasn't done.", forHer: false, checkOnly: true }, { say: "Go ahead Angel.", holdKind: "go" }] }] });
+  assert.match(used.results[0].steps[0].notes.join("|"), /the check ran past its limit; its verdict, written before the cut, was used/);
+  assert.match(used.results[0].steps[1].notes.join("|"), /ran past its limit; its verdict, written before the cut, was used/);
 });

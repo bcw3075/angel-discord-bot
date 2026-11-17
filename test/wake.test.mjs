@@ -227,3 +227,20 @@ test("(wk-14) the plain rule's call words are quick on odd text", () => {
     assert.ok(performance.now() - t0 < 50);
   }
 });
+
+/* Test Angel.cmd, 2026-11-16: "Hold on, I wasn't done." ran the "was that for me?" check past its limit too */
+test("(wk-9) the 'was that for me?' check cut off: a whole verdict before the cut is used and marked; else the plain rule, with the reply's start for the report", async () => {
+  const reply = text => ({ cost: () => 0.0004, create: async () => ({ stop_reason: "max_tokens", content: [{ type: "text", text }], usage: {} }) });
+  const used = await gate({ claude: reply('{"to_angel": true, "complete": true, "stop": false, "chat": true, "question": "Hold on, I wasn\'t done."}\nThis line is a reply to her'), model: "m", lastText: "Rhea: Hold on, I wasn't done.", bareText: "Hold on, I wasn't done.", replying: true });
+  assert.deepEqual([used.toAngel, used.stop, used.fallback, used.cutOff, used.error], [true, false, false, true, undefined]);
+  const turned = await gate({ claude: reply('{"to_angel": true, "complete": true} no wait: {"to_angel": false, "comp'), model: "m", lastText: "Rhea: Hold on, I wasn't done.", bareText: "Hold on, I wasn't done.", replying: true });
+  assert.deepEqual([turned.fallback, turned.error, turned.cutOff], [true, "its reply was cut off", undefined], "it changed its mind: not trusted");
+  assert.equal(turned.replyStart, '{"to_angel": true, "complete": true} no wait: {"to_angel": false, "comp');
+  assert.equal(turned.dollars, 0.0004);
+  /* words with braces after a whole verdict don't hide it (review 19) */
+  const braces = await gate({ claude: reply('{"to_angel": true, "complete": true, "stop": false, "chat": true, "question": "x"}\nNote: the format {"..."} requires'), model: "m", lastText: "Rhea: hm", bareText: "hm", replying: true });
+  assert.deepEqual([braces.toAngel, braces.fallback, braces.cutOff], [true, false, true]);
+  assert.equal(parseGate('{"nested": 1} and {"other": 2}', "Angel?").fallback, true, "the second pass takes only a real verdict");
+  const long = await gate({ claude: reply("x\n ".repeat(400)), model: "m", lastText: "Rhea: hm", bareText: "hm" });
+  assert.ok(long.replyStart.length <= 160 && !/\n/.test(long.replyStart), "one short line");
+});

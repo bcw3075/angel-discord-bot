@@ -533,6 +533,17 @@ test("the check is given the bare words for its fallback, and a failed check is 
   assert.ok(warnings.some(w => /check failed \(Claude answered 529\)/.test(w)));
 });
 
+test("(wk-9) a check that ran past its limit but wrote its verdict first is used, and the log says so, with no words", async () => {
+  const warnings = [];
+  const { s, voice, asked } = setup({ heard: ["Angel, what's a DC?"], gate: () => ({ toAngel: true, complete: true, stop: false, question: "What is a DC?", cutOff: true }) });
+  s.log = { ...s.log, warn: m => warnings.push(m) };
+  await s.start();
+  speech(voice, "p1"); await settle(); await s.answering;
+  assert.equal(asked.length, 1, "the verdict is acted on");
+  assert.ok(warnings.some(w => /"was that for me\?" check ran past its limit; its verdict, written before the cut, was used$/.test(w)));
+  assert.ok(!warnings.some(w => /DC/.test(w)), "no words in the log");
+});
+
 test("what a failed answer's rounds cost is counted; the cap is checked again before each answer", async () => {
   const { s, voice, posted } = setup({ heard: ["Angel, one?", "Angel, two?"], cfg: { maxSessionDollars: 0.5 } });
   s.answer = async () => { const e = new Error("boom"); e.dollars = 0.6; throw e; };

@@ -279,6 +279,7 @@ export class Session {
     if (typeof decision.dollars === "number") this.costs.claude += decision.dollars;
     if (decision.error) this.log.warn(`the "was that for me?" check failed (${decision.error}); the plain rule decided`);
     else if (decision.fallback) this.log.warn(`the "was that for me?" check gave a reply that couldn't be read; the plain rule decided`);
+    else if (decision.cutOff) this.log.warn(`the "was that for me?" check ran past its limit; its verdict, written before the cut, was used`);
     /* what the check decided goes in the log (no words, just the verdict), so a line she didn't answer can be explained */
     this.log.info(`check on ${line.speaker}'s line${wasNamed ? "" : " (a reply, no name)"}: ${decision.toAngel ? (decision.chat ? "for Angel, small talk" : decision.complete === false ? "for Angel, waiting for the rest" : "for Angel") : "not for Angel"}`);
     if (this.ended || this.stoppedSince(firstAt)) return;
