@@ -244,3 +244,7 @@ test("(wk-9) the 'was that for me?' check cut off: a whole verdict before the cu
   const long = await gate({ claude: reply("x\n ".repeat(400)), model: "m", lastText: "Rhea: hm", bareText: "hm" });
   assert.ok(long.replyStart.length <= 160 && !/\n/.test(long.replyStart), "one short line");
 });
+
+test("(wk-3) talk about her commands is not for her (live round 2026-11-16: 'So slash angel space I m' woke her)", () => {
+  assert.match(GATE_SYSTEM, /when they talk about her commands \("type slash angel join", "do \/angel iam and your name"/);
+});

@@ -90,8 +90,8 @@ nothing from her: defaults fill the gap.
 | deepgram | `docs/features/deepgram.md` | Choose Voice.cmd, src/stt.mjs, src/tts.mjs, src/speech.mjs | 5 |
 | discord | `docs/features/discord.md` | src/bot.mjs, src/commands.mjs | 10 |
 | floor | `docs/features/floor.md` | src/floor.mjs | 2 |
-| session | `docs/features/session.md` | src/session.mjs | 14 |
-| setup | `docs/features/setup.md` | Install Angel.cmd, Test Angel.cmd, src/selftest.mjs, src/config.mjs, src/log.mjs, src/setup.mjs, src/check.mjs, src/services.mjs, src/main.mjs | 10 |
+| session | `docs/features/session.md` | src/session.mjs | 15 |
+| setup | `docs/features/setup.md` | Install Angel.cmd, Test Angel.cmd, src/selftest.mjs, src/config.mjs, src/log.mjs, src/setup.mjs, src/check.mjs, src/services.mjs, src/main.mjs | 11 |
 | transcript | `docs/features/transcript.md` | src/transcript.mjs | 3 |
 | voice | `docs/features/voice.md` | src/voice.mjs, src/capture.mjs, src/audio.mjs | 6 |
 | wake | `docs/features/wake.md` | src/wake.mjs | 9 |

@@ -32,6 +32,8 @@ export class Session {
     this.pending = new Map();   /* userId → { text, at, timer }: "Angel?" with the question still to come */
     this.checking = new Map();  /* userId → lines said while the check on their last line is still running */
     this.costs = { claude: 0, stt: 0, tts: 0 };
+    this.names = new Set(); /* who has spoken this session, for the transcriber */
+    this.ownRecent = []; /* her quick reactions and "I'm ready" lines as they are spoken, for the echo test (review 20) */
     this.counts = { pieces: 0, skipped: 0, questions: 0, gateChecks: 0, merged: 0, held: 0, letGo: 0 };
     /* each speaker's reply not yet begun, so a line they add can be answered with it (see `ask`) */
     this.open = new Map();
@@ -161,7 +163,11 @@ export class Session {
     /* pieces are transcribed side by side, but one speaker's lines are taken in the order they were said: when the
        second half of a question came back first it had no name yet and was dropped, and the first half then waited
        for a rest that had already gone by */
-    const hearing = this.stt(piece.wav);
+    /* the names of the people heard so far go to the transcriber with her key terms, so they're spelled right
+       (live round 2026-11-16: a player's Discord name was heard as a campaign name from keyterms.txt) */
+    const speaking = this.speakerOf(userId)?.name;
+    if (speaking && speaking !== "Someone") this.names.add(speaking); /* not the stand-in for an unknown member (review 20) */
+    const hearing = this.stt(piece.wav, { names: [...this.names] });
     /* "Angel, stop" doesn't wait its turn behind an earlier piece still being transcribed */
     let stoppedEarly = false;
     hearing.then(h => { if (!this.ended && h?.text && isStopRequest(h.text)) { stoppedEarly = true; this.stop(startedAt); this.log.info(`${this.speakerOf(userId)?.name ?? "Someone"} said stop: she stops (heard at once)`); } }).catch(() => {});
@@ -197,6 +203,15 @@ export class Session {
   stoppedSince(at) { return this.lastStopAt > at; }
 
   /* `more` means this piece was cut off because the speaker has talked for maxUtteranceSeconds and is still talking */
+  /* her own recent words for the echo test: what she last said, and the quick reactions and "I'm ready" lines of the
+     last half minute, which never reach `lastSaid` while they play (review 20: "Angel's on it!" coming back through a
+     mic named her and didn't match her answer) */
+  ownWords() {
+    const since = this.now() - 30000;
+    this.ownRecent = this.ownRecent.filter(o => o.at >= since);
+    return [this.lastSaid ?? "", ...this.ownRecent.map(o => o.text)].join(" ").trim();
+  }
+
   async onLine(line, until = line.at, more = false, released = null) {
     if (isStopRequest(line.text)) { this.stop(line.at); this.log.info(`${line.speaker} said stop: she stops`); return; }
     const uid = line.userId;
@@ -226,18 +241,21 @@ export class Session {
       /* not for her by the usual rule, but a question of hers may be on its way: kept for a little while, so a "wait,
          hold on" heard before her answer is ready is judged when she holds it (review 9 of 0.1.3) */
       /* not her own voice coming back (review 10 of 0.1.3: her answer, echoed, was judged as "hold on") */
-      if (!(this.voice.inEchoWindow(line.at) && echoOf(line.text, this.lastSaid))) {
+      if (!(this.voice.inEchoWindow(line.at) && echoOf(line.text, this.ownWords()))) {
         if (this.watch && !this.watch.signal && this.sinceHeld(this.watch, line, until)) return this.onSince(this.watch, line, until, more);
         this.saidSince.push({ line, until, added: this.now(), more });
         while (this.saidSince.length > 20) this.saidSince.shift();
       }
       return;
     }
-    /* her own voice coming back through a microphone. A reply without her name gets a closer look instead of the plain
-       time rule: right after she stops is exactly when people answer her (2026-11-14: "Nice. And does that stack...?"
-       began 2 s after she finished and was dropped). It's an echo only if its words are hers. */
-    if (!waiting && !released && this.voice.inEchoWindow(line.at) && (byName || !replying || echoOf(line.text, this.lastSaid))) {
+    /* her own voice coming back through a microphone: an echo only if its words are hers. Not the plain time rule, for
+       a reply (2026-11-14: "Nice. And does that stack...?" began 2 s after she finished and was dropped) or a line
+       naming her (live round 2026-11-16: "Never mind, Angel" and "Hold on, Angel", said over her quick reaction and her
+       answer, were dropped as her own voice; one began before her answer did). */
+    if (!released && this.voice.inEchoWindow(line.at) && echoOf(line.text, this.ownWords())) {
       /* in the log, so a line she didn't answer can be explained */
+      /* also when a line of theirs waits for the rest: her echo from the same mic is not the rest of their question
+         (review 20: "Hold on, Angel." parked, then her own sentence joined to it and sent to the check) */
       if (byName) this.log.info(`${line.speaker}'s line naming her began while she was talking (or just after): taken as her own voice coming back, not answered`);
       return;
     }
@@ -509,6 +527,7 @@ export class Session {
          every time (Rhea, 2026-11-14: "the 'one sec, let me check' on every reply is getting repetitive") */
       const words = ack || ACKS[this.counts.questions % ACKS.length];
       ackText = words;
+      this.ownRecent.push({ text: words, at: this.now() });
       const made = this.tts(words);
       line = made.then(clips => { this.costs.tts += this.ttsCost(words); if (!this.ended && !this.stoppedSince(at)) this.voice.speak(clips); })
         .catch(() => { if (this.ackClips && !this.ended && !this.stoppedSince(at)) this.voice.speak(this.ackClips); });
@@ -911,6 +930,7 @@ export class Session {
         if (!f.busy()) return;
         cutDone = true;
         h.cutIn = qc.cutIn = got.text;
+        this.ownRecent.push({ text: got.text, at: this.now() });
         this.readies.push(got.text);
         if (this.readies.length > 10) this.readies.shift();
         const cutAt = this.now();

@@ -258,9 +258,68 @@ test("speech that began while she was talking is not taken as a question (her ow
   const { s, voice, gates } = setup({ heard: ["Angel says you are off-guard"] });
   await s.start();
   voice.echo = true;
+  s.lastSaid = "Off-guard, Angel says: you are off-guard against it.";
   speech(voice, "p1");
   await settle();
   assert.equal(gates.length, 0);
+});
+
+/* live round 2026-11-16: "Never mind, Angel" and "Hold on, Angel", said over her, were dropped as her own voice */
+test("a line naming her while she talks is her echo only if its words are hers: 'never mind, Angel' reaches the check and stops her", async () => {
+  const { s, voice, gates } = setup({ heard: ["Never mind, Angel.", "Hold on, Angel. One sec."], gate: ({ bareText }) => ({ toAngel: true, complete: true, stop: /never mind/i.test(bareText), chat: false, question: "" }) });
+  await s.start();
+  voice.echo = true;
+  s.lastSaid = "Frightened always comes with a number, and you take that much as a status penalty.";
+  speech(voice, "p1"); await settle();
+  assert.equal(gates.length, 1, "checked, not dropped");
+  assert.equal(gates[0].bareText, "Never mind, Angel.");
+  assert.ok(voice.stops >= 1, "the stop is acted on");
+  speech(voice, "p2"); await settle();
+  assert.equal(gates.length, 2, "'hold on, Angel' over her is checked too");
+});
+
+/* review 20 */
+test("(se-15) her echo from the same mic never joins a line of theirs waiting for the rest", async () => {
+  const { s, voice, gates } = setup({ heard: ["Hold on, Angel.", "Frightened always comes with a number, and you take that much as a status penalty."],
+    gate: ({ bareText }) => ({ toAngel: true, complete: !/^hold on/i.test(bareText), stop: false, chat: false, question: "" }) });
+  await s.start();
+  voice.echo = true;
+  s.lastSaid = "Frightened always comes with a number, and you take that much as a status penalty to all your checks.";
+  speech(voice, "p1"); await settle();
+  speech(voice, "p1"); await settle();
+  assert.equal(gates.length, 1, "only their own line was checked");
+  assert.ok(!gates.some(g => /Frightened/.test(g.bareText) || /Frightened/.test(g.lastText)), `her words never reach the check: ${gates.map(g => g.bareText).join(" | ")}`);
+});
+
+test("(se-15) an echo of her quick reaction or her 'I'm ready' that names her is still her echo", async () => {
+  const { s, voice, gates } = setup({ heard: ["Angel's on it, one sec."] });
+  await s.start();
+  voice.echo = true;
+  s.lastSaid = "Grabbed means you're off-guard and immobilized.";
+  s.ownRecent.push({ text: "Angel's on it, one sec!", at: Date.now() });
+  speech(voice, "p1"); await settle();
+  assert.equal(gates.length, 0);
+});
+
+test("the stand-in name for an unknown member is not sent to the transcriber", async () => {
+  const calls = [];
+  const { s, voice } = setup({ gate: () => ({ toAngel: false, complete: true, stop: false, question: "" }) });
+  s.speakerOf = () => ({ name: "Someone", role: "player" });
+  s.stt = async (wav, opts) => { calls.push(opts?.names ?? null); return { text: "hm", seconds: 1 }; };
+  await s.start();
+  speech(voice, "p1"); await settle();
+  assert.deepEqual(calls[0], []);
+});
+
+test("the transcriber is given the names of the people heard so far", async () => {
+  const calls = [];
+  const { s, voice } = setup({ gate: () => ({ toAngel: false, complete: true, stop: false, question: "" }) });
+  s.stt = async (wav, opts) => { calls.push(opts?.names ?? null); return { text: "So, Kestrel, your turn.", seconds: 1 }; };
+  await s.start();
+  speech(voice, "p1"); await settle();
+  speech(voice, "gm"); await settle();
+  assert.deepEqual(calls[0], ["Mira"]);
+  assert.deepEqual(calls[1], ["Mira", "Dana"]);
 });
 
 test("short or quiet sounds are skipped before anything is paid for", async () => {

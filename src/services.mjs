@@ -9,6 +9,19 @@ import { synthesize, chunkText } from "./tts.mjs";
 import { gate, holdCheck, readyLine } from "./wake.mjs";
 import { answerQuestion, systemPrompt } from "./answer.mjs";
 
+/* the table's key terms plus the names of the people heard this session: short names only, no repeats, within
+   Deepgram's limit (the file's terms first, so a crowd of names never pushes them out) */
+export function withNames(keyterms, names = [], max = 100) {
+  const seen = new Set(keyterms.map(t => t.toLowerCase()));
+  const extra = [];
+  for (const n of names) {
+    const t = String(n ?? "").trim();
+    if (!t || t.length > 40 || !/[a-z]/i.test(t) || seen.has(t.toLowerCase())) continue;
+    seen.add(t.toLowerCase()); extra.push(t);
+  }
+  return [...keyterms, ...extra].slice(0, max);
+}
+
 export function buildServices(cfg, { fetchImpl = fetch, dataDir = DATA_DIR } = {}) {
   const claude = new Claude({ apiKey: cfg.anthropicApiKey, prices: cfg.prices, fetchImpl });
   const aon = new Aon({ userAgent: cfg.aonUserAgent, fetchImpl, cacheFile: path.join(dataDir, "aon-cache.json") });
@@ -16,7 +29,7 @@ export function buildServices(cfg, { fetchImpl = fetch, dataDir = DATA_DIR } = {
   return {
     claude, aon,
     keytermCount: keyterms.length,
-    stt: wav => transcribe(wav, { apiKey: cfg.deepgramApiKey, model: cfg.sttModel, keyterms, fetchImpl }),
+    stt: (wav, { names = [] } = {}) => transcribe(wav, { apiKey: cfg.deepgramApiKey, model: cfg.sttModel, keyterms: withNames(keyterms, names), fetchImpl }),
     tts: async text => {
       const clips = [];
       for (const piece of chunkText(text)) clips.push(await synthesize(piece, { apiKey: cfg.deepgramApiKey, voice: cfg.ttsVoice, format: "ogg", fetchImpl }));
