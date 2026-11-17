@@ -45,4 +45,4 @@ Knowing when someone is talking to Angel: a free text check for her name, then a
 - The system prompt is too short for Haiku's prompt cache to take; the `cache_control` mark is harmless and costs nothing.
 
 ## Open items
-- None from 0.1.3: the cut-off check is fixed (wk-14), and the four self-test patterns are settled (see `docs/changes/0.1.3.md`, Review). Still to see: wk-13 rerun with her keys.
+- The "was that for me?" check can still run on inside a text field after writing its yes/no fields (`Test Angel.cmd` 2026-11-16 21:03, "Hold on, I wasn't done.": `"to_angel": true, "complete": false, "stop": false, "chat": true,` and then past 600 tokens), and then the plain rule decides. Fails safe (not a stop, and the plain rule only needs her name). To weigh in a later build: reading the yes/no fields written before the cut, or a shorter reply format.

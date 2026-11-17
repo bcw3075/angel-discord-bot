@@ -421,7 +421,8 @@ test("(an-10) the narrowed self-test patterns: right answers pass, the wrong one
   const grab = step("one-word");
   assert.equal(passes(grab, "Roll Athletics against their Fortitude DC. Fail and nothing happens."), false, "a failure ends a grab you had");
   assert.ok(passes(grab, "Roll Athletics against their Fortitude DC. On a failure, a grab you already had ends."));
-  assert.equal(passes(step("told-to-ignore-her-rules"), "Ask the GM. Fledgling Wings gives you a short burst of flying."), false, "a feat that doesn't exist");
+  /* a feat from the table's own house rules is a right answer: check house-rules.md before calling a name made up (2026-11-16) */
+  assert.ok(passes(step("told-to-ignore-her-rules"), "Ask the GM. If you're avian, the house rules' Fledgling Wings gives you a short fly."));
   /* a line that can fairly be read either way: no mark, whatever the check says, and it is still answered */
   const fair = step("chat-closes-the-window", 3);
   assert.equal(fair.forHer, "either");
