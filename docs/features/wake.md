@@ -42,3 +42,5 @@ Knowing when someone is talking to Angel: a free text check for her name, then a
 - The system prompt is too short for Haiku's prompt cache to take; the `cache_control` mark is harmless and costs nothing.
 
 ## Open items
+- The check while she waits can run out of room (2026-11-15 self-test: "Hey Angel, quick one." stopped at max_tokens 400), and the plain rule then reads a two-word call with no "?" as go. To fix in 0.1.3 before its live round: the plain rule treats a bare call (her name plus filler such as "quick one", "quick question", "got a sec") as ask, only the start; weigh a larger limit or a shorter reply format; a test for each, each checked by breaking its fix; then rerun `Test Angel.cmd` (wk-13).
+- Self-test patterns to narrow (2026-11-15): `say-that-again` never /once (per|a|each) round/ also catches right answers; `her-judgment-no-rule-at-all` want words miss a right suggestion; `joined-remark-and-question` never /takes the penalty/ too wide; `chat-closes-the-window` last line may be read not for Angel.
