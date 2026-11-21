@@ -271,11 +271,12 @@ test("a line naming her while she talks is her echo only if its words are hers: 
   voice.echo = true;
   s.lastSaid = "Frightened always comes with a number, and you take that much as a status penalty.";
   speech(voice, "p1"); await settle();
-  assert.equal(gates.length, 1, "checked, not dropped");
-  assert.equal(gates[0].bareText, "Never mind, Angel.");
+  /* since the short round of 2026-11-21 a stop with her name last is a stop at once, before any check */
+  assert.equal(gates.length, 0, "not dropped as her echo: stopped at once, no check needed");
   assert.ok(voice.stops >= 1, "the stop is acted on");
   speech(voice, "p2"); await settle();
-  assert.equal(gates.length, 2, "'hold on, Angel' over her is checked too");
+  assert.equal(gates.length, 1, "'hold on, Angel' over her is checked, not dropped");
+  assert.equal(gates[0].bareText, "Hold on, Angel. One sec.");
 });
 
 /* review 20 */

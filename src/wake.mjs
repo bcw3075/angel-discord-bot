@@ -12,6 +12,9 @@ const STOP_WORDS = String.raw`(?:stop|quiet|hush|shush|enough|that'?s enough|be 
    word and the words after it are counted in code: a pattern that also matched the tail backtracked exponentially
    on a typed run of apostrophes and froze the bot (second review, 2026-11-13). */
 const STOP_HEAD = new RegExp(String.raw`${LEAD}${NAME}(?![a-z'])[\s,.!?-]*(?:please[\s,]+)?${STOP_WORDS}\b`, "i");
+/* the same with her name last and nothing else: "Never mind, Angel." (short round of 2026-11-21: said over her answer,
+   it waited 5 s for the model check and she had finished by then) */
+const STOP_TAIL = new RegExp(String.raw`${LEAD}(?:please[\s,]+)?${STOP_WORDS}(?:[\s,]+(?:please|now))?[\s,.!?-]+${NAME}[\s,.!?]*$`, "i");
 const STOP_MAX_CHARS = 120;
 
 export function mentionsAngel(text) {
@@ -22,6 +25,7 @@ export function mentionsAngel(text) {
 export function isStopRequest(text) {
   const t = String(text).trim();
   if (t.length > STOP_MAX_CHARS) return false;
+  if (STOP_TAIL.test(t)) return true;
   const m = STOP_HEAD.exec(t);
   if (!m) return false;
   return (t.slice(m[0].length).match(/[a-z0-9']+/gi) ?? []).length <= 3;

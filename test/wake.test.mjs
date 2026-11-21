@@ -57,6 +57,9 @@ test("when the gate model can't be reached the fallback still decides", async ()
 test("a stop is her name first and little after it; a question or the story after a stop word is not", () => {
   for (const t of ["Angel, never mind that, how does flanking work?", "Angel, enough damage to drop it?", "Angel stop. What does stunned do?", "the angel, quiet as death, raises its sword"]) assert.equal(isStopRequest(t), false, t);
   for (const t of ["okay Angel, stop", "Angel, that's enough, thank you", "Angel stop please", "Angel, stop!"]) assert.equal(isStopRequest(t), true, t);
+  /* her name last (short round of 2026-11-21) */
+  for (const t of ["Never mind, Angel.", "stop, Angel", "Okay, that's enough, Angel!", "never mind now, angel", "Please stop, Angela."]) assert.equal(isStopRequest(t), true, t);
+  for (const t of ["Never mind, Angel, how does flanking work?", "I said stop the angel", "Stop the ritual, Angel?", "never mind the angel", "stop"]) assert.equal(isStopRequest(t), false, t);
 });
 
 test("when the check can't be reached, the fallback reads what was said, not the speaker's name before it", async () => {
