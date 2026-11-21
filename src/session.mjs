@@ -317,6 +317,12 @@ export class Session {
        15 of 0.1.3: a "forget it" meant for Mira's answer, already dropped, dropped Sam's next, or everything) */
     let owner = aStop ? this.watchOf({ ...line, at: firstAt }, until) : null;
     while (owner?.next) owner = owner.next; /* merged since: the fuller question's watch */
+    /* begun before that question was said: not a stop for it (field test 2026-11-21, as in onHeldLine). Judged by the
+       piece that holds it, the one `stop()` below is given, so the stop it becomes is older than the question and
+       leaves it alone (review of the fix: by the talk's start, a long talk's stop went global and dropped more) */
+    /* and, as there, nothing else: no global stop that would drop an earlier question still waiting, clear calls
+       waiting for their rest, or open a reply window (review 22) */
+    if (owner && !(line.at > owner.at)) { this.log.info(`${line.speaker}'s line began before ${owner.asker}'s question: not a stop for it`); owner = null; watchStopped = true; }
     if (owner && uid !== owner.userId && (owner === h2 ? !owner.signal || owner.signal === "stop" : owner.signal === "stop")) {
       if (!owner.signal) { this.log.info(`check on ${line.speaker}'s line: read as "stop" for ${owner.asker}'s answer`); owner.poke("stop"); }
       watchStopped = true;
@@ -326,7 +332,7 @@ export class Session {
         /* the usual check said it isn't for her: it may still be "hold on", never a question (review 14 of 0.1.3: a
            reply it declined was asked anyway) */
         /* (only what the check saw: what they added while it ran may still be a question, review 15) */
-        return this.onHeldLine(h2, { ...line, at: firstAt, text: all }, until, { noAsk: !decision.toAngel && !later.length });
+        return this.onHeldLine(h2, { ...line, at: firstAt, text: all }, until, { noAsk: !decision.toAngel && !later.length, pieceAt: line.at });
       }
       if (uid !== h2.userId) h2.poke("go");
     }
@@ -395,10 +401,10 @@ export class Session {
       kept.timer = setTimeout(() => this.releaseHold(uid, "the rest never came"), holdMs);
       kept.timer.unref?.();
       this.pending.set(uid, kept);
-      return this.onHeldLine(h, { ...line, at: firstAt, text: all }, until, { partial: true });
+      return this.onHeldLine(h, { ...line, at: firstAt, text: all }, until, { partial: true, pieceAt: line.at });
     }
     if (before && !released) { this.pending.delete(uid); clearTimeout(before.timer); }
-    return this.onHeldLine(h, { ...line, at: firstAt, text: all }, until, { noAsk: noAsk && !before });
+    return this.onHeldLine(h, { ...line, at: firstAt, text: all }, until, { noAsk: noAsk && !before, pieceAt: line.at });
   }
 
   /* a held piece of a long question whose rest didn't come as a line: checked and answered as it stands */
@@ -764,7 +770,8 @@ export class Session {
        counts, review 8 of 0.1.3); anything else ends the wait, and the first one stands */
     h.poke = reason => {
       if (h.signal) return;
-      if (reason === "wait") { h.mode = "invite"; h.goAsked = false; h.waiter?.wake("wait"); return; }
+      /* a "hold on" also takes back an invitation carried from a merge (review 22 of 0.1.3) */
+      if (reason === "wait") { h.mode = "invite"; h.goAsked = false; h.goCarried = false; h.waiter?.wake("wait"); return; }
       if (reason === "go") {
         if (!h.ready) { if (h.mode === "invite") h.mode = "gap"; return; }
         h.goAsked = true; kicked("go"); h.waiter?.wake("go"); return;
@@ -784,6 +791,7 @@ export class Session {
     while (link?.replacement?.entry && link.replacement.entry !== qc.entry) link = link.replacement.entry;
     if (from && link?.replacement?.entry === qc.entry) {
       if (from.mode === "invite") h.mode = "invite";
+      if (from.goCarried) { h.mode = "gap"; h.goCarried = true; }
       if (from.named) h.named = new Set(from.named);
       from.next = h;
     }
@@ -853,6 +861,7 @@ export class Session {
     if (h.signal) { this.endWatch(h); return this.held(h); }
     if (!busyAtStart && h.mode !== "invite" && !this.unheard(qc.at)) { this.endWatch(h); return "go"; }
     h.ready = true;
+    if (h.goCarried) h.goAsked = true;
     h.since = this.now();
     this.holding = h;
     this.counts.held++;
@@ -887,7 +896,7 @@ export class Session {
       }));
     let readyDone = false;
     const ready = () => { const p = makeReady(); p.then(() => { readyDone = true; }, () => { readyDone = true; }); return p; };
-    if (busyAtStart) ready().catch(() => {});
+    if (busyAtStart && !h.goCarried) ready().catch(() => {});
     /* a go-ahead came: she goes once nothing said is unheard; null when a "hold on" took it back or time ran out */
     const goNow = async () => {
       while (h.goAsked && !h.signal && !this.ended) {
@@ -901,6 +910,9 @@ export class Session {
       return null;
     };
     try {
+      /* 0. invited as the question was finished: no wait for a pause, no cut-in */
+      if (h.goCarried && await goNow()) return "go";
+      if (h.signal) return this.held(h);
       /* 1. a moment for a natural pause */
       let r = h.mode === "invite" ? "wait" : await wait(pauseMs, { maxMs: Math.min(this.cfg.busyFirstWaitMs, left()), blocked: () => this.unheard(h.at) });
       if (r === "quiet") { this.log.info(`a pause came: ${who}'s answer goes ahead`); return "go"; }
@@ -1002,7 +1014,8 @@ export class Session {
   }
 
   /* A line said while she holds an answer: a go-ahead, a "hold on", a stop, a question, or nothing for her. */
-  async onHeldLine(h, line, until, { partial = false, noAsk = false } = {}) {
+  /* `pieceAt`: when the piece being judged began (`line.at` is when their whole talk began, for a long one) */
+  async onHeldLine(h, line, until, { partial = false, noAsk = false, pieceAt = line.at } = {}) {
     const uid = line.userId;
     /* her own "I'm ready" coming back through a microphone */
     /* her own words for this question coming back through a microphone: the quick reaction or the "I'm ready" */
@@ -1037,11 +1050,22 @@ export class Session {
        answered (review of 0.1.3). After the hold it is a stop like any the check reads, with the reply window kept. */
     /* a second "never mind" about an answer already dropped does nothing more (review 14 of 0.1.3: it became a global
        stop and dropped another player's waiting question) */
+    /* a stop that began before the question was said is about something earlier, even if it ended after the question
+       began (field test 2026-11-21: "Thank you, Angel. You're all set." for the last answer, said over the start of
+       the next question, dropped it). Judged by the piece that holds the stop: a long talk begun before the question
+       can still say "never mind" after it (review of the fix) */
+    if (v.kind === "stop" && !(pieceAt > h.at)) { this.log.info(`${line.speaker}'s line began before the question: not a stop for it`); return; }
     if (v.kind === "stop") { if (live) h.poke("stop"); else if (h.signal !== "stop") this.stop(line.at, { keepReplyWindow: true }); return; }
     /* only the start of a question, the rest still to come ("Angel, about the grab,"): kept as a call is, so the rest
        joins it (review 12 of 0.1.3: it was asked on its own, half a question) */
     const callOnly = v.kind === "ask" && v.complete === false && !partial;
-    if (v.kind === "go" || callOnly) {
+    /* the asker finishes the question and invites her in the same line ("... so can I go back to it? Now you can
+       speak."): merged like more to the question, not a go-ahead for the half she holds (field test 2026-11-21) */
+    const goWithMore = v.kind === "go" && v.adds === true && !partial && live && uid && uid === h.userId && h.via === "voice" && !!h.entry && !this.stoppedSince(h.at);
+    /* the same when it can't be merged (a typed question held, or a merge already under way): the held answer is
+       released and the added words asked after it, as an ask is, not lost (review of the fix) */
+    const goThenAsk = v.kind === "go" && v.adds === true && !partial && !goWithMore && !noAsk && uid && uid === h.userId;
+    if ((v.kind === "go" && !goWithMore && !goThenAsk) || callOnly) {
       if (live && !callOnly) h.poke("go");
       /* "Angel?" from someone else may be a call with their question still to come: kept, as any "Angel?" is
          (review of 0.1.3: the question said next had no name and was dropped) */
@@ -1054,12 +1078,12 @@ export class Session {
     }
     if (v.kind === "wait") { if (live) h.poke("wait"); return; }
     /* a long talk still going on: only a go-ahead, "hold on" or a stop counts yet; a question waits for the rest */
-    if (partial || v.kind !== "ask") return;
+    if (partial || (v.kind !== "ask" && !goWithMore && !goThenAsk)) return;
     /* the asker adds to their question: one fresh answer to all of it, in this one's place (Rhea, d-7 and d-6) */
-    if (live && uid && uid === h.userId && h.via === "voice" && h.entry && !this.stoppedSince(h.at)) {
+    if ((v.kind === "ask" || goWithMore) && live && uid && uid === h.userId && h.via === "voice" && h.entry && !this.stoppedSince(h.at)) {
       this.counts.questions++;
       this.counts.merged++;
-      this.log.info(`${line.speaker} said more while she waited: answering it all as one`);
+      this.log.info(`${line.speaker} said more while she waited${goWithMore ? " and invited her" : ""}: answering it all as one`);
       const merged = this.withEntry(uid, {
         question: `${h.question} ${line.text}`,
         meaning: h.meaning || v.question ? `${h.meaning || h.question} ${v.question || line.text}` : "",
@@ -1070,6 +1094,9 @@ export class Session {
       /* the held answer is dropped even if still being written, and its post taken away: one answer to all of it */
       h.entry.mergedAway = true;
       h.entry.drop();
+      /* they invited her as they finished: the merged answer goes once it is ready, without waiting again for a gap
+         or a go-ahead, and their invitation takes back an earlier "hold on" (review of the fix) */
+      if (goWithMore) { h.mode = "gap"; h.goCarried = true; }
       h.poke("merge");
       return;
     }

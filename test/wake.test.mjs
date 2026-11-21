@@ -129,7 +129,12 @@ test("their own words after a stop are cut out for the question that follows it"
 });
 
 test("(wk-11) while she waits: the check's verdict is read; an unreadable one falls back to the plain rule", () => {
-  assert.deepEqual(parseHold('```json\n{"kind": "go", "chat": false, "question": ""}\n```'), { kind: "go", chat: false, complete: true, question: "", fallback: false });
+  assert.deepEqual(parseHold('```json\n{"kind": "go", "chat": false, "question": ""}\n```'), { kind: "go", chat: false, complete: true, adds: false, question: "", fallback: false });
+  /* a go-ahead that also finishes the question (field test 2026-11-21); only a go-ahead can add */
+  assert.equal(parseHold('{"kind": "go", "adds": true, "question": "Can I go back to it?"}').adds, true);
+  assert.equal(parseHold('{"kind": "go", "adds": "yes"}').adds, false, "only a real true");
+  assert.equal(parseHold('{"kind": "wait", "adds": true}').adds, false);
+  assert.match(HOLD_SYSTEM, /"adds": true or false/);
   /* only the start of a question, the rest to come (review 12 of 0.1.3); a missing flag means whole */
   assert.equal(parseHold('{"kind": "ask", "complete": false, "question": ""}').complete, false);
   assert.equal(parseHold("", "Angel, what about flanking?").complete, true);

@@ -262,6 +262,15 @@ export const CASES = [
     { say: "Angel, about the grab,", holdKind: "ask", holdComplete: false },
     { say: "Hey Angel, quick one.", holdKind: "ask", holdComplete: false },
   ] },
+  /* the field test of 2026-11-21: the asker finishing the question and inviting her in one line is more to the
+     question, not a go-ahead for the half she holds; a guess about the answer, said while she rechecks, is not a stop */
+  { id: "hold-go-with-more", as: { name: "Mira", role: "player" }, waiting: { asker: "Mira", question: "So if I take the cleric dedication first, and then two other feats,", cutIn: "Got it, whenever you're ready." }, steps: [
+    { say: "Wait, I'm not done. So after that, can I go back and take more cleric feats later? Okay, now you can speak.", holdKind: "go", holdAdds: true },
+  ] },
+  { id: "hold-guess-is-not-stop", as: { name: "Dana", role: "GM" }, waiting: { asker: "Dana", question: "Are there any spellcasting classes that don't reach 9th-rank spells?", cutIn: "Dana, I've already got that one lined up!" }, before: ["Dana (GM): Angel, can you go back and check that now?", "Dana (GM): Yeah."], steps: [
+    { say: "I have a feeling they fixed that little problem.", holdKind: "none" },
+    { say: "Right, go for it.", holdKind: "go", holdAdds: false },
+  ] },
   { id: "ready-words", steps: [{ say: "Angel, what does grabbed do?", ready: true }] },
 ];
 
@@ -294,13 +303,14 @@ async function runStep({ services, asker, role = "GM", step, lines, now, previou
     const t0 = now();
     try {
       const v = await services.hold({ contextText: lines.slice(-7).join("\n"), lastText: `${asker}: ${step.say}`, bareText: step.say, asker: waiting?.asker ?? "someone", question: waiting?.question ?? "", cutIn: waiting?.cutIn ?? "", ready: waiting?.ready !== false });
-      r.hold = { ms: now() - t0, kind: v.kind, complete: v.complete !== false, question: v.question ?? "", error: v.error ?? "", dollars: v.dollars ?? 0 };
+      r.hold = { ms: now() - t0, kind: v.kind, complete: v.complete !== false, adds: v.adds === true, question: v.question ?? "", error: v.error ?? "", dollars: v.dollars ?? 0 };
       if (/^Claude answered 4/.test(v.error ?? "")) r.failed = `the check while she waits: ${v.error}`;
       else if (v.error) r.notes.push(`the check while she waits failed and the plain rule decided: ${v.error}${v.replyStart ? ` (its reply began: "${v.replyStart}")` : ""}`);
       else if (v.cutOff) r.notes.push("the check while she waits ran past its limit; its verdict, written before the cut, was used");
       /* only the start of a question: "ask" marked not complete, or a go-ahead (both keep it waiting for the rest) */
       if (step.holdComplete === false) { if (!(v.kind === "go" || (v.kind === "ask" && v.complete === false))) r.notes.push(`the check while she waits said "${v.kind}"${v.kind === "ask" ? " (a whole question)" : ""}, expected the start of a question`); }
       else if (v.kind !== step.holdKind) r.notes.push(`the check while she waits said "${v.kind}", expected "${step.holdKind}"`);
+      else if (typeof step.holdAdds === "boolean" && (v.adds === true) !== step.holdAdds) r.notes.push(`the check while she waits said the go-ahead ${v.adds ? "adds to" : "doesn't add to"} the question, expected ${step.holdAdds ? "it adds" : "it doesn't"}`);
     } catch (e) { r.hold = { ms: now() - t0, error: e.message, dollars: 0 }; r.failed = `the check while she waits: ${e.message}`; }
     lines.push(`[${clock(now())}] ${asker}${role === "GM" ? " (GM)" : ""}: ${step.say}`);
     return r;
@@ -408,7 +418,7 @@ export function reportText({ results, summary }, { startedAt, version = "", mode
       for (const n of r.notes) out.push(`LOOK AT: ${n}`);
       const k = r.check;
       if (k && !k.threw) out.push(`Check: ${k.toAngel ? (k.complete ? (k.chat ? "for Angel, small talk" : "for Angel") : "for Angel, waiting for the rest") : "not for Angel"} in ${(k.ms / 1000).toFixed(1)} s${k.question ? `; read as: ${k.question}` : ""}${k.ack ? `; her quick reaction: ${k.ack}` : ""}`);
-      if (r.hold && !r.hold.error) out.push(`Check while she waits: ${r.hold.kind}${r.hold.kind === "ask" && !r.hold.complete ? " (only the start)" : ""} in ${(r.hold.ms / 1000).toFixed(1)} s${r.hold.question ? `; read as: ${r.hold.question}` : ""}`);
+      if (r.hold && !r.hold.error) out.push(`Check while she waits: ${r.hold.kind}${r.hold.kind === "ask" && !r.hold.complete ? " (only the start)" : ""}${r.hold.adds ? " (and more to the question)" : ""} in ${(r.hold.ms / 1000).toFixed(1)} s${r.hold.question ? `; read as: ${r.hold.question}` : ""}`);
       if (r.ready) out.push(`Her "I'm ready" lines: ${r.ready.texts.map(t => `"${t}"`).join(", ")} (${(r.ready.ms / 1000).toFixed(1)} s for three)`);
       const a = r.answer;
       if (a && !a.error) {

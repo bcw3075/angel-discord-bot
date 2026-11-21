@@ -396,6 +396,16 @@ test("(st-12) the self-test's busy-table cases: the check while she waits agains
   assert.match(text, /Her "I'm ready" lines: "Got it/);
 });
 
+test("(st-12) a go-ahead that should (or shouldn't) add to the question is marked when the check reads it the other way", async () => {
+  const { runSelfTest, reportText, CASES } = await import("../src/selftest.mjs");
+  assert.ok(CASES.some(c => c.steps.some(s => s.holdAdds === true)) && CASES.some(c => c.steps.some(s => s.holdAdds === false)), "both ways are tried");
+  const services = { hold: async a => ({ kind: "go", adds: /speak/.test(a.bareText) === false, dollars: 0.001 }) };
+  const run = await runSelfTest({ services, cases: [{ id: "g", waiting: { asker: "Mira", question: "Q?", cutIn: "" }, steps: [{ say: "and later? Now you can speak.", holdKind: "go", holdAdds: true }, { say: "Go for it.", holdKind: "go", holdAdds: false }] }] });
+  assert.match(run.results[0].steps[0].notes.join("|"), /doesn't add to the question, expected it adds/);
+  assert.match(run.results[0].steps[1].notes.join("|"), /adds to the question, expected it doesn't/);
+  assert.match(reportText(run, { startedAt: Date.now() }), /Check while she waits: go \(and more to the question\)/);
+});
+
 /* 0.1.3, the self-test of 2026-11-15: three patterns judged right answers wrong, and one wrong answer went unmarked */
 test("(an-10) the narrowed self-test patterns: right answers pass, the wrong ones are still caught", async () => {
   const { runSelfTest, CASES } = await import("../src/selftest.mjs");

@@ -1241,3 +1241,207 @@ test("(se-12) a question stopped while she looks it up ends its watch: later tab
   assert.equal(x.holds.length, 0, "nothing paid for table talk after it");
   assert.deepEqual(answers(x.voice), []);
 });
+
+/* ---- the field test of 2026-11-21 ---- */
+test("(se-16) the asker finishes the question and invites her in one line ('... now you can speak'): one fresh answer to all of it, not the held half", async () => {
+  const x = await started(setup({ heard: ["Angel, so if you take cleric first,", "and then two feats, can you go back to it? Now you can speak."], hold: a => (/speak/.test(a.bareText) ? { kind: "go", adds: true, question: "Can you go back to the cleric archetype after two feats?" } : { kind: "none" }) }));
+  x.voice.talk("p2", true, Date.now() - 500);
+  speech(x.voice, "p1");
+  await until(() => x.voice.spoken.length === 1);
+  speech(x.voice, "p1");
+  await until(() => x.asked.length === 2);
+  stops(x, "p2");
+  await until(() => answers(x.voice).length === 1);
+  await x.s.answering;
+  assert.equal(x.asked[1].question, "Angel, so if you take cleric first, and then two feats, can you go back to it? Now you can speak.", "their words joined");
+  assert.deepEqual(answers(x.voice), ["clip:Answer to: Angel, so if you take cleric first, and then two feats, can you go back to it? Now you can speak."], "only the fresh answer is spoken");
+  assert.equal(x.s.counts.merged, 1);
+});
+
+test("(se-16) a go-ahead that adds nothing still releases the held answer as it is", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Okay, go ahead."], hold: a => (/go ahead/.test(a.bareText) ? { kind: "go", adds: false } : { kind: "none" }) }));
+  x.voice.talk("p2", true, Date.now() - 500);
+  speech(x.voice, "p1");
+  await until(() => x.voice.spoken.length === 1);
+  speech(x.voice, "p1");
+  await until(() => answers(x.voice).length === 1);
+  await x.s.answering;
+  assert.equal(x.asked.length, 1, "nothing merged");
+  assert.deepEqual(answers(x.voice), ["clip:Answer to: Angel, what does grabbed do?"]);
+});
+
+test("(se-16) someone else's 'thanks, you're all set' that began before the new question doesn't drop it, though it ends after", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Thank you, Angel. You're all set."], hold: a => (/all set/.test(a.bareText) ? { kind: "stop" } : { kind: "none" }) }));
+  x.voice.talk("gm", true, Date.now() - 500);
+  const asked = Date.now();
+  speech(x.voice, "p1", asked);
+  await until(() => x.voice.spoken.length === 1);
+  /* began 0.3 s before the question, one second long */
+  speech(x.voice, "p2", asked - 300);
+  await until(() => x.holds.some(h => /all set/.test(h.bareText)));
+  await sleep(30);
+  stops(x, "gm");
+  await until(() => answers(x.voice).length === 1);
+  await x.s.answering;
+  assert.deepEqual(answers(x.voice), ["clip:Answer to: Angel, what does grabbed do?"]);
+});
+
+test("(se-16) someone else's stop said after the question still drops it", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "Never mind, we got it."], hold: a => (/never mind/i.test(a.bareText) ? { kind: "stop" } : { kind: "none" }) }));
+  x.voice.talk("gm", true, Date.now() - 500);
+  const asked = Date.now();
+  speech(x.voice, "p1", asked);
+  await until(() => x.voice.spoken.length === 1);
+  speech(x.voice, "p2", asked + 200);
+  await until(() => x.holds.some(h => /never mind/i.test(h.bareText)));
+  await sleep(30);
+  stops(x, "gm");
+  await sleep(400);
+  await x.s.answering;
+  assert.deepEqual(answers(x.voice), []);
+});
+
+test("(se-16) the same 'you're all set' read as a stop by the usual check, its verdict back once the new question is watched: the question is kept", async () => {
+  const x = await started(setup({
+    heard: ["Angel, what does grabbed do?", "Thank you, Angel. You're all set."],
+    gate: a => (/all set/.test(a.bareText) ? { toAngel: true, complete: true, stop: true, question: "" } : { toAngel: true, complete: true, stop: false, question: a.bareText }),
+  }));
+  const gate = x.s.gate;
+  /* the question's own check is still running when the thanks is heard, so the thanks goes to the usual check too */
+  x.s.gate = async a => { await sleep(/all set/.test(a.bareText) ? 250 : 100); return gate(a); };
+  x.voice.talk("gm", true, Date.now() - 500);
+  const asked = Date.now();
+  speech(x.voice, "p1", asked);
+  await sleep(5);
+  speech(x.voice, "p2", asked - 300);
+  await until(() => x.voice.spoken.length === 1);
+  await sleep(300);
+  stops(x, "gm");
+  await until(() => answers(x.voice).length === 1);
+  await x.s.answering;
+  assert.deepEqual(answers(x.voice), ["clip:Answer to: Angel, what does grabbed do?"]);
+});
+
+/* ---- the review of the field-test fixes ---- */
+test("(se-16) 'hold on', then the asker finishes and invites her: the merged answer is spoken at once, not held again and let go", async () => {
+  /* a long first wait for a pause, so "at once" is told apart from "after the first wait" */
+  const x = await started(setup({ cfg: { busyFirstWaitMs: 3000, busyMaxHoldMs: 6000 }, heard: ["Angel, so if you take cleric first,", "Hold on, Angel.", "and then two feats, can you go back to it? Now you can speak."],
+    hold: a => (/speak/.test(a.bareText) ? { kind: "go", adds: true, question: "Can you go back?" } : /Hold on/.test(a.bareText) ? { kind: "wait" } : { kind: "none" }) }));
+  x.voice.talk("p2", true, Date.now() - 500);
+  speech(x.voice, "p1");
+  await until(() => x.s.watch);
+  speech(x.voice, "gm");
+  await until(() => x.holds.length === 1);
+  await sleep(100);
+  speech(x.voice, "p1");
+  await until(() => x.asked.length === 2);
+  /* the table is still busy: without the carried invitation she would wait for a gap and let it go */
+  await until(() => answers(x.voice).length === 1, 1200);
+  await x.s.answering;
+  assert.deepEqual(answers(x.voice), ["clip:Answer to: Angel, so if you take cleric first, and then two feats, can you go back to it? Now you can speak."]);
+  assert.equal(x.s.counts.letGo, 0);
+  assert.equal(x.readies.length, 1, "no second 'I'm ready' written for the invited answer");
+});
+
+test("(se-16) a long talk begun before the question whose later piece says 'never mind, Angel' still drops it", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "so the dragon goes first and then", "never mind Angel, we've got it."],
+    hold: a => (/never mind/i.test(a.bareText) ? { kind: "stop" } : { kind: "none" }) }));
+  x.voice.talk("gm", true, Date.now() - 500);
+  const asked = Date.now();
+  speech(x.voice, "p1", asked);
+  await until(() => x.s.watch);
+  x.voice.emit("speech", { userId: "p2", packets: tonePackets(1), startedAt: asked - 500, final: false });
+  await until(() => x.holds.length === 1);
+  speech(x.voice, "p2", asked + 2000);
+  await until(() => x.holds.length === 2);
+  await sleep(30);
+  stops(x, "gm");
+  await sleep(600);
+  await x.s.answering;
+  assert.deepEqual(answers(x.voice), []);
+});
+
+test("(se-16) the usual check reads a stop in the last piece of a talk begun before the question: that answer is dropped, another player's question is still answered", async () => {
+  const x = await started(setup({ heard: ["Angel, what does grabbed do?", "so about that last answer of yours", "Angel, what does prone do?", "okay we're good, thanks Angel."],
+    hold: a => (/prone/.test(a.bareText) ? { kind: "ask", question: "What does prone do?" } : { kind: "none" }),
+    gate: a => (/we're good/.test(a.bareText) ? { toAngel: true, complete: true, stop: true, question: "" } : { toAngel: true, complete: true, stop: false, question: a.bareText }) }));
+  const ans = x.s.answer; x.s.answer = async q => { await sleep(600); return ans(q); };
+  x.s.replyTo = { userId: "p2", from: Date.now() - 1000, turn: 0 };
+  x.voice.talk("dm2", true, Date.now() - 500);
+  const asked = Date.now();
+  speech(x.voice, "p1", asked);
+  await until(() => x.s.watch);
+  x.voice.emit("speech", { userId: "p2", packets: tonePackets(1), startedAt: asked - 500, final: false });
+  await sleep(50);
+  speech(x.voice, "gm", asked + 1000);
+  await sleep(80);
+  speech(x.voice, "p2", asked + 2000);
+  await sleep(100);
+  stops(x, "dm2");
+  await until(() => answers(x.voice).length === 1, 4000);
+  await x.s.answering;
+  assert.deepEqual(answers(x.voice), ["clip:Answer to: Angel, what does prone do?"]);
+});
+
+test("(se-16) a typed question held, the asker's spoken go-ahead that adds: the held answer goes, then the added words are asked", async () => {
+  const x = await started(setup({ heard: ["and can I go back to it later? Now you can speak."],
+    hold: a => (/speak/.test(a.bareText) ? { kind: "go", adds: true, question: "Can I go back to it later?" } : { kind: "none" }) }));
+  x.voice.talk("p2", true, Date.now() - 500);
+  x.s.ask({ question: "What does the cleric dedication need?", asker: "Mira", role: "player", via: "text", at: Date.now(), userId: "p1", turn: 0, unnamed: false });
+  await until(() => x.s.holding);
+  speech(x.voice, "p1");
+  await until(() => x.asked.length === 2);
+  /* the table stays busy: only the go-ahead can release the held answer */
+  await until(() => answers(x.voice).length === 1, 1200);
+  assert.deepEqual(answers(x.voice), ["clip:Answer to: What does the cleric dedication need?"], "the held answer, released by the go-ahead");
+  /* the added words wait for a gap of their own */
+  stops(x, "p2");
+  await until(() => answers(x.voice).length === 2, 3000);
+  await x.s.answering;
+  assert.equal(x.asked.length, 2, "the added words asked once");
+  assert.equal(x.asked[1].question, "and can I go back to it later? Now you can speak.");
+  assert.deepEqual(answers(x.voice), ["clip:Answer to: What does the cleric dedication need?", "clip:Answer to: and can I go back to it later? Now you can speak."], "the held answer first, then the added words");
+  x.s.end();
+});
+
+/* ---- review 22 ---- */
+test("(se-16) a 'hold on' said after the asker's invitation, while the merged answer is worked out, still holds her", async () => {
+  const x = await started(setup({ cfg: { busyMaxHoldMs: 4000 }, heard: ["Angel, so if you take cleric first,", "and then two feats, can you go back to it? Now you can speak.", "Hold on, Angel, one sec."],
+    hold: a => (/speak/.test(a.bareText) ? { kind: "go", adds: true, question: "Can you go back?" } : /Hold on/.test(a.bareText) ? { kind: "wait" } : { kind: "none" }) }));
+  const ans = x.s.answer;
+  x.voice.talk("p2", true, Date.now() - 500);
+  speech(x.voice, "p1");
+  await until(() => x.voice.spoken.length === 1);
+  x.s.answer = async q => { await sleep(500); return ans(q); };
+  speech(x.voice, "p1");
+  await until(() => x.s.watch?.goCarried && !x.s.watch.ready, 2000);
+  await sleep(50);
+  speech(x.voice, "gm");
+  await until(() => x.holds.length === 2);
+  await sleep(1000);
+  assert.equal(answers(x.voice).length, 0, "held by the later 'hold on'");
+  x.s.end();
+  await x.s.answering;
+});
+
+test("(se-16) the usual check's stop begun before the question leaves another player's earlier question waiting behind it alone", async () => {
+  const x = await started(setup({
+    heard: ["Angel, what does prone do?", "Angel, what does grabbed do?", "Thank you, Angel. You're all set."],
+    gate: a => (/all set/.test(a.bareText) ? { toAngel: true, complete: true, stop: true, question: "" } : { toAngel: true, complete: true, stop: false, question: a.bareText }),
+  }));
+  const gate = x.s.gate;
+  x.s.gate = async a => { await sleep(/prone/.test(a.bareText) ? 200 : /all set/.test(a.bareText) ? 300 : 50); return gate(a); };
+  x.s.replyTo = { userId: "p2", from: Date.now() - 1000, turn: 0 };
+  x.voice.talk("dm2", true, Date.now() - 500);
+  const asked = Date.now();
+  speech(x.voice, "gm", asked - 1000);
+  await sleep(5);
+  speech(x.voice, "p1", asked);
+  await sleep(5);
+  speech(x.voice, "p2", asked - 300);
+  await sleep(700);
+  stops(x, "dm2");
+  await until(() => answers(x.voice).length === 2, 4000);
+  await x.s.answering;
+  assert.deepEqual([...answers(x.voice)].sort(), ["clip:Answer to: Angel, what does grabbed do?", "clip:Answer to: Angel, what does prone do?"]);
+});

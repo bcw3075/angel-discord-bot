@@ -139,7 +139,7 @@ export async function gate({ claude, model, contextText, lastText, bareText = la
    Only lines said while she waits are checked, so it costs a fraction of a cent. */
 export const HOLD_SYSTEM = `You watch the transcript of a tabletop game played over voice chat. The table has an AI assistant called Angel who answers rules questions. The transcriber sometimes writes her name as Angela, Angie or angle. Angel is looking up the answer to a question, or has it ready and is waiting for a chance to say it while people talk (she may already have said, briefly, that she is ready).
 Decide what the LAST line means for her. Reply with JSON only, no other text:
-{"kind": "go" or "wait" or "stop" or "ask" or "none", "chat": true or false, "complete": true or false, "question": "..."}
+{"kind": "go" or "wait" or "stop" or "ask" or "none", "chat": true or false, "complete": true or false, "adds": true or false, "question": "..."}
 - go: someone invites her to speak now ("go ahead", "yeah?", "what'd you find?", "okay Angel", "sure, let's hear it", her name on its own).
 - wait: someone asks her to hold off for now but still wants the answer ("hold on", "not now", "one sec, Angel", "after this", "in a minute").
 - stop: they don't want the answer any more ("never mind", "forget it", "stop", "we sorted it out", "don't worry about it").
@@ -147,7 +147,8 @@ Decide what the LAST line means for her. Reply with JSON only, no other text:
 - none: anything else: the table talking among themselves, the game, narration, or talk about Angel that isn't to her. "angel" can be part of the game (an angel creature, an angelic heritage, a statue).
 - chat: for "ask", true when it is small talk that needs no rules lookup; false otherwise.
 - complete: for "ask", false when the line only starts a question that is still to come ("Angel, about the grab,", "Hey Angel, quick one"); true otherwise.
-- question: for "ask", what they want from her in one sentence of at most 40 words, written to stand on its own using the earlier lines, as the question itself ("Does that work with a shield?"); "" otherwise.
+- adds: for "go", true when the same line also finishes or adds to the question she is holding before inviting her ("...and can I go back to it after? Okay, now you can speak."); false otherwise.
+- question: for "ask", and for "go" with adds true, what they want from her in one sentence of at most 40 words, written to stand on its own using the earlier lines, as the question itself ("Does that work with a shield?"); "" otherwise.
 - Her name with only words that announce a question still to come ("Hey Angel, quick one", "Angel, quick question", "Angel, got a sec?") is "ask" with complete false, not "go".
 Reply with the JSON object alone, on one line, and nothing after it.`;
 
@@ -191,7 +192,7 @@ function callOnly(t) {
    else is a go-ahead, her name with a question is a question. */
 export function parseHold(text, lastLineText = "") {
   const j = holdJson(text);
-  if (j) return { kind: j.kind, chat: j.chat === true, complete: j.complete !== false, question: typeof j.question === "string" ? j.question.trim() : "", fallback: false };
+  if (j) return { kind: j.kind, chat: j.chat === true, complete: j.complete !== false, adds: j.kind === "go" && j.adds === true, question: typeof j.question === "string" ? j.question.trim() : "", fallback: false };
   const t = String(lastLineText).slice(0, 300);
   if (isStopRequest(t)) return { kind: "stop", chat: false, complete: true, question: "", fallback: true };
   if (!mentionsAngel(t)) return { kind: "none", chat: false, complete: true, question: "", fallback: true };
