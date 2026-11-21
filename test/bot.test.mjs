@@ -502,3 +502,18 @@ test("a join that fails after reusing today's thread leaves that thread alone (r
   assert.match(String(i.edits.at(-1)), /couldn't start the session/);
   clearInterval(bot.bookTimer);
 });
+
+test("going deaf: a rejoin tells the table; giving up ends the session with its own note (field test 2026-11-21)", async () => {
+  const w = world(), { bot } = makeBot();
+  await bot.onInteraction(interaction(w, "join"));
+  const v = FakeVoiceLink.made.at(-1);
+  const session = bot.sessions.get("g1").session;
+  let told = 0;
+  session.rejoined = async () => { told++; };
+  v.emit("rejoined", { count: 1 });
+  assert.equal(told, 1, "the session is told she rejoined");
+  v.emit("lost", "deaf");
+  for (let i = 0; i < 50 && bot.sessions.has("g1"); i++) await new Promise(r => setTimeout(r, 2));
+  assert.equal(bot.sessions.has("g1"), false, "the session ends");
+  assert.ok(w.sent.some(m => /kept losing the sound/.test(m.content)), "with the note for it");
+});

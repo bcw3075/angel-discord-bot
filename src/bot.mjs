@@ -274,7 +274,12 @@ export class AngelBot {
           dailyOver: () => this.dailyOver(),
           transcript: new Transcript({ dir: cfg.saveTranscript ? path.join(this.dataDir, "sessions", folderName(startedAt)) : null, startedAt, title: channel.guild.name }),
         });
-        voice.on("lost", () => { home.send("I lost the voice connection. `/angel join` brings me back.").catch(() => {}); this.end(i.guildId, "voice connection lost"); });
+        voice.on("lost", why => {
+          const text = why === "deaf" ? "I kept losing the sound even after rejoining, so I've left the voice channel. `/angel join` brings me back." : "I lost the voice connection. `/angel join` brings me back.";
+          home.send(text).catch(() => {});
+          this.end(i.guildId, why === "deaf" ? "kept going deaf" : "voice connection lost");
+        });
+        voice.on("rejoined", () => { session.rejoined().catch(e => log.warn(`after rejoining: ${e.message}`)); });
         this.sessions.set(i.guildId, { session, voiceChannelId: channel.id, textChannel, home, thread, emptyTimer: null });
         await session.start();
         const notice = `🎙️ I'm in **${channel.name}**, listening and transcribing so I can answer rules questions. Say "Angel, ..." or type \`@Angel ...\`. ` +

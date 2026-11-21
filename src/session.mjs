@@ -74,6 +74,23 @@ export class Session {
     }
   }
 
+  /* She went deaf and rejoined the voice channel (field test of 2026-11-21): the table is told, in writing and
+     briefly aloud, so a question asked while she couldn't hear is asked again */
+  async rejoined() {
+    if (this.ended) return;
+    this.post.send("🎙️ My hearing dropped out for a moment, so I rejoined the voice channel. If you asked me something just now, please ask again.")
+      .catch(e => this.log.warn(`couldn't say she had rejoined: ${e.message}`));
+    if (!this.cfg.speak || this.overCap()) return;
+    const words = "Sorry, I lost you for a second. I'm back.";
+    try {
+      const clips = await this.tts(words);
+      this.costs.tts += this.ttsCost(words);
+      if (this.ended) return;
+      this.ownRecent.push({ text: words, at: this.now() });
+      this.voice.speak(clips);
+    } catch (e) { this.log.warn(`couldn't say aloud that she was back: ${e.message}`); }
+  }
+
   spent() { return this.costs.claude + this.costs.stt + this.costs.tts; }
 
   /* Deepgram charges the key-term rate whenever key terms are sent, and "Angel" always is */

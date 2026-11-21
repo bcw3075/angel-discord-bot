@@ -1064,3 +1064,16 @@ test("a named question said in two pieces counts as named, not as a reply (revie
   assert.equal(s.replyTo?.turn, 0, "her name was said: the reply count starts again");
   s.end();
 });
+
+test("after she rejoins for going deaf, the table is told in writing and briefly aloud (field test 2026-11-21)", async () => {
+  const { s, voice, posted } = setup({ heard: [] });
+  await s.start();
+  const before = voice.spoken.length;
+  await s.rejoined();
+  assert.match(posted.at(-1).text, /hearing dropped out.*please ask again/);
+  assert.deepEqual(voice.spoken.slice(before).map(String), ["clip:Sorry, I lost you for a second. I'm back."]);
+  assert.ok(s.status().costs.tts > 0);
+  s.end?.("test");
+  await s.rejoined();
+  assert.equal(voice.spoken.length, before + 1, "nothing once the session has ended");
+});
