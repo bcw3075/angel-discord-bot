@@ -39,6 +39,12 @@ port or tunnel is needed.
    - `house-rules.md`: your house rules, in plain words. Angel reads them with every question. Players hear
      everything she says, so keep GM secrets out of it.
    - `keyterms.txt`: your campaign's names, one per line, so the transcriber spells them right.
+
+   **More than one table** (another game, another server, or a table where she only listens): give each table its own
+   folder in `tables\` instead, with a `table.json` saying which server and channels it serves, whether she answers
+   there, and its own `house-rules.md`, `keyterms.txt` and `speakers.json`. `examples/tables/README.md` says how.
+   Once `tables\` has a table, the files beside `package.json` move into the table that answers by themselves, and
+   `guildId` isn't used.
 7. Run `npm run check`. Every line should say OK (a NOTE is only for your information); a FAIL says what to do on
    the line under it. It also saves a sample of Angel's voice as data\check\angel-voice.wav.
 8. Optional: double-click **Test Angel.cmd** to put about ninety test questions through her with your own keys (no Discord
@@ -56,6 +62,9 @@ port or tunnel is needed.
 ## At the table
 - Join your voice channel, then type `/angel join` in the text channel where answers should go. Angel joins, starts a
   thread for the session (everything she posts goes there), tells everyone she's transcribing, and starts listening.
+  With tables, the channel you type it in picks the table; where no table is set up she says so and doesn't join.
+- At a table set to only listen (`"answers": false`) she says once in writing that she's listening and transcribing,
+  and never speaks or answers; a question typed to her gets one line saying so.
 - Ask her by name: **"Angel, ..."**. Or type `@Angel ...`, `Angel, ...` (with the comma) or `/angel ask`.
 - She answers in voice and in the text channel. **"Angel, stop"** or `/angel stop` cuts her off.
 - `/angel iam` sets the character name the transcript uses for you. `/angel optout` stops her transcribing your
@@ -66,11 +75,12 @@ port or tunnel is needed.
 ## Where things are kept
 - `config.json`: your keys and settings (written by setup). Never share it. If other people have their own accounts on
   this PC, keep the folder inside your user folder (for example C:\Users\<you>\AngelBot) so they can't read it.
-- data\sessions\<date>\transcript.md: each session's transcript, text only. No audio is ever saved.
+- data\sessions\<date>\transcript.md (with tables, data\sessions\<table>\<date>\transcript.md): each session's
+  transcript, text only. No audio is ever saved.
 - data\angel.log: what Angel did, with the keys blanked out.
 - data\spend.json: what today has cost so far, so the daily cap holds across restarts and crashes.
-- `speakers.json`: character names from `/angel iam`, and who is the GM. You can edit it by hand. Without an entry,
-  whoever can manage the Discord server counts as the GM.
+- `speakers.json` (with tables, one in each table's folder): character names from `/angel iam`, and who is the GM.
+  You can edit it by hand. Without an entry, whoever can manage the Discord server counts as the GM.
 
 ## Settings in config.json
 Change them with Notepad, then restart Angel. `true`, `false` and amounts go without quote marks, but `guildId`
@@ -82,7 +92,7 @@ be read. The most useful:
 - `maxSessionDollars`: she stops listening and answering for the rest of a session past this (default 5).
 - `maxDailyDollars`: the same for the whole day, everything included (default 10).
 - `guildId`: the server she answers in, saved by setup when she's in exactly one (step 5). Empty means every server
-  she's in.
+  she's in. Not used once there are tables (each `table.json` names its server).
 - `answerModel`: `claude-sonnet-5-5` by default; `claude-opus-5-5` is slower and costs about twice as much. This one
   isn't in the file until you add it: a new line such as `"answerModel": "claude-opus-5-5",` after the first `{`.
 - `speakAsWritten`: she starts speaking as soon as her first sentence is written, while she finishes the rest
@@ -96,8 +106,8 @@ be read. The most useful:
   session runs). Handy if another bot, such as Archivist, already keeps your session record.
 
 ## Updating
-Unzip the new version over the folder, keeping `config.json`, `data\`, `house-rules.md`, `keyterms.txt` and
-`speakers.json` (the zip holds none of them, so nothing of yours is overwritten). Run `npm install`, then restart
+Unzip the new version over the folder, keeping `config.json`, `data\`, `tables\`, `house-rules.md`, `keyterms.txt`
+and `speakers.json` (the zip holds none of them, so nothing of yours is overwritten). Run `npm install`, then restart
 Angel. The models and prices come with each version, unless you've put your own in `config.json`.
 
 ## Costs

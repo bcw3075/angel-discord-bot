@@ -24,9 +24,15 @@ export function echoOf(heard, said = "") {
 /* what a dropped reply's wait resolves to */
 const DROPPED = Symbol("dropped");
 
+/* what a question typed to her gets at a table where she only listens */
+export const LISTEN_ONLY_REPLY = "I'm only listening at this table, so I don't answer questions here. I'm keeping the transcript.";
+
 export class Session {
-  constructor({ cfg, voice, post, stt, tts, gate, answer, speakerOf, hold = null, readyLine = null, transcript = new Transcript(), keytermCount = 1, log, now = Date.now, newDecoder = createDecoder, dailyOver = () => false }) {
+  constructor({ cfg, voice, post, stt, tts, gate, answer, speakerOf, hold = null, readyLine = null, transcript = new Transcript(), keytermCount = 1, log, now = Date.now, newDecoder = createDecoder, dailyOver = () => false, listenOnly = false }) {
     Object.assign(this, { cfg, voice, post, stt, tts, gate, answer, speakerOf, hold, readyLine, transcript, keytermCount, log, now, newDecoder, dailyOver });
+    /* a table where she only listens (0.2.0, d-10): every piece is transcribed into the transcript and nothing else
+       happens: no "was that for me?" check, no answer, no lookups, never a word aloud */
+    this.listenOnly = listenOnly === true;
     this.startedAt = now();
     this.decoders = new Map();
     this.pending = new Map();   /* userId → { text, at, timer }: "Angel?" with the question still to come */
@@ -64,6 +70,7 @@ export class Session {
 
   async start() {
     this.voice.on("speech", seg => { this.onSpeech(seg).catch(e => this.log.warn(`a piece of speech was lost: ${e.message}`)); });
+    if (this.listenOnly) return;
     if (this.cfg.busyTable !== false) {
       this.floor = new Floor({ now: this.now, blipMs: this.cfg.busyBlipMs, ownSpeech: () => this.voice.ownSpeech?.() ?? this.voice.periods ?? [] });
       this.voice.on("talking", ({ userId, speaking, at }) => { try { this.floor.talk(userId, speaking, at); } catch (e) { this.log.warn(`the floor lost a speaking change: ${e.message}`); } });
@@ -78,9 +85,12 @@ export class Session {
      briefly aloud, so a question asked while she couldn't hear is asked again */
   async rejoined() {
     if (this.ended) return;
-    this.post.send("🎙️ My hearing dropped out for a moment, so I rejoined the voice channel. If you asked me something just now, please ask again.")
+    /* where she only listens, the note is only written (d-10: nothing aloud there) */
+    this.post.send(this.listenOnly
+      ? "🎙️ My hearing dropped out for a moment, so I rejoined the voice channel. A few seconds of talk may be missing from the transcript."
+      : "🎙️ My hearing dropped out for a moment, so I rejoined the voice channel. If you asked me something just now, please ask again.")
       .catch(e => this.log.warn(`couldn't say she had rejoined: ${e.message}`));
-    if (!this.cfg.speak || this.overCap()) return;
+    if (this.listenOnly || !this.cfg.speak || this.overCap()) return;
     const words = "Sorry, I lost you for a second. I'm back.";
     try {
       const clips = await this.tts(words);
@@ -169,6 +179,7 @@ export class Session {
 
   async hearPiece({ userId, packets, startedAt, final = true }) {
     if (this.ended || this.overCap()) return;
+    if (this.listenOnly) return this.hearOnly({ userId, packets, startedAt });
     const piece = packetsToWav(this.decoderFor(userId), packets, this.cfg);
     if (!piece.wav) {
       this.counts.skipped++;
@@ -205,6 +216,21 @@ export class Session {
     settled.then(() => { if (this.heardOrder.get(userId) === settled) this.heardOrder.delete(userId); });
     await turn;
     await handling;
+  }
+
+  /* Where she only listens: the piece is transcribed and written down, and that is all (no stop, no check, no reply).
+     Lines are put in the order they were said by the transcript itself. */
+  async hearOnly({ userId, packets, startedAt }) {
+    const piece = packetsToWav(this.decoderFor(userId), packets, this.cfg);
+    if (!piece.wav) { this.counts.skipped++; return; }
+    this.counts.pieces++;
+    const speaking = this.speakerOf(userId)?.name;
+    if (speaking && speaking !== "Someone") this.names.add(speaking);
+    const heard = await this.stt(piece.wav, { names: [...this.names] });
+    this.costs.stt += this.sttCost(heard.seconds || piece.durationMs / 1000);
+    if (!heard.text || this.ended) return;
+    const who = this.speakerOf(userId);
+    this.transcript.add({ at: startedAt, userId, speaker: who.name, role: who.role, text: heard.text, kind: "voice" });
   }
 
   /* runs once this speaker's earlier pieces have been taken, so a release can't overtake a piece still being heard */
@@ -441,6 +467,8 @@ export class Session {
   textQuestion({ userId, asker, role = "player", text, reply = null }) {
     const line = this.transcript.add({ at: this.now(), userId, speaker: asker, role, text, kind: "text" });
     if (!line) return Promise.resolve();
+    /* typed to her where she only listens: kept in the transcript, and one short line back, no lookup (d-10) */
+    if (this.listenOnly) return (reply ?? this.post).send(LISTEN_ONLY_REPLY).catch(() => {});
     if (this.overCap()) {
       /* a deferred /angel ask must still get an answer, or Discord shows "thinking…" for 15 minutes */
       return (reply ?? this.post).send(this.capMessage()).catch(() => {});
@@ -1136,7 +1164,7 @@ export class Session {
 
   status() {
     const minutes = Math.round((this.now() - this.startedAt) / 60000);
-    return { minutes, lines: this.transcript.lines.length, ...this.counts, dollars: this.spent(), costs: { ...this.costs }, capped: this.capped };
+    return { minutes, lines: this.transcript.lines.length, ...this.counts, dollars: this.spent(), costs: { ...this.costs }, capped: this.capped, ...(this.listenOnly ? { listenOnly: true } : {}) };
   }
 
   end() {
@@ -1157,6 +1185,7 @@ export class Session {
 
 export function summaryText(s) {
   const money = n => `$${n.toFixed(2)}`;
+  if (s.listenOnly) return `Session over: ${s.minutes} min, ${s.lines} transcript lines. Cost about ${money(s.dollars)} (listening).`;
   return `Session over: ${s.minutes} min, ${s.lines} transcript lines, ${s.questions} question${s.questions === 1 ? "" : "s"}. ` +
     `Cost about ${money(s.dollars)} (Claude ${money(s.costs.claude)}, listening ${money(s.costs.stt)}, voice ${money(s.costs.tts)}).`;
 }

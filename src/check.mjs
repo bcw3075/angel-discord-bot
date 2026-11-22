@@ -17,6 +17,7 @@ import { synthesize, oggPackets, VOICES, voiceFromName } from "./tts.mjs";
 import { createDecoder, decodePackets } from "./audio.mjs";
 import { inviteUrl, within } from "./setup.mjs";
 import { buildServices } from "./services.mjs";
+import { loadTables, moveOldFiles, answeringTable, describeTable } from "./tables.mjs";
 import { isIntentRefusal } from "./bot.mjs";
 import { runSelfTest, saveReport } from "./selftest.mjs";
 
@@ -40,7 +41,14 @@ async function check(cfg) {
   if (major > 22 || (major === 22 && minor >= 12)) ok("Node.js", process.versions.node);
   else bad("Node.js", `${process.versions.node} is too old; install the current LTS from nodejs.org (22.12 or newer)`);
   for (const problem of cfg.problems) bad("Settings", problem);
-  for (const line of tableFilesReport()) (line.level === "ok" ? ok : line.level === "fail" ? bad : note)(line.what, line.text);
+  const tables = loadTables({ guildId: cfg.guildId });
+  moveOldFiles({ tables, guildId: cfg.guildId, log: { info: t => note("Tables", t), warn: t => bad("Tables", t) } });
+  for (const problem of tables.problems) bad("Tables", problem);
+  if (!tables.legacy && !tables.list.length) bad("Tables", "no table in tables/ can be used, so I join nowhere");
+  for (const t of tables.list) {
+    if (!t.legacy) ok(`Table ${t.name}`, describeTable(t));
+    for (const line of tableFilesReport(t.files)) (line.level === "ok" ? ok : line.level === "fail" ? bad : note)(t.legacy ? line.what : `  ${line.what}`, line.text);
+  }
 
   if (!cfg.anthropicApiKey) bad("Claude", "no key saved (npm run setup)");
   else {
@@ -148,11 +156,13 @@ function setVoice(cfg, name) {
 async function ask(cfg, question) {
   if (!question) { console.log('Put the question after it: npm run ask -- "what does off-guard do?"'); return; }
   if (!cfg.anthropicApiKey) { console.log("Save the Claude key first: npm run setup"); failures++; return; }
+  const table = tableToAnswer(cfg);
+  if (!table) return;
   const services = buildServices(cfg);
   const started = Date.now();
   /* when the first words she would say were written: in a session her voice starts from there, not from the end */
   let firstWords = 0;
-  const r = await services.answer({ conversation: "", question, asker: "The GM", via: "text", gmName: "", onSay: () => { firstWords ||= Date.now(); } });
+  const r = await services.answer({ conversation: "", question, asker: "The GM", via: "text", gmName: "", table, onSay: () => { firstWords ||= Date.now(); } });
   console.log(`\nSpoken: ${r.say}\n\nWritten: ${r.details}\n`);
   if (firstWords) console.log(`First spoken words written after ${((firstWords - started) / 1000).toFixed(1)} s.`);
   for (const s of r.sources) console.log(`  ${s.name}: ${s.url}`);
@@ -161,12 +171,27 @@ async function ask(cfg, question) {
   console.log(`Prompt cache (${cfg.answerCacheTtl}): ${r.cache.written} tokens written, ${r.cache.read} read.`);
 }
 
+/* the table whose house rules the test questions are answered with: the one that answers */
+function tableToAnswer(cfg) {
+  const tables = loadTables({ guildId: cfg.guildId });
+  moveOldFiles({ tables, guildId: cfg.guildId, log: { info: t => console.log(t), warn: t => console.log(t) } });
+  const { table, why } = answeringTable(tables);
+  if (!table) { console.log(`Can't tell which table to test: ${why}. Only one table in tables/ may have "answers": true for this test.`); failures++; return null; }
+  if (!tables.legacy) console.log(`Testing with table ${table.name}'s house rules.`);
+  return table;
+}
+
 /* `Test Angel.cmd`: real questions through the real checking and answering, written to data/selftest/ */
 async function selfTest(cfg) {
   if (!cfg.anthropicApiKey) { console.log("Save the Claude key first: double-click Install Angel.cmd"); failures++; return; }
+  const table = tableToAnswer(cfg);
+  if (!table) return;
   const startedAt = Date.now();
+  const services = buildServices(cfg);
+  /* the answering table's house rules, as at that table */
+  const forTable = { ...services, answer: q => services.answer({ ...q, table }) };
   /* the count is in the window's title bar too, so it shows even when the window is behind another */
-  const run = await runSelfTest({ services: buildServices(cfg), print: line => console.log(line), progress: (n, of) => { process.title = `Test Angel: ${n} of ${of} done`; } });
+  const run = await runSelfTest({ services: forTable, print: line => console.log(line), progress: (n, of) => { process.title = `Test Angel: ${n} of ${of} done`; } });
   let version = "";
   try { version = JSON.parse(fs.readFileSync(path.join(path.dirname(DATA_DIR), "package.json"), "utf8")).version; } catch { /* not shown */ }
   const file = saveReport(path.join(DATA_DIR, "selftest"), run, { startedAt, version, models: `${cfg.answerModel} answers, ${cfg.gateModel} checks` });

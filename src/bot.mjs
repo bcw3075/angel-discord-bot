@@ -6,11 +6,13 @@ import path from "node:path";
 import { Client, GatewayIntentBits, Events, MessageFlags, PermissionFlagsBits } from "discord.js";
 import { angelCommand, typedQuestion } from "./commands.mjs";
 import { VoiceLink } from "./voice.mjs";
-import { Session, summaryText } from "./session.mjs";
+import { Session, summaryText, LISTEN_ONLY_REPLY } from "./session.mjs";
 import { Transcript, folderName } from "./transcript.mjs";
 import { typedAnswer, shortQuestion } from "./answer.mjs";
 import { isStopRequest } from "./wake.mjs";
 import { readSpeakers, writeSpeakers, DATA_DIR, LOCAL_FILES } from "./config.mjs";
+import { loadTables, pickTable, namedBy, onServer, pinServers, describeTable, TABLES_DIR } from "./tables.mjs";
+import { inviteUrl } from "./setup.mjs";
 
 const EPHEMERAL = { flags: MessageFlags.Ephemeral };
 const NO_PINGS = { allowedMentions: { parse: [], repliedUser: false } };
@@ -30,8 +32,9 @@ export function threadName(at = Date.now()) {
 }
 
 export class AngelBot {
-  constructor({ cfg, log, services, dataDir = DATA_DIR, speakersFile = LOCAL_FILES.speakers, VoiceLinkClass = VoiceLink }) {
-    Object.assign(this, { cfg, log, services, dataDir, speakersFile, VoiceLinkClass });
+  constructor({ cfg, log, services, dataDir = DATA_DIR, speakersFile = LOCAL_FILES.speakers, tablesDir = TABLES_DIR, VoiceLinkClass = VoiceLink }) {
+    Object.assign(this, { cfg, log, services, dataDir, speakersFile, tablesDir, VoiceLinkClass });
+    this.warnedTables = new Set();
     this.sessions = new Map(); /* guildId → { session, voiceChannelId, textChannel, emptyTimer } */
     this.joining = new Set();  /* guildIds with a /angel join still connecting */
     this.optoutFile = path.join(dataDir, "optout.json");
@@ -74,6 +77,8 @@ export class AngelBot {
   async login(intents) {
     const client = new Client({ intents });
     client.once(Events.ClientReady, c => this.onReady(c).catch(e => this.log.error(e)));
+    /* invited to another table's server while running (0.2.0): /angel is set up there at once */
+    client.on(Events.GuildCreate, g => this.onNewServer(g).catch(e => this.log.error(e)));
     client.on(Events.InteractionCreate, i => this.onInteraction(i).catch(e => this.log.error(e)));
     client.on(Events.MessageCreate, m => this.onMessage(m).catch(e => this.log.error(e)));
     client.on(Events.VoiceStateUpdate, (o, n) => this.onVoiceState(o, n));
@@ -86,17 +91,57 @@ export class AngelBot {
   async onReady(client) {
     const guilds = [...client.guilds.cache.values()];
     this.log.info(`Logged in as ${client.user.tag} in ${guilds.length} server${guilds.length === 1 ? "" : "s"}: ${guilds.map(g => g.name).join(", ") || "none yet"}`);
-    const mine = guilds.filter(g => this.serves(g.id));
-    if (this.cfg.guildId && !mine.length) this.log.warn(`guildId in config.json (${this.cfg.guildId}) is none of the servers I'm in, so /angel is registered nowhere. Fix it or leave it empty ("").`);
-    for (const g of mine) {
-      try { await g.commands.set([angelCommand()]); this.log.info(`/angel is ready in ${g.name}`); }
-      catch (e) { this.log.warn(`couldn't register /angel in ${g.name}: ${e.message}`); }
+    /* a server named by name becomes its id now, when exactly one server she is in has that name */
+    pinServers(this.tables(), guilds, this.log);
+    const tables = this.tables();
+    if (!tables.legacy) {
+      for (const t of tables.list) {
+        const g = guilds.find(x => onServer(t, x));
+        this.log.info(`table ${t.name}: ${describeTable(t)}${g ? ` (${g.name})` : " (not in that server yet: it needs inviting)"}`);
+      }
+      if (this.cfg.guildId) this.log.info("guildId in config.json isn't used while there are tables: each table's table.json names its server");
+      /* for a table on someone else's server: the link that adds her there with only the permissions she uses */
+      this.log.info(`to invite me to another table's server: ${inviteUrl(client.user.id)}`);
     }
+    const mine = guilds.filter(g => this.serves(g));
+    if (tables.legacy && this.cfg.guildId && !mine.length) this.log.warn(`guildId in config.json (${this.cfg.guildId}) is none of the servers I'm in, so /angel is registered nowhere. Fix it or leave it empty ("").`);
+    if (!tables.legacy && !mine.length) this.log.warn("none of the tables in tables/ is on a server I'm in, so /angel is registered nowhere");
+    for (const g of mine) await this.register(g);
   }
 
-  /* with guildId set, Angel answers only there (every answer costs money); compared as text, since an id is too
-     long to survive being written as a JSON number */
-  serves(guildId) { return !this.cfg.guildId || String(guildId) === String(this.cfg.guildId); }
+  async register(g) {
+    try { await g.commands.set([angelCommand()]); this.log.info(`/angel is ready in ${g.name}`); }
+    catch (e) { this.log.warn(`couldn't register /angel in ${g.name}: ${e.message}`); }
+  }
+
+  async onNewServer(g) {
+    this.log.info(`invited to the server ${g.name} (id ${g.id})`);
+    /* a table naming this server by name gets its id now, if no other server she is in has that name */
+    const all = [...(this.client?.guilds?.cache?.values?.() ?? [])];
+    pinServers(this.tables(), all.some(x => x.id === g.id) ? all : [...all, g], this.log);
+    if (this.serves(g)) await this.register(g);
+    else this.log.info(`no table is on ${g.name}, so /angel isn't set up there (a table.json with "server": "${g.id}" does it)`);
+  }
+
+  /* ---- tables (0.2.0): read each time, so a table.json edit counts without a restart ---- */
+  tables() {
+    const t = loadTables({ dir: this.tablesDir, guildId: this.cfg.guildId, legacyFiles: { ...LOCAL_FILES, speakers: this.speakersFile } });
+    for (const p of t.problems) if (!this.warnedTables.has(p)) { this.warnedTables.add(p); this.log.warn(p); }
+    return t;
+  }
+
+  /* the table for where something was typed; null when none is set up there */
+  tableFor(guild, channel) { return pickTable(this.tables(), guild, channel); }
+
+  /* a table answers only on its own server. Before tables, guildId set meant only there (every answer costs money);
+     compared as text, since an id is too long to survive being written as a JSON number */
+  serves(guild) {
+    const g = typeof guild === "object" && guild ? guild : { id: guild };
+    return this.tables().list.some(t => onServer(t, g));
+  }
+
+  /* the live session belongs to this table (tables are read afresh each time, so compared by folder) */
+  sameTable(live, table) { return !!live && !!table && live.table.name === table.name && live.table.dir === table.dir; }
 
   /* ---- spending: a cap per session (in Session) and one per day for everything ---- */
   ledgerToday() {
@@ -122,12 +167,15 @@ export class AngelBot {
 
   /* who said it: speakers.json first (character name, role), then their Discord name. Without a role in the file,
      whoever may manage the server counts as the GM. */
-  speakers() {
-    return readSpeakers(this.speakersFile, { onError: e => { if (!this.warnedSpeakers) { this.warnedSpeakers = true; this.log.warn(`speakers.json can't be read (${e.message}); using Discord names until it's fixed`); } } });
+  speakers(table = null) {
+    const file = table?.files?.speakers ?? this.speakersFile;
+    /* one warning per file, so a second table's broken file is named too */
+    this.warnedSpeakerFiles ??= new Set();
+    return readSpeakers(file, { onError: e => { if (!this.warnedSpeakerFiles.has(file)) { this.warnedSpeakerFiles.add(file); this.log.warn(`speakers.json can't be read (${e.message}); using Discord names until it's fixed`); } } });
   }
 
-  speakerOf(guild, userId) {
-    const known = this.speakers()[userId];
+  speakerOf(guild, userId, table = null) {
+    const known = this.speakers(table)[userId];
     const member = guild.members.cache.get(userId);
     const manages = member?.permissions?.has?.(PermissionFlagsBits.ManageGuild) ?? false;
     const role = known?.role ? (known.role === "GM" ? "GM" : "player") : (manages ? "GM" : "player");
@@ -135,8 +183,8 @@ export class AngelBot {
     return { name: cleanName(known?.name || member?.displayName) || "Someone", role };
   }
 
-  gmName(guild) {
-    const gm = Object.values(this.speakers()).find(s => s?.role === "GM");
+  gmName(guild, table = null) {
+    const gm = Object.values(this.speakers(table)).find(s => s?.role === "GM");
     if (gm?.name) return gm.name;
     const owner = guild ? guild.members.cache.get(guild.ownerId) : null;
     return owner?.displayName ?? "";
@@ -149,23 +197,45 @@ export class AngelBot {
 
   async onInteraction(i) {
     if (!i.isChatInputCommand() || i.commandName !== "angel") return;
-    if (!this.serves(i.guildId)) return i.reply({ content: "I only work in my home server.", ...EPHEMERAL });
+    if (!this.serves(i.guild ?? i.guildId)) return i.reply({ content: "No table is set up for this server, so I don't work here.", ...EPHEMERAL });
     const sub = i.options.getSubcommand();
     const live = this.sessions.get(i.guildId);
-    if (sub === "join") return this.join(i);
+    /* the table of the channel it was typed in; the live session's table when it is the same one. A channel not
+       cached (a thread) is fetched, so a thread is still known by its parent (review 1 of 0.2.0) */
+    /* looked up only where it matters: a server with more than one table (review 3) */
+    const shared = this.tables().list.filter(t => onServer(t, i.guild ?? { id: i.guildId })).length > 1;
+    const typedIn = i.channel ?? (shared ? await lookUp(i.client, i.channelId) : null) ?? { id: i.channelId, unknown: true };
+    const pick = this.tableFor(i.guild ?? { id: i.guildId }, typedIn);
+    const table = this.sameTable(live, pick.table) ? live.table : pick.table;
+    if (sub === "join") return this.join(i, pick);
+    /* leave, stop and status are about the server's one session: from another table's channel they don't touch it
+       (review 3 of 0.2.0) */
+    /* only while the session's table still exists: a table renamed, or tables/ made during a session, never locks
+       leave and stop (review 4); a channel with no table may still end it */
+    if (["leave", "stop", "status"].includes(sub) && live && pick.table && !this.sameTable(live, pick.table) && this.tables().list.some(t => this.sameTable(live, t) && onServer(t, i.guild ?? { id: i.guildId }))) {
+      return i.reply({ content: `I'm listening for another table on this server right now (${live.table.name}). Use \`/angel ${sub}\` in its channel.`, ...EPHEMERAL });
+    }
     if (sub === "leave") {
       if (!live) return i.reply({ content: "I'm not in a voice channel right now.", ...EPHEMERAL });
       await i.reply("Okay, I'm off. Good game!");
       return this.end(i.guildId, "left by /angel leave");
     }
     if (sub === "ask") {
+      if (!table) return i.reply({ content: noTableText(pick), ...EPHEMERAL });
+      if (!table.answers) {
+        if (this.sameTable(live, table)) {
+          const who = this.speakerOf(i.guild, i.user.id, table);
+          live.session.transcript.add({ at: Date.now(), userId: i.user.id, speaker: who.name, role: who.role, text: i.options.getString("question", true), kind: "text" });
+        }
+        return i.reply({ content: LISTEN_ONLY_REPLY, ...NO_PINGS });
+      }
       await i.deferReply();
-      const who = this.speakerOf(i.guild, i.user.id);
+      const who = this.speakerOf(i.guild, i.user.id, table);
       const question = i.options.getString("question", true);
       const edit = text => i.editReply({ content: text, ...NO_PINGS });
       const reply = { send: async text => { await edit(text); return { edit }; } };
-      if (live) return live.session.textQuestion({ userId: i.user.id, asker: who.name, role: who.role, text: question, reply });
-      return this.answerAlone({ question, asker: who.name, reply, guild: i.guild });
+      if (this.sameTable(live, table)) return live.session.textQuestion({ userId: i.user.id, asker: who.name, role: who.role, text: question, reply });
+      return this.answerAlone({ question, asker: who.name, reply, guild: i.guild, table });
     }
     if (sub === "stop") {
       live?.session.stop();
@@ -182,14 +252,17 @@ export class AngelBot {
       /* brackets and parentheses are dropped, so nobody can make their line read "(GM)" */
       const name = cleanName(i.options.getString("name", true)).slice(0, 40);
       if (!name) return i.reply({ content: "That name came out empty. Try plain letters?", ...EPHEMERAL });
+      /* the name is kept for this table only (0.2.0): a character name belongs to one game */
+      if (!table) return i.reply({ content: noTableText(pick), ...EPHEMERAL });
+      const file = table.files.speakers;
       let speakers;
-      try { speakers = readSpeakers(this.speakersFile, { strict: true }); }
+      try { speakers = readSpeakers(file, { strict: true }); }
       catch (e) {
         /* never write over a file someone edited by hand and broke: it would lose everyone else's names */
         return i.reply({ content: `speakers.json has a mistake in it (${e.message}), so I didn't change it. Ask the GM to fix it.`, ...EPHEMERAL });
       }
       speakers[i.user.id] = { ...(speakers[i.user.id] ?? {}), name };
-      writeSpeakers(speakers, this.speakersFile);
+      writeSpeakers(speakers, file);
       return i.reply({ content: `Got it, I'll call you ${name}.`, ...EPHEMERAL });
     }
     if (sub === "status") {
@@ -199,9 +272,16 @@ export class AngelBot {
     }
   }
 
-  async join(i) {
+  async join(i, pick = this.tableFor(i.guild ?? { id: i.guildId }, i.channel ?? { id: i.channelId })) {
+    const table = pick.table;
+    /* no table set up where it was typed: she doesn't join (no way to pick one by hand, so one table's rulings can't
+       be loaded at another) */
+    if (!table) return i.reply({ content: noTableText(pick), ...EPHEMERAL });
     const channel = i.member?.voice?.channel;
     if (!channel) return i.reply({ content: "Join a voice channel first, then use `/angel join`.", ...EPHEMERAL });
+    /* a voice channel another table names is that table's game: not joined as this one (review 1 of 0.2.0) */
+    const naming = namedBy(this.tables(), channel.guild ?? i.guild, channel);
+    if (naming.length && !naming.some(t => t.name === table.name)) return i.reply({ content: `That voice channel belongs to another table (${naming.map(t => t.name).join(", ")}). Type \`/angel join\` in that table's text channel.`, ...EPHEMERAL });
     if (this.sessions.has(i.guildId)) return i.reply({ content: `I'm already listening in <#${this.sessions.get(i.guildId).voiceChannelId}>.`, ...EPHEMERAL });
     /* marked before the first await, so a second /angel join in the same moment can't make a second session */
     if (this.joining.has(i.guildId)) return i.reply({ content: "I'm already on my way in.", ...EPHEMERAL });
@@ -264,15 +344,20 @@ export class AngelBot {
         }
         let home = thread ?? textChannel;
         const post = { send: text => home.send({ content: text, ...NO_PINGS }) };
+        /* everything the session reads is this table's own: key terms, house rules, speakers, transcript folder */
+        const terms = table.legacy || !this.services.keytermsOf ? null : this.services.keytermsOf(table);
+        const sessionsDir = table.legacy ? path.join(this.dataDir, "sessions") : path.join(this.dataDir, "sessions", table.name);
         const session = new Session({
           cfg, voice, post, log,
-          stt: this.services.stt, tts: this.services.tts, gate: this.services.gate,
+          stt: terms ? (wav, o = {}) => this.services.stt(wav, { ...o, terms }) : this.services.stt,
+          tts: this.services.tts, gate: this.services.gate,
           hold: this.services.hold, readyLine: this.services.readyLine,
-          answer: q => this.services.answer({ ...q, gmName: this.gmName(channel.guild) }),
-          speakerOf: id => this.speakerOf(channel.guild, id),
-          keytermCount: this.services.keytermCount,
+          answer: q => this.services.answer({ ...q, gmName: this.gmName(channel.guild, table), table }),
+          speakerOf: id => this.speakerOf(channel.guild, id, table),
+          keytermCount: terms ? terms.length : this.services.keytermCount,
           dailyOver: () => this.dailyOver(),
-          transcript: new Transcript({ dir: cfg.saveTranscript ? path.join(this.dataDir, "sessions", folderName(startedAt)) : null, startedAt, title: channel.guild.name }),
+          listenOnly: !table.answers,
+          transcript: new Transcript({ dir: cfg.saveTranscript ? path.join(sessionsDir, folderName(startedAt)) : null, startedAt, title: channel.guild.name }),
         });
         voice.on("lost", why => {
           const text = why === "deaf" ? "I kept losing the sound even after rejoining, so I've left the voice channel. `/angel join` brings me back." : "I lost the voice connection. `/angel join` brings me back.";
@@ -280,10 +365,15 @@ export class AngelBot {
           this.end(i.guildId, why === "deaf" ? "kept going deaf" : "voice connection lost");
         });
         voice.on("rejoined", () => { session.rejoined().catch(e => log.warn(`after rejoining: ${e.message}`)); });
-        this.sessions.set(i.guildId, { session, voiceChannelId: channel.id, textChannel, home, thread, emptyTimer: null });
+        this.sessions.set(i.guildId, { session, table, voiceChannelId: channel.id, textChannel, home, thread, emptyTimer: null });
         await session.start();
-        const notice = `🎙️ I'm in **${channel.name}**, listening and transcribing so I can answer rules questions. Say "Angel, ..." or type \`@Angel ...\`. ` +
-          `Only text is kept, never audio, on the GM's computer. \`/angel optout\` if you'd rather I didn't transcribe you; \`/angel stop\` or "Angel, stop" cuts me off; \`/angel leave\` when you're done.`;
+        const keptOn = table.keptBy ? `on ${table.keptBy}'s computer` : "on the GM's computer";
+        /* where she only listens she says so once, in writing, and never speaks (d-10) */
+        const notice = table.answers
+          ? `🎙️ I'm in **${channel.name}**, listening and transcribing so I can answer rules questions. Say "Angel, ..." or type \`@Angel ...\`. ` +
+            `Only text is kept, never audio, ${keptOn}. \`/angel optout\` if you'd rather I didn't transcribe you; \`/angel stop\` or "Angel, stop" cuts me off; \`/angel leave\` when you're done.`
+          : `🎙️ I'm in **${channel.name}**, listening and transcribing for the session's notes. At this table I only listen: I won't speak or answer questions. ` +
+            `Only text is kept, never audio, ${keptOn}. \`/angel optout\` if you'd rather I didn't transcribe you; \`/angel leave\` when you're done.`;
         let inThread = false;
         if (thread) {
           try { await thread.send({ content: notice, ...NO_PINGS }); inThread = true; }
@@ -306,7 +396,7 @@ export class AngelBot {
         log.error(`couldn't start the session: ${e.message}`);
         return i.editReply(`I couldn't start the session: ${e.message}`).catch(() => {});
       }
-      log.info(`session started in ${channel.guild.name} / ${channel.name}`);
+      log.info(`session started in ${channel.guild.name} / ${channel.name}${table.legacy ? "" : ` (table ${table.name}, ${table.answers ? "answering" : "listening only"})`}`);
     } finally {
       this.joining.delete(i.guildId);
     }
@@ -333,25 +423,38 @@ export class AngelBot {
   }
 
   async onMessage(m) {
-    if (m.author.bot || !m.guild || !this.serves(m.guild.id)) return;
+    if (m.author.bot || !m.guild || !this.serves(m.guild)) return;
     const live = this.sessions.get(m.guild.id);
+    /* the table of the channel it was typed in (0.2.0); the session only hears its own table's channels */
+    const picked = this.tableFor(m.guild, m.channel ?? { id: m.channelId }).table;
+    const mine = this.sameTable(live, picked) ? live : null;
+    /* the session's table as it was at the join: a table.json edit mid-session never splits its voice and typed sides */
+    const table = mine ? mine.table : picked;
+    if (!table) return;
     /* a typed "Angel, stop" or "@Angel stop" stops her; it isn't a question */
     const asText = String(m.content ?? "").replace(new RegExp(`<@!?${this.client.user.id}>`, "g"), "Angel");
-    if (isStopRequest(asText)) { live?.session.stop(); return; }
+    if (isStopRequest(asText)) { mine?.session.stop(); return; }
     const q = typedQuestion(m.content, this.client.user.id);
-    const who = this.speakerOf(m.guild, m.author.id);
+    const who = this.speakerOf(m.guild, m.author.id, table);
+    const inSession = mine && (m.channelId === mine.textChannel.id || m.channelId === mine.thread?.id);
     if (!q.asked) {
       /* table chat in the session's channel is part of the conversation Angel remembers */
-      if (live && (m.channelId === live.textChannel.id || m.channelId === live.thread?.id) && m.content.trim()) live.session.transcript.add({ at: Date.now(), userId: m.author.id, speaker: who.name, role: who.role, text: m.content, kind: "text" });
+      if (inSession && m.content.trim()) mine.session.transcript.add({ at: Date.now(), userId: m.author.id, speaker: who.name, role: who.role, text: m.content, kind: "text" });
+      return;
+    }
+    /* where she only listens: one short line back, no lookup; in the session's channel it is kept in the transcript */
+    if (!table.answers) {
+      if (inSession) mine.session.transcript.add({ at: Date.now(), userId: m.author.id, speaker: who.name, role: who.role, text: asText, kind: "text" });
+      await m.reply({ content: LISTEN_ONLY_REPLY, ...NO_PINGS }).catch(() => {});
       return;
     }
     /* asked in the channel while the session has a thread: answered in the thread, to keep the channel clean */
-    const toThread = live?.thread && m.channelId === live.textChannel.id;
-    const reply = toThread ? { send: text => live.thread.send({ content: text, ...NO_PINGS }) } : { send: text => m.reply({ content: text, ...NO_PINGS }) };
+    const toThread = mine?.thread && m.channelId === mine.textChannel.id;
+    const reply = toThread ? { send: text => mine.thread.send({ content: text, ...NO_PINGS }) } : { send: text => m.reply({ content: text, ...NO_PINGS }) };
     /* a 🧵 on the question in the channel says where the answer went, without adding text there */
     if (toThread) m.react?.("🧵")?.catch?.(() => {});
-    if (live) return live.session.textQuestion({ userId: m.author.id, asker: who.name, role: who.role, text: q.question, reply });
-    return this.answerAlone({ question: q.question, asker: who.name, reply, guild: m.guild });
+    if (mine) return mine.session.textQuestion({ userId: m.author.id, asker: who.name, role: who.role, text: q.question, reply });
+    return this.answerAlone({ question: q.question, asker: who.name, reply, guild: m.guild, table });
   }
 
   /* A typed question with no session running: answered in text only, with no conversation to draw on. */
@@ -361,7 +464,7 @@ export class AngelBot {
     return this.alone;
   }
 
-  async answerOne({ question, asker, reply, guild }) {
+  async answerOne({ question, asker, reply, guild, table = null }) {
     if (this.dailyOver()) {
       await reply.send(`I've reached today's spending cap ($${this.cfg.maxDailyDollars}), so I can't look that up until tomorrow.`).catch(() => {});
       return;
@@ -370,7 +473,7 @@ export class AngelBot {
     let msg = null;
     try { msg = await reply.send(`**${asker} asked:** ${shortQuestion(question)}\n-# Looking it up…`); } catch { /* keep going */ }
     let result;
-    try { result = await this.services.answer({ conversation: "", question, asker, via: "text", gmName: this.gmName(guild) }); }
+    try { result = await this.services.answer({ conversation: "", question, asker, via: "text", gmName: this.gmName(guild, table), table }); }
     catch (e) {
       this.addSpend(e.dollars);
       this.log.error(`couldn't answer: ${e.message}`);
@@ -401,6 +504,21 @@ export class AngelBot {
     await this.endAll("Angel is shutting down");
     this.client?.destroy();
   }
+}
+
+/* a channel the interaction didn't carry, looked up within 1.5 s so the reply still meets Discord's 3 s (review 2) */
+async function lookUp(client, id) {
+  if (!client?.channels?.fetch || !id) return null;
+  let timer;
+  const limit = new Promise(r => { timer = setTimeout(() => r(null), 1500); timer.unref?.(); });
+  try { return await Promise.race([client.channels.fetch(id).catch(() => null), limit]); } finally { clearTimeout(timer); }
+}
+
+/* why /angel did nothing where it was typed */
+export function noTableText(pick) {
+  if (pick?.why === "unknown") return "I couldn't look this channel up, and more than one table is set up on this server, so I can't tell which table you mean. Try again in a moment, or use the table's own channel.";
+  if (pick?.why === "several") return `More than one table is set up on this server (${pick.names.join(", ")}), and none names this channel. Use the channel of your table.`;
+  return "No table is set up for this channel, so I don't join or answer here.";
 }
 
 /* brackets and parentheses dropped, spaces tidied */

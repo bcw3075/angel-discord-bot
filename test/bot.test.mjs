@@ -269,7 +269,7 @@ test("with guildId set, other servers get nothing (every answer costs money)", a
   const w = world(), { bot, answers } = makeBot({ guildId: "home" });
   const i = interaction(w, "ask", { strings: { question: "q" } });
   await bot.onInteraction(i);
-  assert.match(i.replies[0].content, /only work in my home server/);
+  assert.match(i.replies[0].content, /No table is set up for this server/);
   await bot.onMessage({ author: { id: "p1", bot: false }, guild: w.guild, channelId: "tc1", content: "Angel, flanking?", reply: async () => {} });
   assert.equal(answers.length, 0);
 });

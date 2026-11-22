@@ -9,10 +9,13 @@ code, comments, tests, fixtures or docs (the privacy scan checks against a priva
 - `src/bot.mjs` (Discord) → `src/session.mjs` (one session) → `src/voice.mjs` (the voice channel), `src/stt.mjs` /
   `src/tts.mjs` (Deepgram), `src/wake.mjs` (was that for me?, and the checks while she waits at a busy table), `src/answer.mjs` (Claude + `src/aon.mjs`), `src/floor.mjs` (who is talking, from Discord's speaking signal, and the wait for a gap; 0.1.3).
 - `src/setup.mjs` and `src/check.mjs` are the owner's setup and check scripts.
+- `src/tables.mjs` (0.2.0): the table folders (`tables/<name>/table.json` and that table's own files), picking the
+  table from where a command is typed, and moving the files of before 0.2.0 into their table.
 - `test/*.test.mjs` run with `npm test` (Node's own test runner, no packages); `test/live/aon-live.mjs` is the live
   Archives of Nethys check (`npm run test:aon`).
 - On the owner's PC, beside the code and git-ignored: `config.json`, `data/` (transcripts, log, caches, opt-outs),
-  `house-rules.md`, `keyterms.txt`, `speakers.json`.
+  `tables/<name>/` (each table's `table.json`, `house-rules.md`, `keyterms.txt`, `speakers.json`), or, with no
+  tables, those three files beside the code as before 0.2.0.
 
 ## Rules for the code
 - **Every outside part is passed in.** Discord's voice library (`lib` in `VoiceLink`), fetch (Claude, AoN, Deepgram),
@@ -92,6 +95,7 @@ nothing from her: defaults fill the gap.
 | floor | `docs/features/floor.md` | src/floor.mjs | 2 |
 | session | `docs/features/session.md` | src/session.mjs | 16 |
 | setup | `docs/features/setup.md` | Install Angel.cmd, Test Angel.cmd, src/selftest.mjs, src/config.mjs, src/log.mjs, src/setup.mjs, src/check.mjs, src/services.mjs, src/main.mjs | 11 |
+| tables | `docs/features/tables.md` | src/tables.mjs | 18 |
 | transcript | `docs/features/transcript.md` | src/transcript.mjs | 3 |
 | voice | `docs/features/voice.md` | src/voice.mjs, src/capture.mjs, src/audio.mjs | 7 |
 | wake | `docs/features/wake.md` | src/wake.mjs | 10 |

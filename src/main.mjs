@@ -3,6 +3,7 @@ import { loadConfig, missingSettings, ensureDataDir } from "./config.mjs";
 import { initLog, log } from "./log.mjs";
 import { buildServices } from "./services.mjs";
 import { AngelBot } from "./bot.mjs";
+import { loadTables, moveOldFiles } from "./tables.mjs";
 
 async function main() {
   let cfg;
@@ -19,6 +20,9 @@ async function main() {
     log.error(`Angel can't start yet: missing ${missing.join(", ")}. Run: npm run setup`);
     process.exit(2); /* 2 = needs setup: Start Angel.cmd stops instead of restarting */
   }
+  /* the files beside the code before 0.2.0 move into their table's folder, once (the owner does nothing) */
+  try { moveOldFiles({ tables: loadTables({ guildId: cfg.guildId }), guildId: cfg.guildId, log }); }
+  catch (e) { log.warn(`couldn't move the old table files: ${e.message}`); }
   const services = buildServices(cfg);
   const bot = new AngelBot({ cfg, log, services });
   let stopping = false;

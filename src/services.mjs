@@ -25,11 +25,13 @@ export function withNames(keyterms, names = [], max = 100) {
 export function buildServices(cfg, { fetchImpl = fetch, dataDir = DATA_DIR } = {}) {
   const claude = new Claude({ apiKey: cfg.anthropicApiKey, prices: cfg.prices, fetchImpl });
   const aon = new Aon({ userAgent: cfg.aonUserAgent, fetchImpl, cacheFile: path.join(dataDir, "aon-cache.json") });
+  /* each table's key terms (0.2.0): a session passes its table's list; without one, the files beside the code */
   const keyterms = readKeyterms();
   return {
     claude, aon,
     keytermCount: keyterms.length,
-    stt: (wav, { names = [] } = {}) => transcribe(wav, { apiKey: cfg.deepgramApiKey, model: cfg.sttModel, keyterms: withNames(keyterms, names), fetchImpl }),
+    keytermsOf: table => (table?.files ? readKeyterms(table.files.keyterms) : keyterms),
+    stt: (wav, { names = [], terms = keyterms } = {}) => transcribe(wav, { apiKey: cfg.deepgramApiKey, model: cfg.sttModel, keyterms: withNames(terms, names), fetchImpl }),
     tts: async text => {
       const clips = [];
       for (const piece of chunkText(text)) clips.push(await synthesize(piece, { apiKey: cfg.deepgramApiKey, voice: cfg.ttsVoice, format: "ogg", fetchImpl }));
@@ -39,12 +41,13 @@ export function buildServices(cfg, { fetchImpl = fetch, dataDir = DATA_DIR } = {
     /* a busy table (0.1.3): what a line said while she holds an answer means, and her own "I'm ready" words */
     hold: ({ contextText, lastText, bareText, asker, question, cutIn, ready }) => holdCheck({ claude, model: cfg.gateModel, contextText, lastText, bareText, asker, question, cutIn, ready }),
     readyLine: ({ question, asker, earlier }) => readyLine({ claude, model: cfg.gateModel, question, asker, earlier }),
-    /* house rules are read for each question, so an edit to house-rules.md counts at once */
-    answer: ({ conversation, question, asker, via, gmName, onSay, meaning, lastReply }) => answerQuestion({
+    /* house rules are read for each question, so an edit to house-rules.md counts at once; the asking table's own
+       (0.2.0), never another table's */
+    answer: ({ conversation, question, asker, via, gmName, onSay, meaning, lastReply, table = null }) => answerQuestion({
       /* at least 3,000: her thinking counts toward the limit, and 1,500 (the default until 0.1.2, still in saved configs)
          can run out before the answer is written. The limit is room, not cost: only what she writes is paid for. */
       claude, aon, model: cfg.answerModel, maxTokens: Math.max(cfg.maxAnswerTokens, 3000), cacheTtl: cfg.answerCacheTtl,
-      system: systemPrompt({ houseRules: readHouseRules(), gmName }),
+      system: systemPrompt({ houseRules: table?.files ? readHouseRules(table.files.houseRules) : readHouseRules(), gmName }),
       conversation, question, asker, via, onSay, meaning, lastReply,
     }),
   };

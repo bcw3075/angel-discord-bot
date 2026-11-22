@@ -1,7 +1,7 @@
 {
   "name": "angel-discord-bot",
-  "version": "0.1.3",
-  "description": "Angel: a Discord bot that listens to a Pathfinder 2e table's voice channel and answers rules questions when asked.",
+  "version": "0.2.0",
+  "description": "Angel: a Discord bot that listens to a game table's Discord voice channel, keeps a transcript, and answers Pathfinder 2e rules questions when asked.",
   "type": "module",
   "private": true,
   "main": "src/main.mjs",
