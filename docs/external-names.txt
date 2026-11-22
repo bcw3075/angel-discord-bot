@@ -8,3 +8,4 @@ no-unused-vars
 _mapping
 VoiceReceiver.onUdpMessage
 npm.ps1
+destroy_handler
