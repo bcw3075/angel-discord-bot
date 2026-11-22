@@ -2,7 +2,7 @@
 feature: session
 files: [src/session.mjs]
 functions: []
-dependsOn: [voice, deepgram, wake, answering, transcript, floor]
+dependsOn: [voice, deepgram, wake, answering, transcript, floor, hearing]
 since: 0.1.0
 ---
 One game session from join to leave: speech to transcript, the wake check, answers one at a time, typed and spoken, costs and the cap.
@@ -74,6 +74,7 @@ One game session from join to leave: speech to transcript, the wake check, answe
 - (se-3) {unit} the whole flow with stand-ins: a spoken question, story talk, two-part questions (also when the rest comes while the check runs, finished or not), stop (also while she looks something up, and while the check on a question, finished or not, still runs), a typed question waiting when the session ends, the echo window, skipped noise, the session and daily caps, a failed answer's cost, typed questions, failures, ending, typing only (`test/session.test.mjs`).
 
 ## Traps
+- Pieces of speech go through `toWav` and `transcribe`, never straight to `packetsToWav` or `stt`: those two tell the hearing watch how each piece went (docs/features/hearing.md).
 - A live-round script must say when each line is said relative to her: before she answers (while she waits or looks it up) or while she speaks. These take different paths (the watch while she waits; the usual check while she speaks), and the first round of 2026-11-16 read "hold on" both ways.
 - A piece of speech cut at `maxUtteranceSeconds` (`final: false`) is not a finished utterance: the speaker is still talking. Checked as a whole question, a 43-second question was answered from its first 30 seconds while Rhea was still asking it (live 2026-11-14). Such a piece is kept without the check (for `maxUtteranceSeconds` plus `followUpMs`) and joined with what follows. The rest may never become a line (shorter than `minUtteranceMs`, too quiet, nothing transcribed, or the speech ended right on the cut): then the held text is checked and answered as it stands when their final piece brings nothing, or when the hold runs out (`releaseHold`, logged), never dropped. The question's start (`firstAt`) is its first piece's, so a stop said during the first piece still cancels it, and her name in any piece makes it a named question (the check for a named line, the reply count back to 0) (review 7).
 - `voice.stopSpeaking` only drops what is already queued: a clip handed to the voice after a stop would play. So the stop is checked again when each clip is ready, not only when its sentence was written (the test for it holds the voice request open across the stop).

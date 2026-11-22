@@ -3,8 +3,8 @@ import { EventEmitter } from "node:events";
 import OpusScript from "opusscript";
 
 /* Opus packets of a stereo sine tone (or silence when amp is 0), 20 ms each, as Discord would send them.
-   Each tone is made once and copied after that: opusscript's memory grows with every encoder made, and after
-   enough of them (one test file, 2026-11-15) its encode fails with "offset is out of bounds". */
+   Each tone is made once and copied after that, and its encoder deleted: opusscript's wrapper breaks once three of
+   its encoders or decoders are alive at once (docs/features/voice.md). */
 const toneCache = new Map();
 export function tonePackets(seconds, { freq = 440, amp = 0.5 } = {}) {
   const key = `${seconds}|${freq}|${amp}`;

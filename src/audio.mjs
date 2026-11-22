@@ -1,24 +1,69 @@
 /* Audio helpers: Discord's Opus packets (48 kHz stereo, 20 ms each) → mono 16 kHz WAV for the transcriber.
-   opusscript is WebAssembly, so nothing needs compiling on Windows. */
-import OpusScript from "opusscript";
+   The decoder is opusscript's WebAssembly build of libopus, so nothing needs compiling on Windows. */
+import { createRequire } from "node:module";
 
 export const RATE_IN = 48000;
 export const RATE_OUT = 16000;
 export const FRAME = 960; /* samples per channel in one 20 ms packet at 48 kHz */
 
-export function createDecoder() {
-  return new OpusScript(RATE_IN, 2, OpusScript.Application.AUDIO);
+const MAX_PACKET = 3828;   /* bytes: the longest Opus packet (three frames of 1276) */
+const MAX_SAMPLES = 5760;  /* per channel: 120 ms, the longest an Opus packet can hold */
+/* the build writes each byte of the 16-bit samples into a 16-bit slot of its own, so the room is twice the sound's */
+const OUT_BYTES = MAX_SAMPLES * 2 * 2 * 2;
+const OPUS_AUDIO = 2049;
+
+const require = createRequire(import.meta.url);
+let opusBuild = null;
+/* opusscript's own WebAssembly build, without its wrapper (see createDecoder) */
+function loadOpusBuild() {
+  opusBuild ??= require("opusscript/build/opusscript_native_wasm.js");
+  return opusBuild;
+}
+
+/* One speaker's decoder, in a WebAssembly memory of its own.
+
+   opusscript 0.1.1's wrapper is not used: it keeps every decoder in one shared memory and tells the decoder to write
+   its sound at twice the address of the room it set aside, so the sound lands in whatever is there. With one or two
+   decoders that is empty space; the third speaker's decoder sits exactly there, and from then on every decode of
+   every speaker fails with "memory access out of bounds" until the program is restarted (the talk of 2026-11-22:
+   8 lines in 85 minutes; and the "deaf" 13 minutes of 2026-11-21, a third speaker as well). Here each decoder gets
+   its own copy of the build (a few milliseconds and little memory), the room is asked for at its real size and the decoder
+   is given its real address, so one speaker's decoder can't touch another's and a fresh one really is fresh.
+   `decode` returns the packet's sound as interleaved stereo Int16 samples, or throws. */
+export function createDecoder({ build = loadOpusBuild() } = {}) {
+  let m = build();
+  let handler = new m.OpusScriptHandler(RATE_IN, 2, OPUS_AUDIO);
+  const inPtr = m._malloc(MAX_PACKET), outPtr = m._malloc(OUT_BYTES);
+  if (!inPtr || !outPtr || outPtr % 2) throw new Error("the sound decoder couldn't get its memory");
+  return {
+    decode(packet) {
+      if (!m) throw new Error("the decoder was closed");
+      if (!packet || !packet.length || packet.length > MAX_PACKET) throw new Error("not an Opus packet");
+      m.HEAPU8.set(packet, inPtr);
+      const frames = handler._decode(inPtr, packet.length, outPtr);
+      if (frames < 0) throw new Error(`Opus decode error ${frames}`);
+      if (frames > MAX_SAMPLES) throw new Error("the decoder gave more sound than a packet can hold");
+      const n = frames * 2, out = new Int16Array(n), slots = m.HEAPU16;
+      for (let i = 0, at = outPtr >> 1; i < n; i++, at += 2) out[i] = (slots[at] & 255) | ((slots[at + 1] & 255) << 8);
+      return out;
+    },
+    /* its whole memory goes with it: nothing is freed piece by piece, so a decoder that broke can't break the freeing */
+    delete() { m = null; handler = null; },
+  };
 }
 
 /* Decode packets into one interleaved stereo Int16 buffer. A packet the decoder rejects becomes 20 ms of silence, so
-   timing holds. Discord sends 20 ms frames, but longer frames (opusscript decodes up to 60 ms) come out whole. */
+   timing holds. Discord sends 20 ms frames, but longer frames (up to the 120 ms a packet can hold) come out whole. */
 export function decodePackets(decoder, packets) {
   const parts = [];
   let total = 0, bad = 0;
   for (const p of packets) {
     let pcm = null;
     try { pcm = decoder.decode(p); } catch { pcm = null; }
-    const s = pcm && pcm.length ? new Int16Array(pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.length)) : null;
+    /* samples as they are, or a Buffer of them (the shape of before 0.2.0, which a stand-in may still give) */
+    const s = !pcm || !pcm.length ? null
+      : pcm instanceof Int16Array ? pcm
+      : new Int16Array(pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.length));
     if (!s) bad++;
     const part = s ?? new Int16Array(FRAME * 2);
     parts.push(part);
@@ -93,6 +138,6 @@ export function packetsToWav(decoder, packets, { minUtteranceMs = 400, minLevelD
   const { pcm, bad } = decodePackets(decoder, packets);
   const mono = resample48to16(stereoToMono(pcm));
   const db = levelDb(mono);
-  if (db < minLevelDb) return { wav: null, durationMs, levelDb: db, reason: "quiet" };
+  if (db < minLevelDb) return { wav: null, durationMs, levelDb: db, reason: "quiet", badPackets: bad };
   return { wav: encodeWav(mono), durationMs, levelDb: db, badPackets: bad };
 }

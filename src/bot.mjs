@@ -306,7 +306,7 @@ export class AngelBot {
       catch (e) { voice.leave(); return i.editReply(e.message); }
       /* anything failing after the voice join leaves voice and drops the half-made session, instead of sitting in
          the call with no session (thread review, 2026-11-14) */
-      let made = null;
+      let made = null, begun = null;
       try {
         await this.knowOwner(channel.guild);
         const startedAt = Date.now();
@@ -344,6 +344,21 @@ export class AngelBot {
         }
         let home = thread ?? textChannel;
         const post = { send: text => home.send({ content: text, ...NO_PINGS }) };
+        /* when she stops hearing, whoever started the session is told at once, in writing and never aloud (Rhea,
+           2026-11-22, after 85 minutes unheard: "she really needs to message me and tell me"): a direct message, and
+           the same words where the session posts, with a ping there only if the direct message couldn't be sent */
+        const owner = i.user;
+        const where = `**${channel.name}** (${channel.guild.name})`;
+        const alert = async text => {
+          const content = String(text).replaceAll("{where}", where);
+          let direct = false;
+          if (owner?.send) {
+            try { await owner.send({ content }); direct = true; }
+            catch (e) { log.warn(`couldn't send ${owner.username ?? "the owner"} a direct message: ${e.message}`); }
+          }
+          const here = direct || !owner?.id ? { content, ...NO_PINGS } : { content: `<@${owner.id}> ${content}`, allowedMentions: { parse: [], users: [owner.id], repliedUser: false } };
+          await home.send(here).catch(e => log.warn(`couldn't post the warning in the channel: ${e.message}`));
+        };
         /* everything the session reads is this table's own: key terms, house rules, speakers, transcript folder */
         const terms = table.legacy || !this.services.keytermsOf ? null : this.services.keytermsOf(table);
         const sessionsDir = table.legacy ? path.join(this.dataDir, "sessions") : path.join(this.dataDir, "sessions", table.name);
@@ -357,12 +372,19 @@ export class AngelBot {
           keytermCount: terms ? terms.length : this.services.keytermCount,
           dailyOver: () => this.dailyOver(),
           listenOnly: !table.answers,
+          alert,
           transcript: new Transcript({ dir: cfg.saveTranscript ? path.join(sessionsDir, folderName(startedAt)) : null, startedAt, title: channel.guild.name }),
         });
+        begun = session;
         voice.on("lost", why => {
-          const text = why === "deaf" ? "I kept losing the sound even after rejoining, so I've left the voice channel. `/angel join` brings me back." : "I lost the voice connection. `/angel join` brings me back.";
-          home.send(text).catch(() => {});
-          this.end(i.guildId, why === "deaf" ? "kept going deaf" : "voice connection lost");
+          /* the owner is told directly as well: at a table where she only listens nobody is watching her thread */
+          const told = alert(why === "deaf"
+            ? "⚠️ I kept losing the sound in {where} even after rejoining, so I've left the voice channel and stopped transcribing. `/angel join` brings me back."
+            : "⚠️ I lost the voice connection in {where} and couldn't get it back, so I've stopped transcribing. `/angel join` brings me back.");
+          /* the note first, then the summary and the thread's closing (a note posted after would open the thread
+             again); a direct message that hangs doesn't hold the ending up for more than a few seconds */
+          const said = Promise.race([told.catch(() => {}), new Promise(r => setTimeout(r, 5000).unref?.())]);
+          said.then(() => this.end(i.guildId, why === "deaf" ? "kept going deaf" : "voice connection lost")).catch(e => log.warn(`ending after the lost connection: ${e.message}`));
         });
         voice.on("rejoined", () => { session.rejoined().catch(e => log.warn(`after rejoining: ${e.message}`)); });
         this.sessions.set(i.guildId, { session, table, voiceChannelId: channel.id, textChannel, home, thread, emptyTimer: null });
@@ -385,10 +407,23 @@ export class AngelBot {
             if (live) { live.home = textChannel; live.thread = null; }
           }
         }
+        /* the way she would warn the owner is tried now, while someone is looking: a direct message that can't be
+           sent is said in the reply, instead of being found out when a warning doesn't come */
+        let warnNote = "";
+        if (owner?.send) {
+          try { await owner.send({ content: `🎙️ I'm listening in ${where}. If I stop hearing the table, I'll message you here straight away.` }); }
+          catch (e) {
+            log.warn(`couldn't send ${owner.username ?? "the owner"} a direct message: ${e.message}`);
+            warnNote = `\n⚠️ <@${owner.id}>, I couldn't send you a direct message (Discord: Privacy Settings > allow direct messages from server members). If I stop hearing the table I'll ping you here instead.`;
+          }
+        }
         /* a reply that can't be edited any more mustn't end a session that works */
+        if (warnNote) await home.send({ content: warnNote.trim(), allowedMentions: { parse: [], users: [owner.id], repliedUser: false } }).catch(e => log.warn(`couldn't post the note about direct messages: ${e.message}`));
         if (inThread) await i.editReply(`🎙️ I'm in **${channel.name}**. Everything for this session is in <#${thread.id}>.`).catch(e => log.warn(`couldn't answer /angel join: ${e.message}`));
         else await i.editReply(notice).catch(e => log.warn(`couldn't answer /angel join: ${e.message}`));
       } catch (e) {
+        /* its timer and decoders go with it (it leaves the voice channel itself) */
+        try { begun?.end(); } catch { /* half made */ }
         voice.leave();
         this.sessions.delete(i.guildId);
         const t = made?.();

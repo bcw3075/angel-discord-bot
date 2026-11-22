@@ -517,3 +517,62 @@ test("going deaf: a rejoin tells the table; giving up ends the session with its 
   assert.equal(bot.sessions.has("g1"), false, "the session ends");
   assert.ok(w.sent.some(m => /kept losing the sound/.test(m.content)), "with the note for it");
 });
+
+/* (dc-13) when she stops hearing, whoever started the session is told directly (Rhea, 2026-11-22) */
+function ownedJoin(w, { dmFails = false } = {}) {
+  const dms = [];
+  const i = interaction(w, "join");
+  i.user = { id: "p1", username: "sam", send: async m => { if (dmFails) throw new Error("Cannot send messages to this user"); dms.push(m.content); } };
+  return { i, dms };
+}
+
+test("(dc-13) the one who starts a session gets a direct message at once, so the way a warning would come is known to work", async () => {
+  const w = world(), { bot } = makeBot();
+  const { i, dms } = ownedJoin(w);
+  await bot.onInteraction(i);
+  assert.equal(dms.length, 1);
+  assert.match(dms[0], /I'm listening in \*\*Game Night\*\* \(Table\)\. If I stop hearing the table, I'll message you here straight away\./);
+  assert.ok(!w.sent.some(m => /couldn't send you a direct message/.test(m.content)));
+});
+
+test("(dc-13) a warning goes to the starter as a direct message and into the session's channel, with the channel named and nobody pinged", async () => {
+  const w = world(), { bot } = makeBot();
+  const { i, dms } = ownedJoin(w);
+  const raw = [];
+  const send = w.textChannel.send; w.textChannel.send = async m => { raw.push(m); return send(m); };
+  await bot.onInteraction(i);
+  const { session } = bot.sessions.get("g1");
+  await session.alert("⚠️ I've stopped hearing the table in {where}.");
+  assert.equal(dms.at(-1), "⚠️ I've stopped hearing the table in **Game Night** (Table).");
+  assert.equal(raw.at(-1).content, "⚠️ I've stopped hearing the table in **Game Night** (Table).");
+  assert.deepEqual(raw.at(-1).allowedMentions, { parse: [], repliedUser: false });
+});
+
+test("(dc-13) a starter who can't be messaged directly is told so at the join, and a warning pings them in the channel instead", async () => {
+  const w = world(), { bot } = makeBot();
+  const { i } = ownedJoin(w, { dmFails: true });
+  const raw = [];
+  const send = w.textChannel.send; w.textChannel.send = async m => { raw.push(m); return send(m); };
+  await bot.onInteraction(i);
+  assert.ok(bot.sessions.has("g1"), "the session still starts");
+  const note = raw.find(m => /couldn't send you a direct message/.test(m.content));
+  assert.ok(note, "said at the join");
+  assert.deepEqual(note.allowedMentions.users, ["p1"]);
+  await bot.sessions.get("g1").session.alert("⚠️ I've stopped hearing the table in {where}.");
+  assert.equal(raw.at(-1).content, "<@p1> ⚠️ I've stopped hearing the table in **Game Night** (Table).");
+  assert.deepEqual(raw.at(-1).allowedMentions, { parse: [], users: ["p1"], repliedUser: false });
+});
+
+test("(dc-13) a voice connection that is lost for good is told to the starter directly, and the session ends", async () => {
+  const w = world(), { bot } = makeBot();
+  const { i, dms } = ownedJoin(w);
+  await bot.onInteraction(i);
+  const order = [];
+  const send = w.textChannel.send; w.textChannel.send = async m => { order.push(/kept losing/.test(m.content ?? m) ? "note" : /^Session over/.test(m.content ?? m) ? "summary" : "other"); return send(m); };
+  const dm = i.user.send; i.user.send = async m => { await sleep(30); return dm(m); }; /* a direct message takes a moment, as live */
+  FakeVoiceLink.made.at(-1).emit("lost", "deaf");
+  await sleep(120);
+  assert.deepEqual(order, ["note", "summary"], "the note is in the channel before the summary (after it, it would open the closed thread again)");
+  assert.match(dms.at(-1), /I kept losing the sound in \*\*Game Night\*\* \(Table\) even after rejoining, so I've left the voice channel and stopped transcribing/);
+  assert.ok(!bot.sessions.has("g1"));
+});

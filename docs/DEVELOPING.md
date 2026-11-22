@@ -9,6 +9,7 @@ code, comments, tests, fixtures or docs (the privacy scan checks against a priva
 - `src/bot.mjs` (Discord) → `src/session.mjs` (one session) → `src/voice.mjs` (the voice channel), `src/stt.mjs` /
   `src/tts.mjs` (Deepgram), `src/wake.mjs` (was that for me?, and the checks while she waits at a busy table), `src/answer.mjs` (Claude + `src/aon.mjs`), `src/floor.mjs` (who is talking, from Discord's speaking signal, and the wait for a gap; 0.1.3).
 - `src/setup.mjs` and `src/check.mjs` are the owner's setup and check scripts.
+- `src/hearing.mjs` (0.2.0): the watch on whether she still hears the table; the session mends and the bot tells the owner.
 - `src/tables.mjs` (0.2.0): the table folders (`tables/<name>/table.json` and that table's own files), picking the
   table from where a command is typed, and moving the files of before 0.2.0 into their table.
 - `test/*.test.mjs` run with `npm test` (Node's own test runner, no packages); `test/live/aon-live.mjs` is the live
@@ -66,12 +67,11 @@ code, comments, tests, fixtures or docs (the privacy scan checks against a priva
   run `<scratch>/node_modules/.bin/eslint --no-config-lookup -c <scratch>/eslint.config.mjs "src/*.mjs" "test/*.mjs"`
   from this repo, with a flat config that sets `globals.node` and turns on `no-undef` and `no-unused-vars`. The
   Discord handlers had an undefined name that no test reached before `test/bot.test.mjs` existed.
-- opusscript's memory grows with every encoder and decoder kept, and past a point it breaks: an encode throws
-  "offset is out of bounds", and a decode fails quietly, so test speech counts as silence and is skipped
-  (2026-11-15: one new session test made three unrelated ones fail, then two). So make test audio with
-  `tonePackets` (each tone made once, copies handed out), and end every test session (`setup` in
-  test/session.test.mjs ends them after each test, which frees their decoders). The bot itself ends each
-  session's decoders at `/angel leave`.
+- opusscript's own wrapper breaks once three of its encoders or decoders are alive in one process (it writes decoded
+  sound at twice the address it set aside; docs/features/voice.md). The bot's decoders don't use it (`createDecoder`
+  gives each its own memory), but test audio is still made with its encoder: make it with `tonePackets` (each tone
+  made once, its encoder deleted, copies handed out), and never keep more than two wrapper encoders or decoders alive in a test (vo-8 keeps one, to compare the sound).
+  What was put down to "memory growing" on 2026-11-15 (one new session test made unrelated ones fail) was this.
 
 ## Releasing
 The build protocol of `bcw3075/foundry-mod-tools` (its README): `guide start <version> "<title>" --plan <private plan>`,
@@ -93,10 +93,11 @@ nothing from her: defaults fill the gap.
 | deepgram | `docs/features/deepgram.md` | Choose Voice.cmd, src/stt.mjs, src/tts.mjs, src/speech.mjs | 5 |
 | discord | `docs/features/discord.md` | src/bot.mjs, src/commands.mjs | 10 |
 | floor | `docs/features/floor.md` | src/floor.mjs | 2 |
+| hearing | `docs/features/hearing.md` | src/hearing.mjs | 18 |
 | session | `docs/features/session.md` | src/session.mjs | 16 |
 | setup | `docs/features/setup.md` | Install Angel.cmd, Test Angel.cmd, src/selftest.mjs, src/config.mjs, src/log.mjs, src/setup.mjs, src/check.mjs, src/services.mjs, src/main.mjs | 11 |
 | tables | `docs/features/tables.md` | src/tables.mjs | 18 |
 | transcript | `docs/features/transcript.md` | src/transcript.mjs | 3 |
-| voice | `docs/features/voice.md` | src/voice.mjs, src/capture.mjs, src/audio.mjs | 7 |
+| voice | `docs/features/voice.md` | src/voice.mjs, src/capture.mjs, src/audio.mjs | 8 |
 | wake | `docs/features/wake.md` | src/wake.mjs | 10 |
 <!-- feature-index:end -->

@@ -4,6 +4,7 @@
    session stops itself at its spending cap (or the bot's daily cap). All outside parts (voice, Deepgram, Claude,
    the text channel) are passed in, so the whole flow runs in tests without Discord. */
 import { packetsToWav, createDecoder } from "./audio.mjs";
+import { HearingWatch } from "./hearing.mjs";
 import { Transcript } from "./transcript.mjs";
 import { mentionsAngel, isStopRequest, afterStop, parseHold } from "./wake.mjs";
 import { Floor } from "./floor.mjs";
@@ -28,8 +29,8 @@ const DROPPED = Symbol("dropped");
 export const LISTEN_ONLY_REPLY = "I'm only listening at this table, so I don't answer questions here. I'm keeping the transcript.";
 
 export class Session {
-  constructor({ cfg, voice, post, stt, tts, gate, answer, speakerOf, hold = null, readyLine = null, transcript = new Transcript(), keytermCount = 1, log, now = Date.now, newDecoder = createDecoder, dailyOver = () => false, listenOnly = false }) {
-    Object.assign(this, { cfg, voice, post, stt, tts, gate, answer, speakerOf, hold, readyLine, transcript, keytermCount, log, now, newDecoder, dailyOver });
+  constructor({ cfg, voice, post, stt, tts, gate, answer, speakerOf, hold = null, readyLine = null, transcript = new Transcript(), keytermCount = 1, log, now = Date.now, newDecoder = createDecoder, dailyOver = () => false, listenOnly = false, alert = null, hearing = {}, clock = t => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) }) {
+    Object.assign(this, { cfg, voice, post, stt, tts, gate, answer, speakerOf, hold, readyLine, transcript, keytermCount, log, now, newDecoder, dailyOver, alert, clock });
     /* a table where she only listens (0.2.0, d-10): every piece is transcribed into the transcript and nothing else
        happens: no "was that for me?" check, no answer, no lookups, never a word aloud */
     this.listenOnly = listenOnly === true;
@@ -66,10 +67,26 @@ export class Session {
     this.carry = null;            /* the watch of a question merged into a fuller one, for that one's watch to go on from */
     this.pastWatches = [];        /* the last few ended watches, so a late stop finds the one it was said during */
     this.pieceNo = 0;
+    /* is she still hearing the table? (2026-11-22: she sat in the channel for 85 minutes hearing nothing, and nobody
+       knew.) The watch decides; the session mends what it can and tells the owner at once (`alert`, from the bot) */
+    this.hearing = new HearingWatch({ now, ...hearing,
+      onTrouble: t => this.hearingTrouble(t), onStill: t => this.hearingStill(t), onBack: t => this.hearingBack(t) });
+    this.hearingTimer = null;
+    this.mending = false;      /* she asked for the rejoin herself: its own note to the owner would say it twice */
+    this.quietRejoins = 0;
   }
 
   async start() {
     this.voice.on("speech", seg => { this.onSpeech(seg).catch(e => this.log.warn(`a piece of speech was lost: ${e.message}`)); });
+    /* for the hearing watch: who is talking, of the people she listens to (an opted-out player's words never come) */
+    this.voice.on("talking", ({ userId, speaking, at }) => {
+      try {
+        if (speaking && this.voice.shouldListen && !this.voice.shouldListen(userId)) return;
+        this.hearing.talking(userId, speaking, at);
+      } catch { /* not counted */ }
+    });
+    this.hearingTimer = setInterval(() => this.hearingTick(), this.cfg.hearingCheckMs ?? 15000);
+    this.hearingTimer.unref?.();
     if (this.listenOnly) return;
     if (this.cfg.busyTable !== false) {
       this.floor = new Floor({ now: this.now, blipMs: this.cfg.busyBlipMs, ownSpeech: () => this.voice.ownSpeech?.() ?? this.voice.periods ?? [] });
@@ -85,6 +102,11 @@ export class Session {
      briefly aloud, so a question asked while she couldn't hear is asked again */
   async rejoined() {
     if (this.ended) return;
+    /* the talk that went unheard before the rejoin isn't counted against the new connection */
+    this.hearing.fresh();
+    /* the voice link's own deaf check did this (no sound came at all): the owner is told as well */
+    if (!this.mending) this.tell("⚠️ My hearing dropped out in {where}, so I left the voice channel and joined again. A little of the talk may be missing from the transcript. I'll tell you if it happens again.");
+    this.mending = false;
     /* where she only listens, the note is only written (d-10: nothing aloud there) */
     this.post.send(this.listenOnly
       ? "🎙️ My hearing dropped out for a moment, so I rejoined the voice channel. A few seconds of talk may be missing from the transcript."
@@ -131,6 +153,99 @@ export class Session {
     let d = this.decoders.get(userId);
     if (!d) { d = this.newDecoder(); this.decoders.set(userId, d); }
     return d;
+  }
+
+  /* the watch's regular look. Past a spending cap she has stopped listening on purpose and said so: talk without
+     words is not trouble then (review 1 of the hearing watch: it rejoined and warned the owner three minutes after a cap) */
+  hearingTick() {
+    if (this.ended) return;
+    if (this.overCap()) { this.hearing.fresh(); return; }
+    this.hearing.tick();
+  }
+
+  dropDecoder(userId) {
+    const d = this.decoders.get(userId);
+    this.decoders.delete(userId);
+    try { d?.delete(); } catch { /* gone anyway */ }
+  }
+
+  /* One piece of speech → WAV. A piece its decoder can't make sense of (it throws, or rejects more than half the
+     packets) is tried once more with a fresh decoder, so a decoder gone bad costs nothing; if that fails too the
+     piece is lost and the hearing watch is told. */
+  toWav(userId, packets) {
+    const attempt = () => {
+      try { return packetsToWav(this.decoderFor(userId), packets, this.cfg); }
+      catch (e) { return { wav: null, durationMs: packets.length * 20, reason: "broken", error: e.message }; }
+    };
+    const broken = p => p.reason === "broken" || (p.reason !== "short" && (p.badPackets ?? 0) * 2 > packets.length);
+    let piece = attempt();
+    if (!broken(piece)) { if (piece.reason !== "short") this.hearing.decoded(); return piece; }
+    const why = piece.error ?? `${piece.badPackets} of ${packets.length} packets rejected`;
+    this.dropDecoder(userId);
+    piece = attempt();
+    if (!broken(piece)) { this.hearing.decoded(); this.log.info(`a decoder had gone bad (${why}); a fresh one decoded the piece`); return piece; }
+    this.dropDecoder(userId);
+    if (this.hearing.run("decode") < this.hearing.failRun) this.log.warn(`a piece of speech couldn't be decoded, even by a fresh decoder (${piece.error ?? `${piece.badPackets} of ${packets.length} packets rejected`})`);
+    this.hearing.bad("decode", piece.error ?? "the sound couldn't be decoded");
+    return { wav: null, durationMs: piece.durationMs, reason: "broken" };
+  }
+
+  /* the transcriber, with the hearing watch told how it went */
+  async transcribe(wav, opts) {
+    let heard;
+    try { heard = await this.stt(wav, opts); }
+    catch (e) { this.hearing.bad("transcriber", e.message); throw e; }
+    this.hearing.ok();
+    return heard;
+  }
+
+  /* a message to the owner (whoever started the session), outside the voice channel: never aloud */
+  tell(text) {
+    this.log.warn(`to the owner: ${text.replaceAll("{where}", "the voice channel")}`);
+    if (!this.alert) return;
+    Promise.resolve().then(() => this.alert(text)).catch(e => this.log.warn(`couldn't tell the owner: ${e.message}`));
+  }
+
+  hearingTrouble({ kind, since, detail }) {
+    if (this.ended || this.capped) return;
+    const at = this.clock(since);
+    if (kind === "transcriber") {
+      this.tell(`⚠️ I can't get the talk in {where} written down: since ${at} the transcriber hasn't answered (${String(detail).slice(0, 120) || "no reason given"}). I'm still trying with every piece of speech, and I'll tell you when it works again.`);
+      return;
+    }
+    /* fresh decoders for everyone, and a fresh voice connection: between them they start her hearing over */
+    for (const userId of [...this.decoders.keys()]) this.dropDecoder(userId);
+    /* the voice link's last rejoin is left for its own deaf check (after it, the link gives up and leaves); and talk
+       without words can be an open microphone, so it gets one rejoin a session. A rejoin that fails to join ends the
+       session as a lost connection, and the owner is told that too. */
+    const already = this.voice.rejoining === true; /* the voice link's own rejoin is under way: that one will do */
+    const room = already || (typeof this.voice.rejoin === "function" && (this.voice.rejoins ?? 0) < (this.voice.maxRejoins ?? 3) - 1 && (kind !== "quiet" || this.quietRejoins < 1));
+    if (room) {
+      /* cleared by `rejoined`, so the rejoin's own note to the owner isn't a second message for one event */
+      this.mending = true;
+      if (!already) {
+        if (kind === "quiet") this.quietRejoins++;
+        Promise.resolve().then(() => this.voice.rejoin()).catch(e => this.log.warn(`couldn't rejoin to mend her hearing: ${e.message}`)).then(() => { this.mending = false; });
+      }
+    }
+    const doing = room ? "I'm starting my hearing afresh and rejoining the voice channel" : "I've started my hearing afresh";
+    this.tell(kind === "decode"
+      ? `⚠️ I've stopped hearing the table in {where}: since ${at} the sound reaches me but I can't make it out. ${doing}; I'll tell you whether that works.`
+      : `⚠️ People seem to be talking in {where}, but I haven't caught a single word since ${at}. ${doing}; I'll tell you whether that works.`);
+  }
+
+  hearingStill({ kind, since, minutes }) {
+    if (this.ended || this.capped) return;
+    if (kind === "transcriber") {
+      this.tell(`⚠️ I still can't get the talk in {where} written down: the transcriber hasn't answered since ${this.clock(since)} (${minutes} min). Leaving and rejoining won't mend that. It's worth checking the internet connection on my computer and the Deepgram account (its credit and its status page); I keep trying.`);
+      return;
+    }
+    this.tell(`⚠️ I'm still not hearing the table in {where}: nothing written down since ${this.clock(since)} (${minutes} min). Please type \`/angel leave\` and then \`/angel join\`; if that doesn't bring me back, close my window and start me again.`);
+  }
+
+  hearingBack({ since, until }) {
+    if (this.ended) return;
+    this.tell(`✅ I can hear the table in {where} again. Nothing was written down between ${this.clock(since)} and ${this.clock(until)}.`);
   }
 
   async onSpeech(seg) {
@@ -180,7 +295,7 @@ export class Session {
   async hearPiece({ userId, packets, startedAt, final = true }) {
     if (this.ended || this.overCap()) return;
     if (this.listenOnly) return this.hearOnly({ userId, packets, startedAt });
-    const piece = packetsToWav(this.decoderFor(userId), packets, this.cfg);
+    const piece = this.toWav(userId, packets);
     if (!piece.wav) {
       this.counts.skipped++;
       /* the end of their speech, too short to hear: a long question held for its rest has had all of it */
@@ -195,7 +310,7 @@ export class Session {
        (live round 2026-11-16: a player's Discord name was heard as a campaign name from keyterms.txt) */
     const speaking = this.speakerOf(userId)?.name;
     if (speaking && speaking !== "Someone") this.names.add(speaking); /* not the stand-in for an unknown member (review 20) */
-    const hearing = this.stt(piece.wav, { names: [...this.names] });
+    const hearing = this.transcribe(piece.wav, { names: [...this.names] });
     /* "Angel, stop" doesn't wait its turn behind an earlier piece still being transcribed */
     let stoppedEarly = false;
     hearing.then(h => { if (!this.ended && h?.text && isStopRequest(h.text)) { stoppedEarly = true; this.stop(startedAt); this.log.info(`${this.speakerOf(userId)?.name ?? "Someone"} said stop: she stops (heard at once)`); } }).catch(() => {});
@@ -207,6 +322,7 @@ export class Session {
       if (!heard.text || this.ended) { if (final !== false && !this.ended) handling = this.releaseHold(userId, "they stopped"); return; }
       const who = this.speakerOf(userId);
       const line = this.transcript.add({ at: startedAt, userId, speaker: who.name, role: who.role, text: heard.text, kind: "voice" });
+      this.hearing.line();
       /* started in order, not waited for in order: what they say while the check on this line runs is the rest of
          the question. `until` is when they stopped talking (speech time): the timing in the log starts there */
       if (line && !stoppedEarly) { handling = this.onLine(line, startedAt + piece.durationMs, final === false); handling.catch(() => {}); }
@@ -221,16 +337,17 @@ export class Session {
   /* Where she only listens: the piece is transcribed and written down, and that is all (no stop, no check, no reply).
      Lines are put in the order they were said by the transcript itself. */
   async hearOnly({ userId, packets, startedAt }) {
-    const piece = packetsToWav(this.decoderFor(userId), packets, this.cfg);
+    const piece = this.toWav(userId, packets);
     if (!piece.wav) { this.counts.skipped++; return; }
     this.counts.pieces++;
     const speaking = this.speakerOf(userId)?.name;
     if (speaking && speaking !== "Someone") this.names.add(speaking);
-    const heard = await this.stt(piece.wav, { names: [...this.names] });
+    const heard = await this.transcribe(piece.wav, { names: [...this.names] });
     this.costs.stt += this.sttCost(heard.seconds || piece.durationMs / 1000);
     if (!heard.text || this.ended) return;
     const who = this.speakerOf(userId);
     this.transcript.add({ at: startedAt, userId, speaker: who.name, role: who.role, text: heard.text, kind: "voice" });
+    this.hearing.line();
   }
 
   /* runs once this speaker's earlier pieces have been taken, so a release can't overtake a piece still being heard */
@@ -1175,6 +1292,7 @@ export class Session {
     this.lastArrived.clear();
     for (const p of this.pending.values()) clearTimeout(p.timer);
     this.pending.clear();
+    clearInterval(this.hearingTimer);
     this.voice.leave();
     for (const d of this.decoders.values()) { try { d.delete(); } catch { /* freed */ } }
     this.decoders.clear();

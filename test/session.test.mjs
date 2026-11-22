@@ -16,8 +16,7 @@ class FakeVoice extends EventEmitter {
   leave() { this.left = true; }
 }
 
-/* every session a test makes is ended after it, which frees its Opus decoders: opusscript's memory grows with each one
-   kept, and past a point decoding fails quietly and speech counts as silence (2026-11-15, two later tests failing) */
+/* every session a test makes is ended after it (its timers and decoders go with it) */
 const made = [];
 afterEach(() => { for (const x of made.splice(0)) { try { x.end(); } catch { /* already ended */ } } });
 

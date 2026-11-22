@@ -38,6 +38,7 @@ The Discord side: logging in, the /angel commands, typed questions, a session pe
 - A typed stop is read with the bot's mention replaced by "Angel", so "@Angel stop" stops her like "Angel, stop".
 
 ## Checks
+- (dc-13) {unit} the starter of a session gets a direct message at the join; a warning goes to them directly and into the session's channel with the channel named and nobody pinged; a starter who can't be messaged is told at the join and pinged by a warning; a voice connection lost for good is told directly and the session ends (`test/bot.test.mjs`; the feature is docs/features/hearing.md).
 - (dc-12) {unit} the voice link is told who is a person (not a bot) for the busy table, an opted-out player included; the session gets the check while she waits and her "I'm ready" writer (`test/bot.test.mjs`).
 - (dc-10) {live} a second /angel join on the same day posts in the thread the first one made.
 - (dc-11) {unit} today's open thread reused, today's closed one opened again after a leave, a new one when there is none or the look fails, and a failed join never deletes a reused thread (`test/bot.test.mjs`).
