@@ -377,14 +377,23 @@ export class AngelBot {
         });
         begun = session;
         voice.on("lost", why => {
-          /* the owner is told directly as well: at a table where she only listens nobody is watching her thread */
-          const told = alert(why === "deaf"
+          /* only for the session this voice link belongs to, and once (review 2 of the hearing watch) */
+          if (this.sessions.get(i.guildId)?.session !== session || session.ended) return;
+          const note = (why === "deaf"
             ? "⚠️ I kept losing the sound in {where} even after rejoining, so I've left the voice channel and stopped transcribing. `/angel join` brings me back."
-            : "⚠️ I lost the voice connection in {where} and couldn't get it back, so I've stopped transcribing. `/angel join` brings me back.");
-          /* the note first, then the summary and the thread's closing (a note posted after would open the thread
-             again); a direct message that hangs doesn't hold the ending up for more than a few seconds */
-          const said = Promise.race([told.catch(() => {}), new Promise(r => setTimeout(r, 5000).unref?.())]);
-          said.then(() => this.end(i.guildId, why === "deaf" ? "kept going deaf" : "voice connection lost")).catch(e => log.warn(`ending after the lost connection: ${e.message}`));
+            : "⚠️ I lost the voice connection in {where} and couldn't get it back, so I've stopped transcribing. `/angel join` brings me back.").replaceAll("{where}", where);
+          /* the note goes in the channel at once, ahead of the summary that closes the thread, and the session ends
+             without waiting for anything; the owner is told directly as well (at a table where she only listens
+             nobody is watching her thread), and pinged in the channel only if that can't be sent */
+          home.send({ content: note, ...NO_PINGS }).catch(() => {});
+          const place = home;
+          if (owner?.send) {
+            Promise.resolve().then(() => owner.send({ content: note })).catch(e => {
+              log.warn(`couldn't send ${owner.username ?? "the owner"} a direct message: ${e.message}`);
+              return place.send({ content: `<@${owner.id}> ${note}`, allowedMentions: { parse: [], users: [owner.id], repliedUser: false } });
+            }).catch(e => log.warn(`couldn't ping the owner about the lost connection: ${e.message}`));
+          }
+          this.end(i.guildId, why === "deaf" ? "kept going deaf" : "voice connection lost");
         });
         voice.on("rejoined", () => { session.rejoined().catch(e => log.warn(`after rejoining: ${e.message}`)); });
         this.sessions.set(i.guildId, { session, table, voiceChannelId: channel.id, textChannel, home, thread, emptyTimer: null });
@@ -524,7 +533,14 @@ export class AngelBot {
     const live = this.sessions.get(newState.guild.id);
     if (!live) return;
     /* Angel herself was disconnected or moved */
-    if (newState.id === this.client.user.id && newState.channelId !== live.voiceChannelId) { this.end(newState.guild.id, "removed from the voice channel"); return; }
+    if (newState.id === this.client.user.id && newState.channelId !== live.voiceChannelId) {
+      /* not while she is leaving and joining again herself: Discord reports her own leave, and ending the session on
+         it stopped the rejoin half-way, so she never came back (review 2 of the hearing watch; the rejoin of 0.1.3
+         had never run live) */
+      if (live.session?.voice?.rejoining) return;
+      this.end(newState.guild.id, "removed from the voice channel");
+      return;
+    }
     const channel = newState.guild.channels.cache.get(live.voiceChannelId);
     const people = channel?.members?.filter(mb => !mb.user.bot).size ?? 0;
     if (people === 0 && !live.emptyTimer) {

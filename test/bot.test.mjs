@@ -576,3 +576,35 @@ test("(dc-13) a voice connection that is lost for good is told to the starter di
   assert.match(dms.at(-1), /I kept losing the sound in \*\*Game Night\*\* \(Table\) even after rejoining, so I've left the voice channel and stopped transcribing/);
   assert.ok(!bot.sessions.has("g1"));
 });
+
+test("(dc-13) her own leave during a rejoin doesn't end the session; being removed at any other time still does", async () => {
+  const w = world(), { bot } = makeBot();
+  await bot.onInteraction(interaction(w, "join"));
+  const v = FakeVoiceLink.made.at(-1);
+  v.rejoining = true;
+  bot.onVoiceState({}, { guild: w.guild, id: "angel1", channelId: null }); /* Discord's report of her leaving, mid-rejoin */
+  assert.ok(bot.sessions.has("g1"), "the session goes on");
+  assert.equal(v.left, false);
+  v.rejoining = false;
+  bot.onVoiceState({}, { guild: w.guild, id: "angel1", channelId: "vc1" }); /* and of her coming back */
+  assert.ok(bot.sessions.has("g1"));
+  bot.onVoiceState({}, { guild: w.guild, id: "angel1", channelId: null });
+  await sleep(20);
+  assert.ok(!bot.sessions.has("g1"), "removed by someone: the session ends");
+});
+
+test("(dc-13) a lost connection is told once, and an old session's voice link can't end the session that came after it", async () => {
+  const w = world(), { bot } = makeBot();
+  const { i, dms } = ownedJoin(w);
+  await bot.onInteraction(i);
+  const old = FakeVoiceLink.made.at(-1);
+  old.emit("lost"); old.emit("lost", "deaf");
+  await sleep(20);
+  assert.equal(dms.filter(d => /lost the voice connection|kept losing/.test(d)).length, 1);
+  assert.equal(w.sent.filter(m => /lost the voice connection|kept losing/.test(m.content)).length, 1);
+  await bot.onInteraction(interaction(w, "join"));
+  assert.ok(bot.sessions.has("g1"));
+  old.emit("lost");
+  await sleep(20);
+  assert.ok(bot.sessions.has("g1"), "the new session is untouched");
+});

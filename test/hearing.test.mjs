@@ -95,6 +95,30 @@ test("(hr-1) each kind has its own run, and a piece that decodes (even too quiet
   assert.equal(w.run("transcriber"), 3);
 });
 
+test("(hr-3) decode trouble ends when a piece decodes again, even one too quiet to send; 'still' is said only if people have talked since", () => {
+  const { w, clock, kinds } = watch();
+  for (let i = 0; i < 3; i++) w.bad("decode");
+  clock.t += 130_000; w.tick();
+  assert.deepEqual(kinds(), ["trouble:decode"], "two quiet minutes: nothing is being missed");
+  w.talking("a", true, clock.t); clock.t += 21_000; w.tick();
+  assert.deepEqual(kinds(), ["trouble:decode", "still:decode"]);
+  w.decoded();
+  assert.deepEqual(kinds(), ["trouble:decode", "still:decode", "back:decode"]);
+  /* talk without words is not ended by a decoded piece */
+  const q = watch();
+  q.w.talking("a", true, q.clock.t); q.clock.t += 181_000; q.w.tick(); q.w.decoded(); q.w.ok();
+  assert.deepEqual(q.kinds(), ["trouble:quiet"]);
+});
+
+test("(hr-1) trouble of the other kind on top of one already told is told as its own, once", () => {
+  const { w, kinds } = watch();
+  for (let i = 0; i < 3; i++) w.bad("transcriber", "timeout");
+  for (let i = 0; i < 8; i++) w.bad("decode", "broken");
+  assert.deepEqual(kinds(), ["trouble:transcriber", "trouble:decode"]);
+  w.decoded();
+  assert.equal(kinds().at(-1), "back:decode");
+});
+
 test("(hr-6) a callback that throws doesn't break the watch", () => {
   const w = new HearingWatch({ onTrouble: () => { throw new Error("boom"); } });
   for (let i = 0; i < 3; i++) w.bad("decode");

@@ -14,9 +14,9 @@
    No timers of its own: the session calls `tick` now and then. */
 
 export class HearingWatch {
-  constructor({ now = Date.now, failRun = 3, quietMs = 180000, quietTalkMs = 60000, stillMs = 120000, againMs = 600000, maxAlerts = 6,
+  constructor({ now = Date.now, failRun = 3, quietMs = 180000, quietTalkMs = 60000, stillMs = 120000, againMs = 600000, maxAlerts = 6, stillTalkMs = 20000,
     onTrouble = () => {}, onStill = () => {}, onBack = () => {} } = {}) {
-    Object.assign(this, { now, failRun, quietMs, quietTalkMs, stillMs, againMs, maxAlerts, onTrouble, onStill, onBack });
+    Object.assign(this, { now, failRun, quietMs, quietTalkMs, stillMs, againMs, maxAlerts, stillTalkMs, onTrouble, onStill, onBack });
     /* lost pieces in a row, counted for each kind by itself: a decode loss and a transcriber failure are two troubles */
     this.runs = { decode: { n: 0, since: 0 }, transcriber: { n: 0, since: 0 } };
     this.trouble = null;       /* { kind, since, alerts, lastAlertAt } */
@@ -33,7 +33,11 @@ export class HearingWatch {
   }
 
   /* a piece was turned into audio, loud enough to send or not: the decoder works */
-  decoded() { this.runs.decode.n = 0; }
+  decoded() {
+    this.runs.decode.n = 0;
+    /* she can make sound out again: that trouble is over, even if the piece was too quiet to send */
+    if (this.trouble?.kind === "decode") this.back();
+  }
 
   /* how many pieces of this kind were lost in a row so far */
   run(kind) { return this.runs[kind]?.n ?? 0; }
@@ -52,7 +56,14 @@ export class HearingWatch {
     if (!run) return;
     if (!run.n) run.since = this.now();
     run.n++;
-    if (!this.trouble && run.n >= this.failRun) this.begin(kind, run.since, detail);
+    if (run.n < this.failRun) return;
+    if (!this.trouble) this.begin(kind, run.since, detail);
+    /* trouble of another kind on top of the one already told (her decoder breaks while the transcriber is down, or
+       the other way round): it is told and mended as its own, once */
+    else if (this.trouble.kind !== kind && run.n === this.failRun) {
+      Object.assign(this.trouble, { kind, lastAlertAt: this.now() });
+      this.call(this.onTrouble, { kind, since: run.since, detail });
+    }
   }
 
   /* someone she listens to starts or stops talking (Discord's speaking signal) */
@@ -82,6 +93,9 @@ export class HearingWatch {
     if (t) {
       if (t.alerts >= this.maxAlerts) return;
       if (at - t.lastAlertAt < (t.alerts === 1 ? this.stillMs : this.againMs)) return;
+      /* "still not hearing" needs someone to have talked since she mended herself: at a table gone quiet nothing
+         is being missed (the transcriber's trouble shows only when there is talk, so it needs no such test) */
+      if (t.kind !== "transcriber" && this.talkSinceWords(at) < this.stillTalkMs) return;
       t.alerts++;
       t.lastAlertAt = at;
       this.call(this.onStill, { kind: t.kind, since: t.since, minutes: Math.max(1, Math.round((at - t.since) / 60000)) });

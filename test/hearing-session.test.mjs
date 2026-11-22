@@ -96,8 +96,13 @@ test("(hr-9) she can't decode anyone: after three pieces the owner is told at on
   for (let i = 0; i < 10; i++) { speech(x.voice, "b"); await settle(); }
   assert.equal(x.alerts.length, 1, "one message, not one a piece");
   assert.equal(x.voice.rejoinCalls, 1);
-  /* two minutes on, still nothing */
+  /* two minutes on with nobody talking: nothing is being missed, so nothing more is said */
   x.clock.t += 121_000; x.s.hearingTick(); await settle();
+  assert.equal(x.alerts.length, 1);
+  /* half a minute of talk, still nothing decoded */
+  x.voice.emit("talking", { userId: "b", speaking: true, at: x.clock.t }); x.clock.t += 30_000;
+  x.voice.emit("talking", { userId: "b", speaking: false, at: x.clock.t });
+  x.s.hearingTick(); await settle();
   assert.equal(x.alerts.length, 2);
   assert.match(x.alerts[1], /still not hearing the table in \{where\}.*\/angel leave.*\/angel join.*start me again/s);
   broken = false;
@@ -105,7 +110,7 @@ test("(hr-9) she can't decode anyone: after three pieces the owner is told at on
   speech(x.voice, "b"); await settle();
   assert.equal(x.s.transcript.lines.length, 1);
   assert.equal(x.alerts.length, 3);
-  assert.match(x.alerts[2], /^✅ I can hear the table in \{where\} again\. Nothing was written down between T\+0 and T\+126\./);
+  assert.match(x.alerts[2], /^✅ I can hear the table in \{where\} again\. Nothing was written down between T\+0 and T\+156\./);
   assert.equal(x.s.counts.skipped, 13);
 });
 
@@ -221,6 +226,19 @@ test("(hr-16) past a spending cap she has stopped listening on purpose: talk wit
   assert.deepEqual(x.alerts, []);
   assert.equal(x.voice.rejoinCalls, 0);
   assert.equal(x.s.transcript.lines.length, 1);
+});
+
+test("(hr-16) a cap reached with nobody's piece after it (the day's cap, crossed at another table): the watch rests, the cap is said once", async () => {
+  let over = false;
+  const x = setup({ dailyOver: () => over });
+  await x.s.start();
+  over = true;
+  x.voice.emit("talking", { userId: "a", speaking: true, at: x.clock.t });
+  for (let i = 0; i < 30; i++) { x.clock.t += 60_000; x.s.hearingTick(); }
+  await settle();
+  assert.equal(x.s.hearing.trouble, null, "no trouble is even begun");
+  assert.deepEqual(x.alerts, []);
+  assert.equal(x.posted.filter(t => /spending cap/.test(t)).length, 1);
 });
 
 test("(hr-10) transcriber trouble that lasts: the second message doesn't send the owner to leave and join, which can't mend it", async () => {
