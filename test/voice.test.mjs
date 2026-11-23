@@ -334,3 +334,40 @@ test("deaf: leaving while she waits to rejoin means no join and no note", async 
   assert.equal(lib.joins, 1);
   assert.deepEqual(said, []);
 });
+
+test("(hr-20) a rejoin the owner asks for (/angel rejoin) is the real leave and join, but never counts against her hearing's rejoins and never gives up", async () => {
+  const lib = rejoinLib();
+  const clock = { t: 100000 };
+  const log = logOf();
+  const v = new VoiceLink({ channel, lib, log, now: () => clock.t, maxRejoins: 1, rejoinCooldownMs: 1000, rejoinPauseMs: 0 });
+  await v.join();
+  const events = [];
+  v.on("rejoined", e => events.push(["rejoined", e]));
+  v.on("lost", why => events.push(["lost", why]));
+  /* more asked rejoins than maxRejoins: each one leaves and joins, none is 'lost' */
+  for (let n = 0; n < 3; n++) await v.rejoin({ asked: true });
+  assert.equal(lib.joins, 4, "three asked rejoins, each a real join");
+  assert.equal(lib.connections[2].destroyed, true, "each old connection is gone");
+  assert.equal(v.rejoins, 0, "none counted");
+  assert.deepEqual(events.map(e => e[0]), ["rejoined", "rejoined", "rejoined"]);
+  assert.deepEqual(events[0][1], { count: 0, asked: true });
+  assert.ok(log.lines.some(([k, m]) => k === "info" && /asked for with \/angel rejoin/.test(m)), "the log says it was asked for");
+  assert.ok(!log.lines.some(([k]) => k === "warn"), "not a warning: nothing went wrong");
+  /* the new connection hears */
+  talk(lib, clock, "u1", 2000, 100);
+  assert.equal(lib.receiver.subscribed.at(-1), "u1");
+  /* her own deaf rejoin is still there for her afterwards */
+  clock.t += 31000;
+  talk(lib, clock, "u1", 12000, 0);
+  for (let i = 0; i < 50 && !events.some(e => e[0] === "rejoined" && !e[1].asked); i++) await sleep(2);
+  assert.equal(lib.joins, 5, "the deaf rejoin still runs");
+  assert.deepEqual(events.at(-1), ["rejoined", { count: 1, asked: false }]);
+  /* and an asked rejoin while one is under way does nothing */
+  v.rejoining = true;
+  await v.rejoin({ asked: true });
+  assert.equal(lib.joins, 5);
+  v.rejoining = false;
+  v.leave();
+  await v.rejoin({ asked: true });
+  assert.equal(lib.joins, 5, "not after she has left");
+});

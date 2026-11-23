@@ -69,6 +69,8 @@ port or tunnel is needed.
 - She answers in voice and in the text channel. **"Angel, stop"** or `/angel stop` cuts her off.
 - `/angel iam` sets the character name the transcript uses for you. `/angel optout` stops her transcribing your
   voice (run it again to undo). `/angel status` shows what this session has cost so far.
+- `/angel rejoin` (a test, only for whoever typed `/angel join`) makes her leave and rejoin the voice channel, to
+  see that her rejoin works. She says so in the session's thread; a few seconds of talk may be missing.
 - `/angel leave` ends the session. She also leaves on her own a minute after the voice channel empties, and posts a
   short summary with the cost.
 

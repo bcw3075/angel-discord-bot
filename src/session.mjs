@@ -100,10 +100,19 @@ export class Session {
 
   /* She went deaf and rejoined the voice channel (field test of 2026-11-21): the table is told, in writing and
      briefly aloud, so a question asked while she couldn't hear is asked again */
-  async rejoined() {
+  async rejoined({ asked = false } = {}) {
     if (this.ended) return;
     /* the talk that went unheard before the rejoin isn't counted against the new connection */
     this.hearing.fresh();
+    /* one the owner asked for with /angel rejoin: nothing went wrong, so no warning and nothing aloud; the thread
+       says it happened, since a few seconds of talk may be missing */
+    if (asked) {
+      /* a trouble that came while it was under way took this rejoin as its mend (hearingTrouble's `already`) */
+      this.mending = false;
+      this.post.send("🎙️ I left and rejoined the voice channel, as asked with `/angel rejoin`. A few seconds of talk may be missing from the transcript.")
+        .catch(e => this.log.warn(`couldn't say she had rejoined: ${e.message}`));
+      return;
+    }
     /* the voice link's own deaf check did this (no sound came at all): the owner is told as well */
     if (!this.mending) this.tell("⚠️ My hearing dropped out in {where}, so I left the voice channel and joined again. A little of the talk may be missing from the transcript. I'll tell you if it happens again.");
     this.mending = false;
@@ -121,6 +130,17 @@ export class Session {
       this.ownRecent.push({ text: words, at: this.now() });
       this.voice.speak(clips);
     } catch (e) { this.log.warn(`couldn't say aloud that she was back: ${e.message}`); }
+  }
+
+  /* /angel rejoin (hr-19): the owner makes her leave and rejoin on purpose, so the rejoin path can be seen working
+     live without a real fault. Said why it can't when it can't. */
+  rejoinOnPurpose() {
+    if (this.ended) return "ended";
+    if (typeof this.voice.rejoin !== "function") return "unsupported";
+    if (this.voice.rejoining || this.mending) return "busy";
+    this.log.info("the owner asked for a rejoin (/angel rejoin)");
+    Promise.resolve().then(() => this.voice.rejoin({ asked: true })).catch(e => this.log.warn(`couldn't rejoin as asked: ${e.message}`));
+    return "rejoining";
   }
 
   spent() { return this.costs.claude + this.costs.stt + this.costs.tts; }

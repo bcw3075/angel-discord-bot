@@ -212,7 +212,7 @@ export class AngelBot {
        (review 3 of 0.2.0) */
     /* only while the session's table still exists: a table renamed, or tables/ made during a session, never locks
        leave and stop (review 4); a channel with no table may still end it */
-    if (["leave", "stop", "status"].includes(sub) && live && pick.table && !this.sameTable(live, pick.table) && this.tables().list.some(t => this.sameTable(live, t) && onServer(t, i.guild ?? { id: i.guildId }))) {
+    if (["leave", "stop", "status", "rejoin"].includes(sub) && live && pick.table && !this.sameTable(live, pick.table) && this.tables().list.some(t => this.sameTable(live, t) && onServer(t, i.guild ?? { id: i.guildId }))) {
       return i.reply({ content: `I'm listening for another table on this server right now (${live.table.name}). Use \`/angel ${sub}\` in its channel.`, ...EPHEMERAL });
     }
     if (sub === "leave") {
@@ -264,6 +264,17 @@ export class AngelBot {
       speakers[i.user.id] = { ...(speakers[i.user.id] ?? {}), name };
       writeSpeakers(speakers, file);
       return i.reply({ content: `Got it, I'll call you ${name}.`, ...EPHEMERAL });
+    }
+    /* a test of the rejoin path (hr-19): only whoever started this session, since it costs the table a few seconds
+       of transcript; never counted against the rejoins her hearing may use */
+    if (sub === "rejoin") {
+      if (!live) return i.reply({ content: "I'm not in a voice channel right now.", ...EPHEMERAL });
+      if (live.ownerId && i.user?.id !== live.ownerId) return i.reply({ content: "Only whoever started this session (with `/angel join`) can make me rejoin.", ...EPHEMERAL });
+      const r = live.session.rejoinOnPurpose();
+      const text = r === "rejoining" ? "Okay, I'm leaving and rejoining the voice channel now. I'll say in the session's thread when I'm back."
+        : r === "busy" ? "I'm already rejoining the voice channel."
+        : "I can't rejoin right now.";
+      return i.reply({ content: text, ...EPHEMERAL });
     }
     if (sub === "status") {
       if (!live) return i.reply({ content: "I'm not listening anywhere right now. `/angel join` from a voice channel to start.", ...EPHEMERAL });
@@ -395,8 +406,8 @@ export class AngelBot {
           }
           this.end(i.guildId, why === "deaf" ? "kept going deaf" : "voice connection lost");
         });
-        voice.on("rejoined", () => { session.rejoined().catch(e => log.warn(`after rejoining: ${e.message}`)); });
-        this.sessions.set(i.guildId, { session, table, voiceChannelId: channel.id, textChannel, home, thread, emptyTimer: null });
+        voice.on("rejoined", e => { session.rejoined(e).catch(err => log.warn(`after rejoining: ${err.message}`)); });
+        this.sessions.set(i.guildId, { session, table, ownerId: owner?.id ?? null, voiceChannelId: channel.id, textChannel, home, thread, emptyTimer: null });
         await session.start();
         const keptOn = table.keptBy ? `on ${table.keptBy}'s computer` : "on the GM's computer";
         /* where she only listens she says so once, in writing, and never speaks (d-10) */

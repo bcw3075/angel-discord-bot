@@ -278,3 +278,111 @@ test("(hr-15) nothing is told after the session ends, and a failing alert breaks
   x.clock.t += 900_000; x.s.hearing.tick(); await settle();
   assert.equal(x.warned.filter(m => /^to the owner/.test(m)).length, 1);
 });
+
+/* /angel rejoin (hr-19's way to make a rejoin happen live): a voice link whose rejoin passes on what it was asked */
+class AskVoice extends FakeVoice {
+  async rejoin(o = {}) { this.rejoinCalls++; this.asks = [...(this.asks ?? []), o]; if (!o.asked) this.rejoins++; this.emit("rejoined", { count: this.rejoins, asked: !!o.asked }); }
+}
+function askSetup(o = {}) {
+  const voice = new AskVoice();
+  const x = setup({ voice, ...o });
+  voice.removeAllListeners("rejoined");
+  voice.on("rejoined", e => { x.s.rejoined(e).catch(() => {}); });
+  return x;
+}
+
+test("(hr-21) a rejoin the owner asks for: the real rejoin, asked; the thread is told; no warning to the owner and nothing aloud, even at an answering table", async () => {
+  for (const listenOnly of [true, false]) {
+    const x = askSetup({ listenOnly });
+    await x.s.start();
+    x.posted.length = 0;
+    assert.equal(x.s.rejoinOnPurpose(), "rejoining");
+    await settle();
+    assert.deepEqual(x.voice.asks, [{ asked: true }]);
+    assert.equal(x.posted.length, 1);
+    assert.match(x.posted[0], /I left and rejoined the voice channel, as asked with `\/angel rejoin`/);
+    assert.deepEqual(x.alerts, [], "nothing went wrong: no warning");
+    assert.deepEqual(x.voice.spoken, [], "nothing aloud");
+    /* she still hears afterwards */
+    speech(x.voice, "a"); await settle();
+    assert.equal(x.s.transcript.lines.length, 1);
+  }
+});
+
+test("(hr-21) /angel rejoin while a rejoin is under way, or after the session ended, does nothing; her own hearing rejoins are still told afterwards", async () => {
+  const x = askSetup();
+  await x.s.start();
+  x.voice.rejoining = true;
+  assert.equal(x.s.rejoinOnPurpose(), "busy");
+  x.voice.rejoining = false;
+  x.s.mending = true;
+  assert.equal(x.s.rejoinOnPurpose(), "busy", "not while she mends her hearing");
+  x.s.mending = false;
+  await settle();
+  assert.equal(x.voice.rejoinCalls, 0);
+  /* an asked rejoin, then the voice link's own: that one is still a warning */
+  x.s.rejoinOnPurpose(); await settle();
+  await x.voice.rejoin(); await settle();
+  assert.equal(x.alerts.length, 1);
+  assert.match(x.alerts[0], /My hearing dropped out in \{where\}/);
+  x.s.end();
+  assert.equal(x.s.rejoinOnPurpose(), "ended");
+  await settle();
+  assert.equal(x.voice.rejoinCalls, 2);
+});
+
+test("(hr-21) trouble that comes while an asked rejoin is under way takes it as its mend, and later rejoins are told as before", async () => {
+  const x = askSetup({ newDecoder: dead });
+  await x.s.start();
+  x.voice.rejoining = true; /* the asked rejoin is under way */
+  for (let i = 0; i < 3; i++) { speech(x.voice, "a"); await settle(); }
+  assert.equal(x.voice.rejoinCalls, 0, "no second rejoin");
+  assert.equal(x.alerts.length, 1);
+  assert.equal(x.s.mending, true);
+  x.voice.rejoining = false; x.voice.emit("rejoined", { count: 0, asked: true }); await settle();
+  assert.equal(x.s.mending, false, "cleared, or the voice link's next rejoin would never be told");
+  x.voice.rejoins++; x.voice.emit("rejoined", { count: 1, asked: false }); await settle();
+  assert.match(x.alerts.at(-1), /dropped out/);
+});
+
+test("(hr-22) four people talking over each other where she only listens: every piece written down in the order it was said, though transcribed out of order; nobody alarmed", async () => {
+  /* the transcriber answers the later pieces first (as Deepgram can), and every speaker's pieces overlap */
+  let n = 0;
+  const x = setup({ stt: async () => { const k = ++n; await sleep(40 - (k % 4) * 10); return { text: `line ${k}`, seconds: 1 }; } });
+  await x.s.start();
+  const base = Date.now(), ids = ["a", "b", "c", "d"];
+  const tone = tonePackets(1);
+  const sent = [];
+  for (let round = 0; round < 10; round++) {
+    for (const [k, id] of ids.entries()) {
+      const startedAt = base + round * 4000 + k * 700; /* each starts before the one before has stopped */
+      sent.push(startedAt);
+      x.voice.emit("speech", { userId: id, packets: tone, startedAt, final: true });
+    }
+    await sleep(5);
+  }
+  for (let i = 0; i < 40 && x.s.transcript.lines.length < 40; i++) await sleep(10);
+  assert.equal(x.s.transcript.lines.length, 40, "every piece of all four");
+  assert.deepEqual(x.s.transcript.lines.map(l => l.at), [...sent].sort((p, q) => p - q), "in the order it was said");
+  assert.deepEqual(new Set(x.s.transcript.lines.map(l => l.userId)), new Set(ids));
+  assert.equal(x.s.counts.skipped, 0);
+  assert.equal(x.s.decoders.size, 4, "one decoder each");
+  assert.deepEqual(x.alerts, []);
+  assert.deepEqual(x.voice.spoken, []);
+});
+
+test("(hr-22) a long session: eight people, 400 pieces, people leaving and new ones coming, and every piece still decoded", async () => {
+  const x = setup();
+  await x.s.start();
+  const tone = tonePackets(0.4);
+  for (let k = 0; k < 400; k++) {
+    /* eight at a time, the group changing every 50 pieces (12 different people in all) */
+    const id = `p${(k % 8) + Math.floor(k / 100)}`;
+    x.voice.emit("speech", { userId: id, packets: tone, startedAt: Date.now() + k, final: true });
+    if (k % 20 === 19) await settle();
+  }
+  for (let i = 0; i < 50 && x.s.transcript.lines.length < 400; i++) await sleep(10);
+  assert.equal(x.s.transcript.lines.length, 400);
+  assert.equal(x.s.counts.skipped, 0);
+  assert.deepEqual(x.alerts, []);
+});

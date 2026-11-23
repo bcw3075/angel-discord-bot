@@ -608,3 +608,82 @@ test("(dc-13) a lost connection is told once, and an old session's voice link ca
   await sleep(20);
   assert.ok(bot.sessions.has("g1"), "the new session is untouched");
 });
+
+/* /angel rejoin: a way to see the rejoin path live (hr-19), for whoever started the session only */
+function rejoiningLink(bot, w, v) {
+  v.asks = [];
+  v.rejoin = async (o = {}) => {
+    v.asks.push(o);
+    v.rejoining = true;
+    bot.onVoiceState({}, { guild: w.guild, id: "angel1", channelId: null }); /* Discord reports her leave */
+    await sleep(5);
+    bot.onVoiceState({}, { guild: w.guild, id: "angel1", channelId: "vc1" });
+    v.rejoining = false;
+    v.emit("rejoined", { count: 0, asked: !!o.asked });
+  };
+}
+
+test("(dc-14) /angel rejoin from whoever started the session: she leaves and rejoins, the session goes on, the thread is told; anyone else is refused", async () => {
+  const w = world(), { bot } = makeBot();
+  const { i, dms } = ownedJoin(w);
+  await bot.onInteraction(i);
+  const v = FakeVoiceLink.made.at(-1);
+  rejoiningLink(bot, w, v);
+  /* someone else */
+  const other = interaction(w, "rejoin", { user: "gm" });
+  await bot.onInteraction(other);
+  assert.match(other.replies[0].content, /Only whoever started this session/);
+  assert.ok(other.replies[0].flags, "only they see it");
+  assert.equal(v.asks.length, 0);
+  /* the starter */
+  const mine = interaction(w, "rejoin");
+  await bot.onInteraction(mine);
+  assert.match(mine.replies[0].content, /leaving and rejoining the voice channel now/);
+  for (let n = 0; n < 50 && !w.sent.some(m => /as asked with `\/angel rejoin`/.test(m.content)); n++) await sleep(2);
+  assert.deepEqual(v.asks, [{ asked: true }]);
+  assert.ok(bot.sessions.has("g1"), "her own leave didn't end the session");
+  assert.ok(w.sent.some(m => /as asked with `\/angel rejoin`/.test(m.content)), "the thread is told");
+  assert.equal(dms.length, 1, "only the join's direct message: an asked rejoin is no warning");
+  assert.ok(!w.sent.some(m => /dropped out/.test(m.content)));
+  clearInterval(bot.bookTimer);
+});
+
+test("(dc-14) /angel rejoin with no session, or while she is already rejoining, says so", async () => {
+  const w = world(), { bot } = makeBot();
+  const none = interaction(w, "rejoin");
+  await bot.onInteraction(none);
+  assert.match(none.replies[0].content, /not in a voice channel/);
+  const { i } = ownedJoin(w);
+  await bot.onInteraction(i);
+  const v = FakeVoiceLink.made.at(-1);
+  rejoiningLink(bot, w, v);
+  v.rejoining = true;
+  const busy = interaction(w, "rejoin");
+  await bot.onInteraction(busy);
+  assert.match(busy.replies[0].content, /already rejoining/);
+  assert.equal(v.asks.length, 0);
+  clearInterval(bot.bookTimer);
+});
+
+test("(dc-15) end to end: the sound stops making sense, and the starter gets the warning by direct message with the channel named, she rejoins, and the thread says so; one warning, not one a piece", async () => {
+  const w = world(), { bot } = makeBot();
+  const { i, dms } = ownedJoin(w);
+  await bot.onInteraction(i);
+  const v = FakeVoiceLink.made.at(-1);
+  rejoiningLink(bot, w, v);
+  const junk = Array.from({ length: 50 }, () => Buffer.from([0xff, 0xff, 0xff, 0xff, 0xff]));
+  for (let k = 0; k < 6; k++) {
+    v.emit("speech", { userId: k % 2 ? "gm" : "p1", packets: junk, startedAt: Date.now(), final: true });
+    await sleep(15);
+  }
+  for (let n = 0; n < 50 && !w.sent.some(m => /rejoined the voice channel/.test(m.content)); n++) await sleep(5);
+  const warnings = dms.filter(d => /stopped hearing/.test(d));
+  assert.equal(warnings.length, 1, "one warning");
+  assert.match(warnings[0], /^⚠️ I've stopped hearing the table in \*\*Game Night\*\* \(Table\): .*rejoining the voice channel/);
+  assert.ok(w.sent.some(m => /stopped hearing the table in \*\*Game Night\*\*/.test(m.content)), "the same words in the thread");
+  assert.deepEqual(v.asks, [{}], "she rejoined to mend it, as trouble, not as asked");
+  assert.ok(bot.sessions.has("g1"), "and the session goes on");
+  assert.ok(w.sent.some(m => /rejoined the voice channel/.test(m.content)));
+  assert.ok(!dms.some(d => /dropped out/.test(d)), "her own mending rejoin isn't a second message");
+  clearInterval(bot.bookTimer);
+});

@@ -1,7 +1,7 @@
 /* The /angel slash command and its subcommands. Registered for the server Angel is in (it shows up at once). */
 import { SlashCommandBuilder } from "discord.js";
 
-export const SUBCOMMANDS = ["join", "leave", "ask", "stop", "optout", "iam", "status"];
+export const SUBCOMMANDS = ["join", "leave", "ask", "stop", "optout", "iam", "status", "rejoin"];
 
 export function angelCommand() {
   return new SlashCommandBuilder()
@@ -16,6 +16,7 @@ export function angelCommand() {
     .addSubcommand(s => s.setName("iam").setDescription("Tell Angel your character's name, so the transcript uses it")
       .addStringOption(o => o.setName("name").setDescription("Your character's name").setRequired(true).setMaxLength(40)))
     .addSubcommand(s => s.setName("status").setDescription("What Angel is doing, and what this session has cost so far"))
+    .addSubcommand(s => s.setName("rejoin").setDescription("Test: Angel leaves and rejoins the voice channel (only whoever started this session)"))
     .toJSON();
 }
 

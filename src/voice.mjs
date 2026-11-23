@@ -138,17 +138,22 @@ export class VoiceLink extends EventEmitter {
     return true;
   }
 
-  /* leave the channel and join it again; after maxRejoins she gives up, since it isn't helping */
-  async rejoin() {
+  /* leave the channel and join it again; after maxRejoins she gives up, since it isn't helping. One the owner asks for
+     (`/angel rejoin`, a live check of this path: hr-19) is the same leave and join, but it isn't trouble, so it never
+     counts against the rejoins her hearing may use and never gives up */
+  async rejoin({ asked = false } = {}) {
     if (this.closed || this.rejoining) return;
-    if (this.rejoins >= this.maxRejoins) {
+    if (!asked && this.rejoins >= this.maxRejoins) {
       this.log.warn(`still deaf after ${this.rejoins} rejoins: giving up`);
       this.emit("lost", "deaf");
       return;
     }
     this.rejoining = true;
-    this.rejoins++;
-    this.log.warn(`rejoining the voice channel (${this.rejoins} of at most ${this.maxRejoins})`);
+    if (asked) this.log.info("rejoining the voice channel (asked for with /angel rejoin)");
+    else {
+      this.rejoins++;
+      this.log.warn(`rejoining the voice channel (${this.rejoins} of at most ${this.maxRejoins})`);
+    }
     this.stopSpeaking();
     clearTimeout(this.watchdog); this.watchdog = null;
     for (const g of this.listeners.values()) g.stop();
@@ -178,7 +183,7 @@ export class VoiceLink extends EventEmitter {
     this.rejoining = false;
     if (this.closed) { try { this.connection?.destroy(); } catch { /* already gone */ } return; }
     this.log.info("back in the voice channel");
-    this.emit("rejoined", { count: this.rejoins });
+    this.emit("rejoined", { count: this.rejoins, asked });
   }
 
   /* who is talking, for the floor: people only (another bot's sound isn't the table talking); a player who opted out
