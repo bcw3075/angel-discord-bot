@@ -118,7 +118,7 @@ export class AngelBot {
     const me = client?.user ?? null;
     const canPost = (c, user) => { try { return !!c.permissionsFor?.(user)?.has?.([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages]); } catch { return false; } };
     writeJson(path.join(this.dataDir, "places.json"), { written: new Date().toISOString(), servers: placesOf(guilds, me, canPost) }, e => this.log.warn(`couldn't write places.json: ${e.message}`));
-    this.outbox = new Outbox({ dir: path.join(this.dataDir, "outbox"), log: this.log, send: m => this.sendOut(m) });
+    this.outbox = new Outbox({ dir: path.join(this.dataDir, "outbox"), contactsFile: path.join(this.dataDir, "contacts.json"), log: this.log, send: m => this.sendOut(m) });
     this.outbox.start();
   }
 

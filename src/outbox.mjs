@@ -6,6 +6,9 @@
    A message file:   { "to": "owner", "text": "..." }
                      { "to": { "channel": "<channel id>" }, "text": "..." }
                      { "to": { "user": "<user id>" }, "text": "..." }
+                     { "to": { "contact": "<name>" }, "text": "..." }
+   A contact is a name in data/contacts.json on her PC ({ "<name>": { "user": "<id>" } or { "channel": "<id>" } }),
+   so a chat in another project can message someone without knowing (or keeping) their Discord id.
    "owner" is whoever owns the bot in the Discord Developer Portal (a direct message). A channel must be a text
    channel on a server she is in; a user gets a direct message, which Discord allows only when they share a server
    with her and accept direct messages from its members. Nobody is pinged: mentions in the text show as names only.
@@ -32,14 +35,25 @@ export function readMessage(raw) {
   if (to && typeof to === "object") {
     const keys = Object.keys(to);
     if (keys.length === 1 && (keys[0] === "channel" || keys[0] === "user") && SNOWFLAKE.test(String(to[keys[0]]))) return { to: { [keys[0]]: String(to[keys[0]]) }, text };
+    if (keys.length === 1 && keys[0] === "contact" && typeof to.contact === "string" && to.contact.trim()) return { to: { contact: to.contact.trim() }, text };
   }
-  return new Error('"to" must be "owner", { "channel": "<id>" } or { "user": "<id>" }');
+  return new Error('"to" must be "owner", { "channel": "<id>" }, { "user": "<id>" } or { "contact": "<name>" }');
+}
+
+/* a contact's name made into its user or channel, from data/contacts.json; an Error when it isn't there */
+export function resolveContact(msg, contacts) {
+  if (!msg.to?.contact) return msg;
+  const want = msg.to.contact.toLowerCase();
+  const key = Object.keys(contacts ?? {}).find(k => k.toLowerCase() === want);
+  const found = key ? readMessage(JSON.stringify({ to: contacts[key], text: msg.text })) : null;
+  if (!found || found instanceof Error || found.to === "owner" || found.to.contact) return new Error(`no contact "${msg.to.contact}" with a user or channel id in contacts.json`);
+  return { ...found, contact: key };
 }
 
 export class Outbox {
   /* send({ to, text }) → { where, id } is passed in (the bot's Discord side), so tests stand in for Discord */
-  constructor({ dir, log, send, everyMs = 5000, maxPerHour = 20, now = Date.now }) {
-    Object.assign(this, { dir, log, send, everyMs, maxPerHour, now });
+  constructor({ dir, log, send, contactsFile = null, everyMs = 5000, maxPerHour = 20, now = Date.now }) {
+    Object.assign(this, { dir, log, send, contactsFile, everyMs, maxPerHour, now });
     this.recent = [];
     this.busy = false;
   }
@@ -85,17 +99,22 @@ export class Outbox {
         if (this.recent.length >= this.maxPerHour) { this.log.warn(`outbox: ${this.maxPerHour} messages sent in the last hour; the rest wait`); return; }
         /* taken first: once it is in sending/ no second look can send it again */
         try { this.file("", name, "sending"); } catch { continue; } /* still being copied in, or gone */
-        const msg = readMessage(fs.readFileSync(path.join(this.dir, "sending", name), "utf8"));
+        let msg = readMessage(fs.readFileSync(path.join(this.dir, "sending", name), "utf8"));
+        if (!(msg instanceof Error) && msg.to.contact) {
+          let contacts = {};
+          try { contacts = JSON.parse(fs.readFileSync(this.contactsFile, "utf8").replace(/^\uFEFF/, "")); } catch { /* none yet */ }
+          msg = resolveContact(msg, contacts);
+        }
         if (msg instanceof Error) {
           this.log.warn(`outbox: ${name} not sent: ${msg.message}`);
           this.file("sending", name, "failed", { error: msg.message, at: new Date(this.now()).toISOString() });
           continue;
         }
         try {
-          const r = await this.send(msg);
+          const r = await this.send({ to: msg.to, text: msg.text });
           this.recent.push(this.now());
           this.log.info(`outbox: ${name} sent (${r.where})`);
-          this.file("sending", name, "sent", { sentAt: new Date(this.now()).toISOString(), where: r.where, messageId: r.id });
+          this.file("sending", name, "sent", { sentAt: new Date(this.now()).toISOString(), where: r.where, messageId: r.id, ...(msg.contact ? { contact: msg.contact } : {}) });
         } catch (e) {
           this.log.warn(`outbox: ${name} not sent: ${e.message}`);
           this.file("sending", name, "failed", { error: e.message, at: new Date(this.now()).toISOString() });

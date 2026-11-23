@@ -137,3 +137,26 @@ test("outbox: false in config.json leaves it off", () => {
   assert.equal(b.outbox, undefined);
   assert.ok(!fs.existsSync(path.join(b.dataDir, "places.json")));
 });
+
+test("a contact's name is sent to the id in contacts.json, any capitals; an unknown name fails and is not sent", async () => {
+  const { dir, sent, put, read } = box();
+  const contactsFile = path.join(dir, "..", `contacts-${path.basename(dir)}.json`);
+  fs.writeFileSync(contactsFile, JSON.stringify({ "table-gm": { user: "123456789012345678" }, broken: { user: "x" }, loop: { contact: "table-gm" } }));
+  const ob = new Outbox({ dir, log: quiet, contactsFile, send: async m => { sent.push(m); return { where: "dm", id: "m2" }; } });
+  put("1.json", { to: { contact: "Table-GM" }, text: "news" });
+  put("2.json", { to: { contact: "nobody" }, text: "x" });
+  put("3.json", { to: { contact: "broken" }, text: "x" });
+  put("4.json", { to: { contact: "loop" }, text: "x" });
+  await ob.poll();
+  assert.deepEqual(sent, [{ to: { user: "123456789012345678" }, text: "news" }]);
+  assert.equal(read("sent", "1.json").contact, "table-gm");
+  for (const n of ["2", "3", "4"]) assert.match(read("failed", `${n}.json`).error, /no contact/);
+});
+
+test("with no contacts.json a contact fails with why", async () => {
+  const { ob, sent, put, read } = box();
+  put("c.json", { to: { contact: "table-gm" }, text: "x" });
+  await ob.poll();
+  assert.equal(sent.length, 0);
+  assert.match(read("failed", "c.json").error, /no contact "table-gm"/);
+});
