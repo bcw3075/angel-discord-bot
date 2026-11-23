@@ -160,3 +160,16 @@ test("with no contacts.json a contact fails with why", async () => {
   assert.equal(sent.length, 0);
   assert.match(read("failed", "c.json").error, /no contact "table-gm"/);
 });
+
+test("a contact by username is looked up on her servers by exact username, and fails when no one has it", async () => {
+  const { resolveContact } = await import("../src/outbox.mjs");
+  assert.deepEqual(resolveContact({ to: { contact: "gm" }, text: "t" }, { gm: { username: "Some_GM" } }), { to: { username: "some_gm" }, text: "t", contact: "gm" });
+  assert.ok(resolveContact({ to: { contact: "gm" }, text: "t" }, { gm: { username: "bad name!" } }) instanceof Error);
+  const out = [];
+  const member = (username, id) => ({ user: person(id, username, out) });
+  const guild = (name, members) => ({ name, members: { search: async ({ query }) => new Map(members.filter(m => m.user.username.includes(query)).map(m => [m.user.id, m])) } });
+  const b = bot({ guilds: { cache: new Map([["a", guild("A", [member("some_gm2", "1")])], ["b", guild("B", [member("some_gm", "2")])]]) } });
+  assert.equal((await b.sendOut({ to: { username: "some_gm" }, text: "hi" })).where, "direct message to some_gm");
+  assert.equal(out[0].to, "some_gm");
+  await assert.rejects(b.sendOut({ to: { username: "nobody" }, text: "x" }), /no one with the username nobody/);
+});

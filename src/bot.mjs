@@ -3,7 +3,7 @@
    passed in; so is the voice class, so tests can stand in for Discord. */
 import fs from "node:fs";
 import path from "node:path";
-import { Client, GatewayIntentBits, Events, MessageFlags, PermissionFlagsBits } from "discord.js";
+import { Client, GatewayIntentBits, Events, MessageFlags, PermissionFlagsBits, Partials } from "discord.js";
 import { angelCommand, typedQuestion } from "./commands.mjs";
 import { VoiceLink } from "./voice.mjs";
 import { Session, summaryText, LISTEN_ONLY_REPLY } from "./session.mjs";
@@ -14,6 +14,7 @@ import { readSpeakers, writeSpeakers, DATA_DIR, LOCAL_FILES } from "./config.mjs
 import { loadTables, pickTable, namedBy, onServer, pinServers, describeTable, TABLES_DIR } from "./tables.mjs";
 import { inviteUrl } from "./setup.mjs";
 import { Outbox, placesOf } from "./outbox.mjs";
+import { DirectReplies } from "./dm.mjs";
 
 const EPHEMERAL = { flags: MessageFlags.Ephemeral };
 const NO_PINGS = { allowedMentions: { parse: [], repliedUser: false } };
@@ -63,7 +64,8 @@ export class AngelBot {
   }
 
   async start() {
-    const base = [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.GuildMessages];
+    /* DirectMessages (0.2.0): replies to the outbox's messages, answered by DirectReplies (src/dm.mjs) */
+    const base = [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.GuildMessages, GatewayIntentBits.DirectMessages];
     try {
       await this.login([...base, GatewayIntentBits.MessageContent]);
       this.contentIntent = true;
@@ -76,7 +78,8 @@ export class AngelBot {
   }
 
   async login(intents) {
-    const client = new Client({ intents });
+    /* a direct-message channel isn't cached before its first message: without the Channel partial none arrives */
+    const client = new Client({ intents, partials: [Partials.Channel] });
     client.once(Events.ClientReady, c => this.onReady(c).catch(e => this.log.error(e)));
     /* invited to another table's server while running (0.2.0): /angel is set up there at once */
     client.on(Events.GuildCreate, g => this.onNewServer(g).catch(e => this.log.error(e)));
@@ -122,6 +125,29 @@ export class AngelBot {
     this.outbox.start();
   }
 
+  /* someone by their (unique) Discord username, searched on the servers she is in */
+  async findUser(username) {
+    const want = String(username).toLowerCase();
+    const c = this.client ?? this.readyClient;
+    for (const g of c?.guilds?.cache?.values?.() ?? []) {
+      const found = await g.members.search({ query: want, limit: 10 }).catch(e => { this.log.warn(`couldn't search ${g.name} for ${want}: ${e.message}`); return null; });
+      const m = [...(found?.values?.() ?? [])].find(x => x.user?.username?.toLowerCase() === want);
+      if (m) return m.user;
+    }
+    return null;
+  }
+
+  /* a direct message to her: answered only for a contact with notes (src/dm.mjs), from those notes */
+  async onDirect(m) {
+    if (this.cfg.directReplies === false) return;
+    this.directs ??= new DirectReplies({
+      dataDir: this.dataDir, log: this.log, claude: this.services.claude, model: this.cfg.answerModel,
+      canSpend: () => !this.dailyOver(), addSpend: d => this.addSpend(d),
+      dmOwner: text => this.sendOut({ to: "owner", text }),
+    });
+    await this.directs.onDirect({ userId: m.author.id, username: m.author.username, text: m.content, reply: text => m.channel.send({ content: text, allowedMentions: { parse: [] } }) });
+  }
+
   /* one approved message: a direct message to the bot's owner or a user, or a post in a text channel. No pings. */
   async sendOut({ to, text }) {
     const c = this.client ?? this.readyClient;
@@ -134,6 +160,9 @@ export class AngelBot {
       if (!user?.send) throw new Error("couldn't find the bot's owner");
     } else if (to.user) {
       user = await c.users.fetch(to.user);
+    } else if (to.username) {
+      user = await this.findUser(to.username);
+      if (!user) throw new Error(`no one with the username ${to.username} on a server I'm in`);
     }
     if (user) {
       const m = await user.send(content);
@@ -514,7 +543,9 @@ export class AngelBot {
   }
 
   async onMessage(m) {
-    if (m.author.bot || !m.guild || !this.serves(m.guild)) return;
+    if (m.author.bot) return;
+    if (!m.guild) return this.onDirect(m);
+    if (!this.serves(m.guild)) return;
     const live = this.sessions.get(m.guild.id);
     /* the table of the channel it was typed in (0.2.0); the session only hears its own table's channels */
     const picked = this.tableFor(m.guild, m.channel ?? { id: m.channelId }).table;

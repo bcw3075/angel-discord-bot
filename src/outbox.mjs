@@ -7,7 +7,8 @@
                      { "to": { "channel": "<channel id>" }, "text": "..." }
                      { "to": { "user": "<user id>" }, "text": "..." }
                      { "to": { "contact": "<name>" }, "text": "..." }
-   A contact is a name in data/contacts.json on her PC ({ "<name>": { "user": "<id>" } or { "channel": "<id>" } }),
+   A contact is a name in data/contacts.json on her PC ({ "<name>": { "user": "<id>" }, { "username": "<Discord
+   username>" } or { "channel": "<id>" } }; a username is looked up on the servers she shares with them),
    so a chat in another project can message someone without knowing (or keeping) their Discord id.
    "owner" is whoever owns the bot in the Discord Developer Portal (a direct message). A channel must be a text
    channel on a server she is in; a user gets a direct message, which Discord allows only when they share a server
@@ -45,8 +46,10 @@ export function resolveContact(msg, contacts) {
   if (!msg.to?.contact) return msg;
   const want = msg.to.contact.toLowerCase();
   const key = Object.keys(contacts ?? {}).find(k => k.toLowerCase() === want);
-  const found = key ? readMessage(JSON.stringify({ to: contacts[key], text: msg.text })) : null;
-  if (!found || found instanceof Error || found.to === "owner" || found.to.contact) return new Error(`no contact "${msg.to.contact}" with a user or channel id in contacts.json`);
+  const c = key ? contacts[key] : null;
+  if (c && !c.user && !c.channel && typeof c.username === "string" && /^[a-z0-9_.]{2,32}$/i.test(c.username.trim())) return { to: { username: c.username.trim().toLowerCase() }, text: msg.text, contact: key };
+  const found = c ? readMessage(JSON.stringify({ to: c.user ? { user: c.user } : c.channel ? { channel: c.channel } : c, text: msg.text })) : null;
+  if (!found || found instanceof Error || found.to === "owner" || found.to.contact) return new Error(`no contact "${msg.to.contact}" with a user id, a username or a channel id in contacts.json`);
   return { ...found, contact: key };
 }
 

@@ -36,6 +36,8 @@ export const DEFAULTS = Object.freeze({
   saveTranscript: true,
   /* send the messages a Claude chat puts in data/outbox/ after the owner approved each one (src/outbox.mjs) */
   outbox: true,
+  /* answer direct messages from a contact with notes in data/contacts.json, from those notes only (src/dm.mjs) */
+  directReplies: true,
   /* a pause this long ends a piece of speech */
   silenceMs: 900,
   /* a long monologue is cut into pieces this long so the transcript keeps up */
