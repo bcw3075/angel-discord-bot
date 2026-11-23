@@ -406,10 +406,10 @@ test("(tb-16) review 1: a thread counts only as its parent; a voice channel anot
   await b2.bot.endAll("test");
 });
 
-test("(tb-18) review 3: leave, stop and status from another table's channel don't touch the server's session; plain 'Pathfinder' isn't taken as 2e", async () => {
+test("(tb-18) review 3: leave, stop, status and rejoin from another table's channel don't touch the server's session; plain 'Pathfinder' isn't taken as 2e", async () => {
   const root = twoTables(), w = world(), { bot } = makeBot(root);
   await bot.onInteraction(interaction(w, "join", w.listen));
-  for (const sub of ["leave", "stop", "status"]) {
+  for (const sub of ["leave", "stop", "status", "rejoin"]) {
     const i = interaction(w, sub, w.general);
     await bot.onInteraction(i);
     assert.match(i.replies[0].content, /another table on this server right now \(quiet\)/, sub);

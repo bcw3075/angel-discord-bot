@@ -109,7 +109,10 @@ export class Session {
     if (asked) {
       /* a trouble that came while it was under way took this rejoin as its mend (hearingTrouble's `already`) */
       this.mending = false;
-      this.post.send("🎙️ I left and rejoined the voice channel, as asked with `/angel rejoin`. A few seconds of talk may be missing from the transcript.")
+      /* at an answering table a question asked while she was out is lost, and a spoken answer was cut off (review 9) */
+      this.post.send(this.listenOnly
+        ? "🎙️ I left and rejoined the voice channel, as asked with `/angel rejoin`. A few seconds of talk may be missing from the transcript."
+        : "🎙️ I left and rejoined the voice channel, as asked with `/angel rejoin`. If you asked me something just now, please ask again.")
         .catch(e => this.log.warn(`couldn't say she had rejoined: ${e.message}`));
       return;
     }

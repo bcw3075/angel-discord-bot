@@ -362,12 +362,16 @@ test("(hr-20) a rejoin the owner asks for (/angel rejoin) is the real leave and 
   for (let i = 0; i < 50 && !events.some(e => e[0] === "rejoined" && !e[1].asked); i++) await sleep(2);
   assert.equal(lib.joins, 5, "the deaf rejoin still runs");
   assert.deepEqual(events.at(-1), ["rejoined", { count: 1, asked: false }]);
+  /* her rejoins are all used up now (maxRejoins 1): one she is asked for still runs, and never gives up */
+  await v.rejoin({ asked: true });
+  assert.equal(lib.joins, 6, "asked, after her own rejoins ran out");
+  assert.ok(!events.some(e => e[0] === "lost"), "never 'lost'");
   /* and an asked rejoin while one is under way does nothing */
   v.rejoining = true;
   await v.rejoin({ asked: true });
-  assert.equal(lib.joins, 5);
+  assert.equal(lib.joins, 6);
   v.rejoining = false;
   v.leave();
   await v.rejoin({ asked: true });
-  assert.equal(lib.joins, 5, "not after she has left");
+  assert.equal(lib.joins, 6, "not after she has left");
 });

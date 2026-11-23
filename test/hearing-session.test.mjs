@@ -301,6 +301,7 @@ test("(hr-21) a rejoin the owner asks for: the real rejoin, asked; the thread is
     assert.deepEqual(x.voice.asks, [{ asked: true }]);
     assert.equal(x.posted.length, 1);
     assert.match(x.posted[0], /I left and rejoined the voice channel, as asked with `\/angel rejoin`/);
+    assert.match(x.posted[0], listenOnly ? /A few seconds of talk may be missing/ : /If you asked me something just now, please ask again/);
     assert.deepEqual(x.alerts, [], "nothing went wrong: no warning");
     assert.deepEqual(x.voice.spoken, [], "nothing aloud");
     /* she still hears afterwards */
