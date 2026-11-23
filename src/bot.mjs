@@ -13,6 +13,7 @@ import { isStopRequest } from "./wake.mjs";
 import { readSpeakers, writeSpeakers, DATA_DIR, LOCAL_FILES } from "./config.mjs";
 import { loadTables, pickTable, namedBy, onServer, pinServers, describeTable, TABLES_DIR } from "./tables.mjs";
 import { inviteUrl } from "./setup.mjs";
+import { Outbox, placesOf } from "./outbox.mjs";
 
 const EPHEMERAL = { flags: MessageFlags.Ephemeral };
 const NO_PINGS = { allowedMentions: { parse: [], repliedUser: false } };
@@ -107,6 +108,41 @@ export class AngelBot {
     if (tables.legacy && this.cfg.guildId && !mine.length) this.log.warn(`guildId in config.json (${this.cfg.guildId}) is none of the servers I'm in, so /angel is registered nowhere. Fix it or leave it empty ("").`);
     if (!tables.legacy && !mine.length) this.log.warn("none of the tables in tables/ is on a server I'm in, so /angel is registered nowhere");
     for (const g of mine) await this.register(g);
+    this.startOutbox(client, guilds);
+  }
+
+  /* approved messages from a Claude chat (src/outbox.mjs); data/places.json tells that chat where she can post */
+  startOutbox(client, guilds) {
+    if (this.cfg.outbox === false || this.outbox) return;
+    this.readyClient = client; /* the ready event can come before login() has set this.client */
+    const me = client?.user ?? null;
+    const canPost = (c, user) => { try { return !!c.permissionsFor?.(user)?.has?.([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages]); } catch { return false; } };
+    writeJson(path.join(this.dataDir, "places.json"), { written: new Date().toISOString(), servers: placesOf(guilds, me, canPost) }, e => this.log.warn(`couldn't write places.json: ${e.message}`));
+    this.outbox = new Outbox({ dir: path.join(this.dataDir, "outbox"), log: this.log, send: m => this.sendOut(m) });
+    this.outbox.start();
+  }
+
+  /* one approved message: a direct message to the bot's owner or a user, or a post in a text channel. No pings. */
+  async sendOut({ to, text }) {
+    const c = this.client ?? this.readyClient;
+    if (!c) throw new Error("not logged in to Discord");
+    const content = { content: text, allowedMentions: { parse: [] } };
+    let user;
+    if (to === "owner") {
+      const app = await c.application.fetch();
+      user = app.owner?.owner?.user ?? app.owner; /* a team's owner, or the one owner */
+      if (!user?.send) throw new Error("couldn't find the bot's owner");
+    } else if (to.user) {
+      user = await c.users.fetch(to.user);
+    }
+    if (user) {
+      const m = await user.send(content);
+      return { where: `direct message to ${user.username ?? user.id}`, id: m?.id };
+    }
+    const ch = await c.channels.fetch(to.channel).catch(() => null);
+    if (!ch?.guild || !ch.isTextBased?.() || ch.isVoiceBased?.()) throw new Error(`channel ${to.channel} isn't a text channel on a server I'm in`);
+    const m = await ch.send(content);
+    return { where: `#${ch.name} in ${ch.guild.name}`, id: m?.id };
   }
 
   async register(g) {
@@ -563,6 +599,7 @@ export class AngelBot {
 
   async stop() {
     clearInterval(this.bookTimer);
+    this.outbox?.stop();
     await this.endAll("Angel is shutting down");
     this.client?.destroy();
   }

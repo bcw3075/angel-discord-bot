@@ -34,6 +34,8 @@ export const DEFAULTS = Object.freeze({
   memoryMinutes: 15,
   /* write each session's transcript to data/sessions/ (Angel keeps the conversation in memory either way) */
   saveTranscript: true,
+  /* send the messages a Claude chat puts in data/outbox/ after the owner approved each one (src/outbox.mjs) */
+  outbox: true,
   /* a pause this long ends a piece of speech */
   silenceMs: 900,
   /* a long monologue is cut into pieces this long so the transcript keeps up */
