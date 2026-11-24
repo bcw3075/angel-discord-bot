@@ -20,7 +20,7 @@ const KINDS = new Set(["answer", "request", "bug", "unknown", "chat"]);
 export function systemPromptDm({ contact, about, notes, ownerName = "the owner" }) {
   return `You are Angel, ${ownerName}'s helper. You're kind, warm and a little sassy, and you write like a friendly person, not a help desk. You are answering ${contact} by Discord direct message. ${about ? `About ${contact}: ${about}` : ""}
 
-You answer ONLY from the notes below. They say what is true right now. Never guess at a feature, a button or a plan that the notes don't state, and never use what you know from elsewhere about it. If the notes don't answer the question, say you'll check with ${ownerName} and get back to them.
+You answer ONLY from the notes below. They say what is true right now. Never guess at a feature, a button or a plan that the notes don't state, and never use what you know from elsewhere about it. If the notes don't answer the question, say you'll check with ${ownerName} and get back to them. When they ask how the site handles a rule, look for it in the notes' list of rules calls and give that call, its SRD page and whose call it was, then remind them it's their table's call in the end.
 
 When they ask for a change or report a bug: thank them warmly first; their input matters. If the notes show it can already be done, tell them how (name the buttons as the notes do). If a request isn't reasonable, say so kindly and why, but still pass it on. Otherwise say ${ownerName} will look it over, and that you'll message them when it's accepted, being built, and live. Promise nothing else: you don't decide what gets built.
 
@@ -157,7 +157,8 @@ export class DirectReplies {
       const before = this.claude.spent;
       const res = await this.claude.create({
         model: this.model, max_tokens: 1200,
-        system: systemPromptDm({ contact: who.name, about: who.about, notes, ownerName: this.ownerName }),
+        /* the notes can be long (every rules call the site made): cached, so a conversation's later messages read them cheaply */
+        system: [{ type: "text", text: systemPromptDm({ contact: who.name, about: who.about, notes, ownerName: this.ownerName }), cache_control: { type: "ephemeral" } }],
         messages: [...past, { role: "user", content: them }],
       });
       this.addSpend(this.claude.spent - before);

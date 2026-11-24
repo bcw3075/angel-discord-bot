@@ -50,6 +50,7 @@ test("the prompt holds the notes, the contact and the owner's name, and says to 
   assert.match(p, /check with Sam/);
   assert.match(p, /no run-on sentences/);
   assert.match(p, /bullets for any list/);
+  assert.match(p, /list of rules calls/);
 });
 
 test("a contact's question is answered from the notes, counted against the cap, and both sides kept", async () => {
@@ -57,8 +58,9 @@ test("a contact's question is answered from the notes, counted against the cap, 
   const r = await ask("Where do I make a game?");
   assert.deepEqual(r, { answered: true, kind: "answer" });
   assert.deepEqual(replies, ["It's under **Games**."]);
-  assert.match(calls[0].system, /create a game under \*\*Games\*\*/);
-  assert.match(calls[0].system, /check with Sam/);
+  assert.match(calls[0].system[0].text, /create a game under \*\*Games\*\*/);
+  assert.match(calls[0].system[0].text, /check with Sam/);
+  assert.deepEqual(calls[0].system[0].cache_control, { type: "ephemeral" });
   assert.deepEqual(calls[0].messages, [{ role: "user", content: "Where do I make a game?" }]);
   assert.deepEqual(spends, [0.01]);
   assert.equal(owner.length, 0);
