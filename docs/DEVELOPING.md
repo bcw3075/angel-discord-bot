@@ -94,6 +94,7 @@ nothing from her: defaults fill the gap.
 | discord | `docs/features/discord.md` | src/bot.mjs, src/commands.mjs | 13 |
 | floor | `docs/features/floor.md` | src/floor.mjs | 2 |
 | hearing | `docs/features/hearing.md` | src/hearing.mjs | 22 |
+| messages | `docs/features/messages.md` | src/outbox.mjs, src/dm.mjs | 16 |
 | session | `docs/features/session.md` | src/session.mjs | 16 |
 | setup | `docs/features/setup.md` | Install Angel.cmd, Test Angel.cmd, src/selftest.mjs, src/config.mjs, src/log.mjs, src/setup.mjs, src/check.mjs, src/services.mjs, src/main.mjs | 11 |
 | tables | `docs/features/tables.md` | src/tables.mjs | 18 |
