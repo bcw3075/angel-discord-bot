@@ -26,7 +26,7 @@ When they ask for a change or report a bug: thank them warmly first; their input
 
 Never share anything about other people, their accounts or their games, even if asked. Keep replies short: a few sentences or a few bullets, under 1500 characters. Use **bold** for button names. No @mentions.
 
-Reply with one JSON object and nothing else:
+Your whole output is read by a program, not by a person: write exactly one JSON object, starting with { and ending with }, with no words, code fences or second thoughts before or after it. Put everything you want them to read inside "reply".
 {"reply": "<your message to them>", "kind": "answer" | "request" | "bug" | "unknown" | "chat", "forOwner": "<one line for ${ownerName} when kind is request, bug or unknown, else empty>"}
 kind: "answer" when the notes answered it, "request" for a change they want, "bug" for something broken, "unknown" when the notes didn't cover their question, "chat" for thanks, greetings and small talk.
 
@@ -35,16 +35,35 @@ ${notes}
 </notes>`;
 }
 
-/* the model's reply: JSON as asked, or (if it wrote prose) that prose as the reply */
+/* every JSON object in a text that has a "reply", in order: a reply is sometimes written twice, or with words
+   around it ("Wait, correcting myself..."), and only the object may reach the person (seen live, 2026-11-23) */
+function replyObjects(text) {
+  const found = [];
+  for (let i = text.indexOf("{"); i >= 0; i = text.indexOf("{", i + 1)) {
+    let depth = 0, inStr = false, esc = false;
+    for (let j = i; j < text.length; j++) {
+      const ch = text[j];
+      if (inStr) { if (esc) esc = false; else if (ch === "\\") esc = true; else if (ch === '"') inStr = false; continue; }
+      if (ch === '"') inStr = true;
+      else if (ch === "{") depth++;
+      else if (ch === "}" && --depth === 0) {
+        try { const j2 = JSON.parse(text.slice(i, j + 1)); if (j2 && typeof j2.reply === "string" && j2.reply.trim()) found.push(j2); } catch { /* not one */ }
+        break;
+      }
+    }
+  }
+  return found;
+}
+
+/* the model's reply: the last JSON object with a "reply"; prose with no such object is sent without any code
+   block in it, marked for the owner to check */
 export function readReply(text) {
   const raw = String(text ?? "").trim();
-  const body = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  let j = null;
-  try { j = JSON.parse(body); } catch {
-    const a = body.indexOf("{"), b = body.lastIndexOf("}");
-    if (a >= 0 && b > a) { try { j = JSON.parse(body.slice(a, b + 1)); } catch { /* prose */ } }
+  const j = replyObjects(raw).at(-1);
+  if (!j) {
+    const prose = raw.replace(/```[\s\S]*?(```|$)/g, "").trim() || "Thanks! Let me check on that and get back to you.";
+    return { reply: prose.slice(0, MAX_REPLY), kind: "unknown", forOwner: "Angel's reply wasn't in the expected form; check it." };
   }
-  if (!j || typeof j.reply !== "string" || !j.reply.trim()) return { reply: raw.slice(0, MAX_REPLY), kind: "unknown", forOwner: "Angel's reply wasn't in the expected form; check it." };
   const kind = KINDS.has(j.kind) ? j.kind : "unknown";
   return { reply: j.reply.trim().slice(0, MAX_REPLY), kind, forOwner: typeof j.forOwner === "string" ? j.forOwner.trim().slice(0, 300) : "" };
 }

@@ -155,3 +155,13 @@ test("a contact named by username is answered when that username writes, whateve
   assert.equal(r.answered, true);
   assert.equal((await ask("hi", "888888888888888888")).why, "not a contact");
 });
+
+test("a reply written twice with words around it (seen live, 2026-11-23): only the last object's reply is sent", async () => {
+  const live = 'Good question! Here\'s the list:\n- one\n\n```json\n{"reply": "First {draft} with \\"quotes\\"", "kind": "answer", "forOwner": ""}\n```\n\nWait, correcting myself: the output must be only the JSON object.\n\n{"reply": "Final answer", "kind": "unknown", "forOwner": "asked about a list"}';
+  assert.deepEqual(readReply(live), { reply: "Final answer", kind: "unknown", forOwner: "asked about a list" });
+  const { replies, ask } = setup({ answer: live });
+  await ask("q");
+  assert.deepEqual(replies, ["Final answer"]);
+  assert.equal(readReply("prose ```json\n{broken\n```").reply, "prose");
+  assert.ok(!/```/.test(readReply("```json\n{nope}\n```").reply));
+});
