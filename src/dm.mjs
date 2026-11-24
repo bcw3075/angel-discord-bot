@@ -17,7 +17,7 @@ import path from "node:path";
 export const MAX_REPLY = 1800;
 const KINDS = new Set(["answer", "request", "bug", "unknown", "chat"]);
 
-export function systemPromptDm({ contact, about, notes, ownerName = "the owner" }) {
+export function systemPromptDm({ contact, about, notes, index = "", ownerName = "the owner" }) {
   return `You are Angel, ${ownerName}'s helper. You're kind, warm and a little sassy, and you write like a friendly person, not a help desk. You are answering ${contact} by Discord direct message. ${about ? `About ${contact}: ${about}` : ""}
 
 You answer ONLY from the notes below. They start with a short summary of what is live; after it may come longer design docs, which also hold history, plans and work that isn't live yet: only the summary, or a doc's own status saying it is live, makes a thing live. Answer any question about it from everything in the notes, and look through all of them before saying you don't know. Never guess at a feature, a button or a plan that the notes don't state, and never use what you know from elsewhere about it. If the notes don't answer the question, say you'll check with ${ownerName} and get back to them. When they ask how the site handles a rule, look for it in the notes' list of rules calls and give that call, its SRD page and whose call it was, then remind them it's their table's call in the end.
@@ -34,7 +34,13 @@ kind: "answer" when the notes answered it, "request" for a change they want, "bu
 
 <notes>
 ${notes}
-</notes>`;
+</notes>${index ? `
+
+The rest of the notes is in sections, listed below (number, title, how it starts). Before you answer, look up what the question needs: search_notes with a few words (a button's name, a rule, a number they mention), then read_sections for the sections that matter. Never say you don't know before you have searched. Look up only what you need.
+
+<index>
+${index}
+</index>` : ""}`;
 }
 
 /* every JSON object in a text that has a "reply", in order: a reply is sometimes written twice, or with words
@@ -70,13 +76,81 @@ export function readReply(text) {
   return { reply: j.reply.trim().slice(0, MAX_REPLY), kind, forOwner: typeof j.forOwner === "string" ? j.forOwner.trim().slice(0, 300) : "" };
 }
 
+/* Long notes are split at a marker line into a summary (always given) and sections (Rhea, 2026-11-23: "a good
+   indexing ... so that instead of loading it all, when a question is asked she knows exactly what info to pull").
+   Each section starts at a heading of level 2 to 4; she is given the summary, an index of the sections and two
+   tools, search_notes and read_sections, and pulls only what a question needs. Notes without the marker are given
+   whole. */
+export const SECTIONS_MARKER = "<!-- angel: sections below -->";
+const READ_LIMIT = 90000; /* characters of sections one read_sections call gives back */
+
+export function splitNotes(notes) {
+  const at = notes.indexOf(SECTIONS_MARKER);
+  if (at < 0) return { summary: notes, sections: [] };
+  const summary = notes.slice(0, at).trim();
+  const rest = notes.slice(at + SECTIONS_MARKER.length);
+  const sections = [];
+  const trail = [];
+  for (const chunk of rest.split(/^(?=#{1,4} )/m)) {
+    const m = chunk.match(/^(#{1,4}) (.+)/);
+    if (!m) { if (chunk.trim() && sections.length) sections.at(-1).text += chunk; continue; }
+    const level = m[1].length;
+    trail.length = Math.max(0, level - 1);
+    trail[level - 1] = m[2].trim();
+    if (level === 1) continue; /* a top heading only names what follows */
+    const body = chunk.slice(m[0].length).trim();
+    if (!body) continue;
+    const first = body.replace(/\s+/g, " ").slice(0, 140);
+    sections.push({ id: sections.length + 1, title: trail.filter(Boolean).slice(1).join(" > ") || m[2].trim(), first, text: chunk.trim() });
+  }
+  return { summary, sections };
+}
+
+export function indexText(sections) {
+  return sections.map(x => `[${x.id}] ${x.title} — ${x.first}`).join("\n");
+}
+
+/* every section holding all of the words (any capitals), best first, with the lines that matched */
+export function searchNotes(sections, query, max = 12) {
+  const words = String(query ?? "").toLowerCase().split(/[^a-z0-9'+-]+/).filter(w => w.length > 1).slice(0, 8);
+  if (!words.length) return "No words to search for.";
+  const hits = [];
+  for (const x of sections) {
+    const low = x.text.toLowerCase();
+    if (!words.every(w => low.includes(w))) continue;
+    const score = words.reduce((n, w) => n + low.split(w).length - 1, 0);
+    const lines = x.text.split("\n").filter(l => words.some(w => l.toLowerCase().includes(w))).slice(0, 3).map(l => "    " + l.trim().slice(0, 240));
+    hits.push({ score, line: `[${x.id}] ${x.title}\n${lines.join("\n")}` });
+  }
+  if (!hits.length) return `No section has all of: ${words.join(", ")}. Try fewer or other words.`;
+  return hits.sort((a, b) => b.score - a.score).slice(0, max).map(h => h.line).join("\n");
+}
+
+export function readSections(sections, ids) {
+  const out = [];
+  let size = 0;
+  for (const id of [...new Set((Array.isArray(ids) ? ids : [ids]).map(Number))].slice(0, 12)) {
+    const x = sections.find(s => s.id === id);
+    if (!x) { out.push(`[${id}] no such section`); continue; }
+    if (size + x.text.length > READ_LIMIT) { out.push(`[${id}] not included: too much at once; ask for it on its own`); continue; }
+    size += x.text.length;
+    out.push(`[${id}] ${x.title}\n${x.text}`);
+  }
+  return out.join("\n\n---\n\n");
+}
+
+export const NOTE_TOOLS = [
+  { name: "search_notes", description: "Find the sections of the notes that hold all of some words (e.g. a button's name, a rule, a number). Returns section numbers, titles and the matching lines.", input_schema: { type: "object", properties: { query: { type: "string", description: "a few words" } }, required: ["query"] } },
+  { name: "read_sections", description: "Read whole sections of the notes by their numbers from the index or a search.", input_schema: { type: "object", properties: { ids: { type: "array", items: { type: "integer" }, description: "section numbers, at most 12" } }, required: ["ids"] } },
+];
+
 const safeName = n => String(n).replace(/[^a-z0-9_-]+/gi, "-").slice(0, 40) || "contact";
 const stamp = at => new Date(at).toISOString().replace(/[:.]/g, "-");
 
 export class DirectReplies {
   /* claude: the Claude class (create); canSpend() and addSpend(dollars): the bot's daily cap; dmOwner(text) */
-  constructor({ dataDir, log, claude, model, cacheTtl = "1h", canSpend = () => true, addSpend = () => {}, dmOwner = async () => {}, ownerName = "the owner", maxPerDay = 40, keep = 8, now = Date.now }) {
-    Object.assign(this, { dataDir, log, claude, model, cacheTtl, canSpend, addSpend, dmOwner, ownerName, maxPerDay, keep, now });
+  constructor({ dataDir, log, claude, model, cacheTtl = "1h", canSpend = () => true, addSpend = () => {}, dmOwner = async () => {}, ownerName = "the owner", maxPerDay = 40, keep = 8, maxLookups = 5, now = Date.now }) {
+    Object.assign(this, { dataDir, log, claude, model, cacheTtl, canSpend, addSpend, dmOwner, ownerName, maxPerDay, keep, maxLookups, now });
     this.busy = new Map(); /* one exchange at a time per person, in order */
   }
 
@@ -157,13 +231,33 @@ export class DirectReplies {
     let out;
     try {
       const before = this.claude.spent;
-      const res = await this.claude.create({
-        model: this.model, max_tokens: 1200,
-        /* the notes are long (every feature doc of a site): cached for an hour by default, since someone's messages are often
-           more than five minutes apart (live, 2026-11-23: 9, 14 and 1 minutes), so most of them read the cache instead of writing it */
-        system: [{ type: "text", text: systemPromptDm({ contact: who.name, about: who.about, notes, ownerName: this.ownerName }), cache_control: this.cacheTtl === "5m" ? { type: "ephemeral" } : { type: "ephemeral", ttl: "1h" } }],
+      const { summary, sections } = splitNotes(notes);
+      const cache = this.cacheTtl === "5m" ? { type: "ephemeral" } : { type: "ephemeral", ttl: "1h" };
+      /* the summary and the index are cached for an hour by default, since someone's messages are often more than
+         five minutes apart (live, 2026-11-23: 9, 14 and 1 minutes) */
+      const body = {
+        model: this.model, max_tokens: 1500,
+        system: [{ type: "text", text: systemPromptDm({ contact: who.name, about: who.about, notes: summary, index: indexText(sections), ownerName: this.ownerName }), cache_control: cache }],
         messages: [...past, { role: "user", content: them }],
-      });
+      };
+      if (sections.length) body.tools = NOTE_TOOLS;
+      let res;
+      for (let round = 0; ; round++) {
+        res = await this.claude.create(body);
+        const uses = (res.content ?? []).filter(b => b.type === "tool_use");
+        if (res.stop_reason !== "tool_use" || !uses.length) break;
+        const results = round >= this.maxLookups
+          ? uses.map(u => ({ type: "tool_result", tool_use_id: u.id, content: "No more lookups: answer now from what you have." }))
+          : null;
+        if (results) {
+          body.messages = [...body.messages, { role: "assistant", content: res.content }, { role: "user", content: results }];
+          res = await this.claude.create({ ...body, tool_choice: { type: "none" } });
+          break;
+        }
+        const found = uses.map(u => ({ type: "tool_result", tool_use_id: u.id, content: u.name === "search_notes" ? searchNotes(sections, u.input?.query) : u.name === "read_sections" ? readSections(sections, u.input?.ids) : "unknown tool" }));
+        this.log.info(`direct reply to ${who.name}: ${uses.map(u => `${u.name}(${JSON.stringify(u.input ?? {}).slice(0, 80)})`).join(", ")}`);
+        body.messages = [...body.messages, { role: "assistant", content: res.content }, { role: "user", content: found }];
+      }
       this.addSpend(this.claude.spent - before);
       out = readReply((res.content ?? []).filter(b => b.type === "text").map(b => b.text).join(""));
     } catch (e) {

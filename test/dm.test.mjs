@@ -171,3 +171,57 @@ test("a reply written twice with words around it (seen live, 2026-11-23): only t
   assert.equal(readReply("prose ```json\n{broken\n```").reply, "prose");
   assert.ok(!/```/.test(readReply("```json\n{nope}\n```").reply));
 });
+
+import { splitNotes, indexText, searchNotes, readSections, SECTIONS_MARKER } from "../src/dm.mjs";
+
+const LONG = `# Summary\nWhat is live.\n${SECTIONS_MARKER}\n# Docs\n## Feature doc: table\nAbout tables.\n### Rests\nThe session bar shows Short rests in a row: n of 3.\n### Fear\nThe Fear tracker.\n#### Fear at rests\nFear rolls at Finish.\n\nA long paragraph that the index never shows, because only the first 140 characters of a section are listed there, and this is more than that: SECRET-DEEP-LINE.\n`;
+
+test("long notes split at the marker into a summary and titled sections, with an index; without the marker, whole", () => {
+  const { summary, sections } = splitNotes(LONG);
+  assert.equal(summary, "# Summary\nWhat is live.");
+  assert.deepEqual(sections.map(x => [x.id, x.title]), [[1, "Feature doc: table"], [2, "Feature doc: table > Rests"], [3, "Feature doc: table > Fear"], [4, "Feature doc: table > Fear > Fear at rests"]]);
+  assert.match(indexText(sections), /^\[1\] Feature doc: table — About tables\./);
+  assert.deepEqual(splitNotes("plain notes"), { summary: "plain notes", sections: [] });
+});
+
+test("search_notes finds the sections with every word, any capitals; read_sections gives them whole", () => {
+  const { sections } = splitNotes(LONG);
+  const hit = searchNotes(sections, "short RESTS in a row");
+  assert.match(hit, /^\[2\] Feature doc: table > Rests\n/);
+  assert.match(hit, /\n {4}The session bar shows Short rests in a row: n of 3\./);
+  assert.match(searchNotes(sections, "dragons"), /No section has all of: dragons/);
+  const read = readSections(sections, [4, 99]);
+  assert.match(read, /\[4\] Feature doc: table > Fear > Fear at rests\n#### Fear at rests\nFear rolls at Finish\./);
+  assert.match(read, /\[99\] no such section/);
+});
+
+test("with sectioned notes she gets the summary and the index, looks things up with the tools, and the answer is sent", async () => {
+  const { dir, d, replies, calls } = setup({ notes: LONG });
+  const steps = [
+    { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "search_notes", input: { query: "short rests" } }] },
+    { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t2", name: "read_sections", input: { ids: [2] } }] },
+    { stop_reason: "end_turn", content: [{ type: "text", text: '{"reply":"It counts short rests since your last long rest.","kind":"answer","forOwner":""}' }] },
+  ];
+  d.claude = { spent: 0, async create(body) { calls.push(JSON.parse(JSON.stringify(body))); this.spent += 0.01; return steps.shift(); } };
+  const r = await d.onDirect({ userId: GM, text: "What is 0 of 3?", reply: async t => { replies.push(t); } });
+  assert.deepEqual(r, { answered: true, kind: "answer" });
+  assert.deepEqual(replies, ["It counts short rests since your last long rest."]);
+  assert.equal(calls.length, 3);
+  assert.match(calls[0].system[0].text, /What is live\./);
+  assert.match(calls[0].system[0].text, /<index>\n\[1\] Feature doc: table/);
+  assert.ok(!calls[0].system[0].text.includes("SECRET-DEEP-LINE"));
+  assert.deepEqual(calls[0].tools.map(t => t.name), ["search_notes", "read_sections"]);
+  assert.match(calls[1].messages.at(-1).content[0].content, /\[2\] Feature doc: table > Rests/);
+  assert.match(calls[2].messages.at(-1).content[0].content, /Short rests in a row: n of 3/);
+  assert.ok(fs.existsSync(path.join(dir, "conversations", "table-gm.md")));
+});
+
+test("past the lookup limit she is told to answer from what she has, with no more tools", async () => {
+  const { d, replies, calls } = setup({ notes: LONG, maxLookups: 1 });
+  const loop = { stop_reason: "tool_use", content: [{ type: "tool_use", id: "t", name: "search_notes", input: { query: "fear" } }] };
+  d.claude = { spent: 0, async create(body) { calls.push(body); return body.tool_choice?.type === "none" ? { stop_reason: "end_turn", content: [{ type: "text", text: '{"reply":"done","kind":"answer"}' }] } : loop; } };
+  await d.onDirect({ userId: GM, text: "q", reply: async t => { replies.push(t); } });
+  assert.deepEqual(replies, ["done"]);
+  assert.equal(calls.length, 3);
+  assert.equal(calls[2].tool_choice.type, "none");
+});
