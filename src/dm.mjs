@@ -75,8 +75,8 @@ const stamp = at => new Date(at).toISOString().replace(/[:.]/g, "-");
 
 export class DirectReplies {
   /* claude: the Claude class (create); canSpend() and addSpend(dollars): the bot's daily cap; dmOwner(text) */
-  constructor({ dataDir, log, claude, model, canSpend = () => true, addSpend = () => {}, dmOwner = async () => {}, ownerName = "the owner", maxPerDay = 40, keep = 8, now = Date.now }) {
-    Object.assign(this, { dataDir, log, claude, model, canSpend, addSpend, dmOwner, ownerName, maxPerDay, keep, now });
+  constructor({ dataDir, log, claude, model, cacheTtl = "1h", canSpend = () => true, addSpend = () => {}, dmOwner = async () => {}, ownerName = "the owner", maxPerDay = 40, keep = 8, now = Date.now }) {
+    Object.assign(this, { dataDir, log, claude, model, cacheTtl, canSpend, addSpend, dmOwner, ownerName, maxPerDay, keep, now });
     this.busy = new Map(); /* one exchange at a time per person, in order */
   }
 
@@ -159,8 +159,9 @@ export class DirectReplies {
       const before = this.claude.spent;
       const res = await this.claude.create({
         model: this.model, max_tokens: 1200,
-        /* the notes can be long (every rules call the site made): cached, so a conversation's later messages read them cheaply */
-        system: [{ type: "text", text: systemPromptDm({ contact: who.name, about: who.about, notes, ownerName: this.ownerName }), cache_control: { type: "ephemeral" } }],
+        /* the notes are long (every feature doc of a site): cached for an hour by default, since someone's messages are often
+           more than five minutes apart (live, 2026-11-23: 9, 14 and 1 minutes), so most of them read the cache instead of writing it */
+        system: [{ type: "text", text: systemPromptDm({ contact: who.name, about: who.about, notes, ownerName: this.ownerName }), cache_control: this.cacheTtl === "5m" ? { type: "ephemeral" } : { type: "ephemeral", ttl: "1h" } }],
         messages: [...past, { role: "user", content: them }],
       });
       this.addSpend(this.claude.spent - before);

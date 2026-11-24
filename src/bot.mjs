@@ -141,7 +141,7 @@ export class AngelBot {
   async onDirect(m) {
     if (this.cfg.directReplies === false) return;
     this.directs ??= new DirectReplies({
-      dataDir: this.dataDir, log: this.log, claude: this.services.claude, model: this.cfg.answerModel,
+      dataDir: this.dataDir, log: this.log, claude: this.services.claude, model: this.cfg.answerModel, cacheTtl: this.cfg.answerCacheTtl,
       canSpend: () => !this.dailyOver(), addSpend: d => this.addSpend(d),
       dmOwner: text => this.sendOut({ to: "owner", text }),
     });

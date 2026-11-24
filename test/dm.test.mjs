@@ -62,7 +62,7 @@ test("a contact's question is answered from the notes, counted against the cap, 
   assert.deepEqual(replies, ["It's under **Games**."]);
   assert.match(calls[0].system[0].text, /create a game under \*\*Games\*\*/);
   assert.match(calls[0].system[0].text, /check with Sam/);
-  assert.deepEqual(calls[0].system[0].cache_control, { type: "ephemeral" });
+  assert.deepEqual(calls[0].system[0].cache_control, { type: "ephemeral", ttl: "1h" });
   assert.deepEqual(calls[0].messages, [{ role: "user", content: "Where do I make a game?" }]);
   assert.deepEqual(spends, [0.01]);
   assert.equal(owner.length, 0);
