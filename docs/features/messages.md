@@ -47,6 +47,7 @@ Messages outside a session: approved messages a Claude chat leaves in her outbox
 - (ms-17) {unit} each call's own cost is counted, even when a later lookup fails; several reads in one round share one limit (review 10).
 - (ms-18) {unit} a username contact is pinned to the first id; past the limit the owner hears once.
 - (ms-19) {unit} ids as numbers are refused; a message sent but not filed is never resent; a failed send says to look in Discord.
+- (ms-20) {unit} each exchange in `data/conversations/<contact>.json` keeps its own cost as `dollars` (the owner's log of these messages reads it; Rhea, 2026-11-24); one held after a failed call keeps what that call cost.
 - (ms-16) {live} her PC, 2026-11-23: the owner's direct message, a username lookup, an outbox message to a contact, and a contact's questions answered from indexed notes (search_notes then read_sections in the log).
 
 ## Traps

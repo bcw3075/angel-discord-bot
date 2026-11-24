@@ -148,6 +148,8 @@ export const NOTE_TOOLS = [
 const safeName = n => String(n).replace(/[^a-z0-9_-]+/gi, "-").slice(0, 40) || "contact";
 const stamp = at => new Date(at).toISOString().replace(/[:.]/g, "-");
 
+const roundDollars = d => Math.round((Number(d) || 0) * 1e6) / 1e6;
+
 export class DirectReplies {
   /* claude: the Claude class (create); canSpend() and addSpend(dollars): the bot's daily cap; dmOwner(text) */
   constructor({ dataDir, log, claude, model, cacheTtl = "1h", canSpend = () => true, addSpend = () => {}, dmOwner = async () => {}, ownerName = "the owner", maxPerDay = 40, keep = 8, maxLookups = 5, now = Date.now }) {
@@ -236,9 +238,10 @@ export class DirectReplies {
     if (!who) { this.log.info(`direct message from someone who isn't a contact (${userId}); not answered`); return { answered: false, why: "not a contact" }; }
     if (!them) return { answered: false, why: "empty" };
     const notes = this.readNotes(who.notes);
-    const holding = async (angel, why) => {
+    /* each exchange keeps what it cost, so the owner's log of these messages can show it (Rhea, 2026-11-24) */
+    const holding = async (angel, why, dollars = 0) => {
       await reply(angel).catch(e => this.log.warn(`couldn't answer ${who.name}: ${e.message}`));
-      const entry = { at, them, angel, kind: "unknown", forOwner: `${why}: "${them.slice(0, 200)}"` };
+      const entry = { at, them, angel, kind: "unknown", forOwner: `${why}: "${them.slice(0, 200)}"`, dollars: roundDollars(dollars) };
       this.record(who.name, entry);
       this.saveForOwner(who.name, entry);
       /* past the limit the owner hears once a day per contact, not at every message (review 10) */
@@ -297,13 +300,13 @@ export class DirectReplies {
       out = readReply((res.content ?? []).filter(b => b.type === "text").map(b => b.text).join(""));
     } catch (e) {
       this.log.warn(`direct reply to ${who.name} failed: ${e.message}`);
-      return holding(`Thanks! I couldn't look that up just now, so I've passed it to ${this.ownerName} and I'll get back to you.`, "the answer failed");
+      return holding(`Thanks! I couldn't look that up just now, so I've passed it to ${this.ownerName} and I'll get back to you.`, "the answer failed", spent);
     } finally {
       if (spent) this.addSpend(spent);
     }
     let sent = true;
     await reply(out.reply).catch(e => { sent = false; this.log.warn(`couldn't answer ${who.name}: ${e.message}`); });
-    const entry = { at, them, angel: sent ? out.reply : null, kind: out.kind, forOwner: out.forOwner };
+    const entry = { at, them, angel: sent ? out.reply : null, kind: out.kind, forOwner: out.forOwner, dollars: roundDollars(spent) };
     this.record(who.name, entry);
     this.log.info(`direct message from ${who.name} answered (${out.kind})`);
     if (["request", "bug", "unknown"].includes(out.kind)) {

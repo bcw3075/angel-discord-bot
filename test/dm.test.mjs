@@ -282,3 +282,15 @@ test("past the day's limit the owner hears once, not at every message", async ()
   assert.equal(replies.length, 3);
   assert.equal(owner.filter(t => /limit/.test(t)).length, 1);
 });
+
+test("each exchange keeps its own cost in the conversation file; a held one with no call costs nothing", async () => {
+  const { dir, ask } = setup();
+  await ask("Where do I make a game?");
+  const h = JSON.parse(fs.readFileSync(path.join(dir, "conversations", "table-gm.json"), "utf8"));
+  assert.equal(h.length, 1);
+  assert.equal(h[0].dollars, 0.01);
+  const failed = setup({ fail: true });
+  await failed.ask("Where do I make a game?");
+  const f = JSON.parse(fs.readFileSync(path.join(failed.dir, "conversations", "table-gm.json"), "utf8"));
+  assert.equal(f[0].dollars, 0);
+});
