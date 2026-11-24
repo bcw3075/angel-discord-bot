@@ -19,11 +19,12 @@ function setup({ answer = { reply: "It's under **Games**.", kind: "answer", forO
   const calls = [], owner = [], spends = [];
   const claude = {
     spent: 0,
+    cost: (model, usage) => usage?.dollars ?? 0,
     async create(body) {
       calls.push(body);
       if (fail) throw new Error("Claude answered 529: overloaded");
       this.spent += 0.01;
-      return { content: [{ type: "text", text: typeof answer === "string" ? answer : JSON.stringify(answer) }] };
+      return { usage: { dollars: 0.01 }, content: [{ type: "text", text: typeof answer === "string" ? answer : JSON.stringify(answer) }] };
     },
   };
   const d = new DirectReplies({ dataDir: dir, log: quiet, claude, model: "m", addSpend: x => spends.push(x), dmOwner: async t => { owner.push(t); }, ...extra });
@@ -224,4 +225,60 @@ test("past the lookup limit she is told to answer from what she has, with no mor
   assert.deepEqual(replies, ["done"]);
   assert.equal(calls.length, 3);
   assert.equal(calls[2].tool_choice.type, "none");
+});
+
+/* review 10 */
+test("each call's own cost is counted, even when a later lookup fails; another call on the shared client is not", async () => {
+  const LONG = "Summary.\n" + "<!-- angel: sections below -->" + "\n## Rests\nShort rests in a row.\n";
+  const { d, spends, replies } = setup({ notes: LONG });
+  let n = 0;
+  d.claude = {
+    spent: 0, cost: (m, u) => u?.dollars ?? 0,
+    async create() {
+      this.spent += 5; /* the table's answers on the same client meanwhile */
+      if (n++ === 0) return { stop_reason: "tool_use", usage: { dollars: 0.3 }, content: [{ type: "tool_use", id: "t1", name: "search_notes", input: { query: "rests" } }] };
+      const e = new Error("Claude answered 400: too long"); e.usage = { dollars: 0.02 }; throw e;
+    },
+  };
+  await d.onDirect({ userId: GM, text: "rests?", reply: async t => { replies.push(t); } });
+  assert.equal(spends.length, 1);
+  assert.ok(Math.abs(spends[0] - 0.32) < 1e-9, String(spends[0]));
+  assert.match(replies[0], /couldn't look that up/);
+});
+
+test("several reads in one round share one limit for the reply", async () => {
+  const big = "x ".repeat(20000);
+  const LONG = "Summary.\n<!-- angel: sections below -->\n" + [1, 2, 3, 4].map(i => `## Part ${i}\n${big}\n`).join("");
+  const { d } = setup({ notes: LONG });
+  const sizes = [];
+  let n = 0;
+  d.claude = {
+    spent: 0, cost: () => 0,
+    async create(body) {
+      if (n++ === 0) return { stop_reason: "tool_use", content: [0, 1, 2, 3].map(i => ({ type: "tool_use", id: `t${i}`, name: "read_sections", input: { ids: [i + 1] } })) };
+      for (const r of body.messages.at(-1).content) sizes.push(r.content.length);
+      return { stop_reason: "end_turn", content: [{ type: "text", text: '{"reply":"ok","kind":"answer"}' }] };
+    },
+  };
+  await d.onDirect({ userId: GM, text: "all of it", reply: async () => {} });
+  assert.equal(sizes.length, 4); /* every tool_use still gets its tool_result */
+  assert.ok(sizes.reduce((a, b) => a + b, 0) <= 120000 + 200, String(sizes));
+});
+
+test("a contact named by username is pinned to the first id: someone else with that username later is not answered", async () => {
+  const { d, replies, calls } = setup({ contacts: { gm: { username: "Some_GM", notes: "site.md" } } });
+  await d.onDirect({ userId: "111111111111111111", username: "some_gm", text: "hi", reply: async t => { replies.push(t); } });
+  const r = await d.onDirect({ userId: "222222222222222222", username: "some_gm", text: "hi", reply: async t => { replies.push(t); } });
+  assert.equal(replies.length, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(r.answered, false);
+});
+
+test("past the day's limit the owner hears once, not at every message", async () => {
+  const { owner, ask, replies } = setup({ maxPerDay: 1 });
+  await ask("one");
+  await ask("two");
+  await ask("three");
+  assert.equal(replies.length, 3);
+  assert.equal(owner.filter(t => /limit/.test(t)).length, 1);
 });

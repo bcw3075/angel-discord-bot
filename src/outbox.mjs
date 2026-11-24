@@ -35,7 +35,8 @@ export function readMessage(raw) {
   if (to === "owner") return { to: "owner", text };
   if (to && typeof to === "object") {
     const keys = Object.keys(to);
-    if (keys.length === 1 && (keys[0] === "channel" || keys[0] === "user") && SNOWFLAKE.test(String(to[keys[0]]))) return { to: { [keys[0]]: String(to[keys[0]]) }, text };
+    /* an id written as a JSON number has already lost digits (past 2^53) and could name someone else: text only (review 10) */
+    if (keys.length === 1 && (keys[0] === "channel" || keys[0] === "user") && typeof to[keys[0]] === "string" && SNOWFLAKE.test(to[keys[0]])) return { to: { [keys[0]]: String(to[keys[0]]) }, text };
     if (keys.length === 1 && keys[0] === "contact" && typeof to.contact === "string" && to.contact.trim()) return { to: { contact: to.contact.trim() }, text };
   }
   return new Error('"to" must be "owner", { "channel": "<id>" }, { "user": "<id>" } or { "contact": "<name>" }');
@@ -113,15 +114,21 @@ export class Outbox {
           this.file("sending", name, "failed", { error: msg.message, at: new Date(this.now()).toISOString() });
           continue;
         }
+        let r;
         try {
-          const r = await this.send({ to: msg.to, text: msg.text });
-          this.recent.push(this.now());
-          this.log.info(`outbox: ${name} sent (${r.where})`);
-          this.file("sending", name, "sent", { sentAt: new Date(this.now()).toISOString(), where: r.where, messageId: r.id, ...(msg.contact ? { contact: msg.contact } : {}) });
+          r = await this.send({ to: msg.to, text: msg.text });
         } catch (e) {
           this.log.warn(`outbox: ${name} not sent: ${e.message}`);
-          this.file("sending", name, "failed", { error: e.message, at: new Date(this.now()).toISOString() });
+          /* an error after Discord took it (the answer lost on the way back) looks the same: say to look first (review 10) */
+          this.file("sending", name, "failed", { error: e.message, at: new Date(this.now()).toISOString(), check: "Look in Discord before sending it again: an error that came after it was taken looks the same." });
+          continue;
         }
+        this.recent.push(this.now());
+        this.log.info(`outbox: ${name} sent (${r?.where})`);
+        /* sent: filing it can't turn it into a failure. If sent/ can't be written it stays in sending/, which is
+           filed as failed with "not sent again" at the next start, never resent (review 10) */
+        try { this.file("sending", name, "sent", { sentAt: new Date(this.now()).toISOString(), where: r?.where, messageId: r?.id, ...(msg.contact ? { contact: msg.contact } : {}) }); }
+        catch (e) { this.log.warn(`outbox: ${name} was sent but couldn't be filed in sent/: ${e.message}`); }
       }
     } finally { this.busy = false; }
   }

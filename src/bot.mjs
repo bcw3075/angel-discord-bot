@@ -130,7 +130,7 @@ export class AngelBot {
     const want = String(username).toLowerCase();
     const c = this.client ?? this.readyClient;
     for (const g of c?.guilds?.cache?.values?.() ?? []) {
-      const found = await g.members.search({ query: want, limit: 10 }).catch(e => { this.log.warn(`couldn't search ${g.name} for ${want}: ${e.message}`); return null; });
+      const found = await g.members.search({ query: want, limit: 100 }) /* a prefix search: room for many names that start the same (review 10) */.catch(e => { this.log.warn(`couldn't search ${g.name} for ${want}: ${e.message}`); return null; });
       const m = [...(found?.values?.() ?? [])].find(x => x.user?.username?.toLowerCase() === want);
       if (m) return m.user;
     }

@@ -83,6 +83,7 @@ export function readReply(text) {
    whole. */
 export const SECTIONS_MARKER = "<!-- angel: sections below -->";
 const READ_LIMIT = 90000; /* characters of sections one read_sections call gives back */
+const EXCHANGE_READ_LIMIT = 120000; /* characters of lookups one reply may read in all (review 10: several reads in one round) */
 
 export function splitNotes(notes) {
   const at = notes.indexOf(SECTIONS_MARKER);
@@ -152,6 +153,7 @@ export class DirectReplies {
   constructor({ dataDir, log, claude, model, cacheTtl = "1h", canSpend = () => true, addSpend = () => {}, dmOwner = async () => {}, ownerName = "the owner", maxPerDay = 40, keep = 8, maxLookups = 5, now = Date.now }) {
     Object.assign(this, { dataDir, log, claude, model, cacheTtl, canSpend, addSpend, dmOwner, ownerName, maxPerDay, keep, maxLookups, now });
     this.busy = new Map(); /* one exchange at a time per person, in order */
+    this.toldLimit = new Set();
   }
 
   contacts() {
@@ -163,10 +165,26 @@ export class DirectReplies {
     const uname = String(username ?? "").toLowerCase();
     for (const [name, c] of Object.entries(this.contacts())) {
       if (name.startsWith("_")) continue;
-      const same = c && (c.user ? String(c.user) === String(userId) : !!uname && typeof c.username === "string" && c.username.trim().toLowerCase() === uname);
+      const byName = !c?.user && !!uname && typeof c?.username === "string" && c.username.trim().toLowerCase() === uname;
+      /* a username can change hands: the first id seen for it is kept, and anyone else with it later is not that contact (review 10) */
+      const same = c && (c.user ? String(c.user) === String(userId) : byName && this.pinned(name, userId));
       if (same && typeof c.notes === "string" && c.notes.trim()) return { name, notes: c.notes.trim(), about: typeof c.about === "string" ? c.about : "" };
     }
     return null;
+  }
+
+  /* the user id first seen for a contact named by username (data/contact-ids.json); false for any other id */
+  pinned(name, userId) {
+    const f = path.join(this.dataDir, "contact-ids.json");
+    let ids = {};
+    try { ids = JSON.parse(fs.readFileSync(f, "utf8")) ?? {}; } catch { /* none yet */ }
+    if (ids[name]) {
+      if (String(ids[name]) === String(userId)) return true;
+      this.log.warn(`direct message from ${userId} with ${name}'s username, but ${name} is ${ids[name]}; not answered`);
+      return false;
+    }
+    try { fs.writeFileSync(f, JSON.stringify({ ...ids, [name]: String(userId) }, null, 2) + "\n"); } catch (e) { this.log.warn(`couldn't keep ${name}'s id: ${e.message}`); return false; }
+    return true;
   }
 
   readNotes(file) {
@@ -204,7 +222,8 @@ export class DirectReplies {
   async onDirect(msg) {
     const prev = this.busy.get(msg.userId) ?? Promise.resolve();
     const run = prev.then(() => this.handle(msg), () => this.handle(msg));
-    this.busy.set(msg.userId, run.catch(() => {}));
+    const tail = run.catch(() => {}).then(() => { if (this.busy.get(msg.userId) === tail) this.busy.delete(msg.userId); });
+    this.busy.set(msg.userId, tail);
     return run;
   }
 
@@ -222,15 +241,25 @@ export class DirectReplies {
       const entry = { at, them, angel, kind: "unknown", forOwner: `${why}: "${them.slice(0, 200)}"` };
       this.record(who.name, entry);
       this.saveForOwner(who.name, entry);
-      await this.dmOwner(`📨 ${who.name} messaged me and I couldn't answer (${why}): "${them.slice(0, 300)}". It's saved in data\\inbox.`).catch(() => {});
+      /* past the limit the owner hears once a day per contact, not at every message (review 10) */
+      const day = `${who.name} ${new Date(at).toDateString()}`;
+      if (why !== "today's limit reached" || !this.toldLimit.has(day)) {
+        if (why === "today's limit reached") this.toldLimit.add(day);
+        await this.dmOwner(`📨 ${who.name} messaged me and I couldn't answer (${why}): "${them.slice(0, 300)}". It's saved in data\\inbox.`).catch(() => {});
+      }
       return { answered: false, why };
     };
     if (notes === null) return holding(`Thanks! I've passed that to ${this.ownerName} and I'll get back to you.`, `the notes file ${who.notes} is missing`);
     if (this.todayCount(who.name) >= this.maxPerDay || !this.canSpend()) return holding(`Thanks! I've hit my limit for today, so I've passed that to ${this.ownerName} and I'll pick it up tomorrow.`, "today's limit reached");
     const past = this.history(who.name).slice(-this.keep).flatMap(e => [{ role: "user", content: e.them }, { role: "assistant", content: JSON.stringify({ reply: e.angel ?? "", kind: e.kind, forOwner: e.forOwner ?? "" }) }]);
-    let out;
+    let out, spent = 0, read = 0;
+    /* each call's own cost (the Claude client is shared with the table's answers), counted even when a later call fails (review 10) */
+    const priced = usage => (usage && typeof this.claude.cost === "function" ? this.claude.cost(this.model, usage) : 0);
+    const create = async b => {
+      try { const r = await this.claude.create(b); spent += priced(r?.usage); return r; }
+      catch (e) { spent += priced(e?.usage); throw e; }
+    };
     try {
-      const before = this.claude.spent;
       const { summary, sections } = splitNotes(notes);
       const cache = this.cacheTtl === "5m" ? { type: "ephemeral" } : { type: "ephemeral", ttl: "1h" };
       /* the summary and the index are cached for an hour by default, since someone's messages are often more than
@@ -243,7 +272,7 @@ export class DirectReplies {
       if (sections.length) body.tools = NOTE_TOOLS;
       let res;
       for (let round = 0; ; round++) {
-        res = await this.claude.create(body);
+        res = await create(body);
         const uses = (res.content ?? []).filter(b => b.type === "tool_use");
         if (res.stop_reason !== "tool_use" || !uses.length) break;
         const results = round >= this.maxLookups
@@ -251,18 +280,26 @@ export class DirectReplies {
           : null;
         if (results) {
           body.messages = [...body.messages, { role: "assistant", content: res.content }, { role: "user", content: results }];
-          res = await this.claude.create({ ...body, tool_choice: { type: "none" } });
+          res = await create({ ...body, tool_choice: { type: "none" } });
           break;
         }
-        const found = uses.map(u => ({ type: "tool_result", tool_use_id: u.id, content: u.name === "search_notes" ? searchNotes(sections, u.input?.query) : u.name === "read_sections" ? readSections(sections, u.input?.ids) : "unknown tool" }));
+        const look = u => {
+          if (read >= EXCHANGE_READ_LIMIT) return "No more reading for this reply: answer from what you have.";
+          const t = u.name === "search_notes" ? searchNotes(sections, u.input?.query) : u.name === "read_sections" ? readSections(sections, u.input?.ids) : "unknown tool";
+          const given = t.slice(0, EXCHANGE_READ_LIMIT - read);
+          read += given.length;
+          return given;
+        };
+        const found = uses.map(u => ({ type: "tool_result", tool_use_id: u.id, content: look(u) }));
         this.log.info(`direct reply to ${who.name}: ${uses.map(u => `${u.name}(${JSON.stringify(u.input ?? {}).slice(0, 80)})`).join(", ")}`);
         body.messages = [...body.messages, { role: "assistant", content: res.content }, { role: "user", content: found }];
       }
-      this.addSpend(this.claude.spent - before);
       out = readReply((res.content ?? []).filter(b => b.type === "text").map(b => b.text).join(""));
     } catch (e) {
       this.log.warn(`direct reply to ${who.name} failed: ${e.message}`);
       return holding(`Thanks! I couldn't look that up just now, so I've passed it to ${this.ownerName} and I'll get back to you.`, "the answer failed");
+    } finally {
+      if (spent) this.addSpend(spent);
     }
     let sent = true;
     await reply(out.reply).catch(e => { sent = false; this.log.warn(`couldn't answer ${who.name}: ${e.message}`); });

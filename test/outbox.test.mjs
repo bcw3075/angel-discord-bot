@@ -173,3 +173,33 @@ test("a contact by username is looked up on her servers by exact username, and f
   assert.equal(out[0].to, "some_gm");
   await assert.rejects(b.sendOut({ to: { username: "nobody" }, text: "x" }), /no one with the username nobody/);
 });
+
+/* review 10 */
+test("an id written as a number is refused, in a message file or in contacts.json", async () => {
+  assert.ok(readMessage('{"to":{"user":123456789012345678},"text":"hi"}') instanceof Error);
+  const { resolveContact } = await import("../src/outbox.mjs");
+  assert.ok(resolveContact({ to: { contact: "gm" }, text: "t" }, { gm: { user: 123456789012345678 } }) instanceof Error);
+});
+
+test("a message sent but not filed in sent/ is never counted as failed or sent again", async () => {
+  const { dir, ob, sent, put } = box();
+  put("a.json", { to: "owner", text: "once" });
+  const file = ob.file.bind(ob);
+  ob.file = (from, name, to, extra) => { if (to === "sent") throw new Error("disk full"); return file(from, name, to, extra); };
+  await ob.poll();
+  await ob.poll();
+  assert.equal(sent.length, 1);
+  assert.ok(!fs.existsSync(path.join(dir, "failed")));
+  ob.file = file;
+  ob.start(); ob.stop();
+  await ob.poll();
+  assert.equal(sent.length, 1);
+  assert.match(JSON.parse(fs.readFileSync(path.join(dir, "failed", "a.json"), "utf8")).error, /not sent again/);
+});
+
+test("a refused send says to look in Discord before sending it again", async () => {
+  const { ob, put, read } = box({ send: async () => { throw new Error("socket hang up"); } });
+  put("b.json", { to: "owner", text: "x" });
+  await ob.poll();
+  assert.match(read("failed", "b.json").check, /Look in Discord/);
+});
