@@ -48,6 +48,8 @@ test("the prompt holds the notes, the contact and the owner's name, and says to 
   assert.match(p, /table-gm/);
   assert.match(p, /ONLY from the notes/);
   assert.match(p, /check with Sam/);
+  assert.match(p, /no run-on sentences/);
+  assert.match(p, /bullets for any list/);
 });
 
 test("a contact's question is answered from the notes, counted against the cap, and both sides kept", async () => {
