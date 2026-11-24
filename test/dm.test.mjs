@@ -51,6 +51,8 @@ test("the prompt holds the notes, the contact and the owner's name, and says to 
   assert.match(p, /no run-on sentences/);
   assert.match(p, /bullets for any list/);
   assert.match(p, /list of rules calls/);
+  assert.match(p, /Bugs don't wait for Sam's approval/);
+  assert.match(p, /Sam will look it over/);
 });
 
 test("a contact's question is answered from the notes, counted against the cap, and both sides kept", async () => {
