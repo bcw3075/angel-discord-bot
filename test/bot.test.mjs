@@ -526,13 +526,13 @@ function ownedJoin(w, { dmFails = false } = {}) {
   return { i, dms };
 }
 
-test("(dc-13) the one who starts a session gets a direct message at once, so the way a warning would come is known to work", async () => {
+test("(dc-13) the one who starts a session gets no direct message at the join (Rhea, 2026-11-25)", async () => {
   const w = world(), { bot } = makeBot();
   const { i, dms } = ownedJoin(w);
   await bot.onInteraction(i);
-  assert.equal(dms.length, 1);
-  assert.match(dms[0], /I'm listening in \*\*Game Night\*\* \(Table\)\. If I stop hearing the table, I'll message you here straight away\./);
-  assert.ok(!w.sent.some(m => /couldn't send you a direct message/.test(m.content)));
+  assert.ok(bot.sessions.has("g1"), "the session starts");
+  assert.equal(dms.length, 0, "no direct message");
+  assert.ok(!w.sent.some(m => /direct message/.test(m.content ?? m)));
 });
 
 test("(dc-13) a warning goes to the starter as a direct message and into the session's channel, with the channel named and nobody pinged", async () => {
@@ -548,16 +548,14 @@ test("(dc-13) a warning goes to the starter as a direct message and into the ses
   assert.deepEqual(raw.at(-1).allowedMentions, { parse: [], repliedUser: false });
 });
 
-test("(dc-13) a starter who can't be messaged directly is told so at the join, and a warning pings them in the channel instead", async () => {
+test("(dc-13) a starter who can't be messaged directly is pinged in the channel by a warning instead", async () => {
   const w = world(), { bot } = makeBot();
   const { i } = ownedJoin(w, { dmFails: true });
   const raw = [];
   const send = w.textChannel.send; w.textChannel.send = async m => { raw.push(m); return send(m); };
   await bot.onInteraction(i);
   assert.ok(bot.sessions.has("g1"), "the session still starts");
-  const note = raw.find(m => /couldn't send you a direct message/.test(m.content));
-  assert.ok(note, "said at the join");
-  assert.deepEqual(note.allowedMentions.users, ["p1"]);
+  assert.ok(!raw.some(m => /direct message/.test(m.content ?? m)), "nothing is said about it at the join");
   await bot.sessions.get("g1").session.alert("⚠️ I've stopped hearing the table in {where}.");
   assert.equal(raw.at(-1).content, "<@p1> ⚠️ I've stopped hearing the table in **Game Night** (Table).");
   assert.deepEqual(raw.at(-1).allowedMentions, { parse: [], users: ["p1"], repliedUser: false });
@@ -643,7 +641,7 @@ test("(dc-14) /angel rejoin from whoever started the session: she leaves and rej
   assert.deepEqual(v.asks, [{ asked: true }]);
   assert.ok(bot.sessions.has("g1"), "her own leave didn't end the session");
   assert.ok(w.sent.some(m => /as asked with `\/angel rejoin`/.test(m.content)), "the thread is told");
-  assert.equal(dms.length, 1, "only the join's direct message: an asked rejoin is no warning");
+  assert.equal(dms.length, 0, "no direct message: an asked rejoin is no warning (and the join sends none)");
   assert.ok(!w.sent.some(m => /dropped out/.test(m.content)));
   clearInterval(bot.bookTimer);
 });

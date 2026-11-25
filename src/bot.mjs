@@ -492,18 +492,9 @@ export class AngelBot {
             if (live) { live.home = textChannel; live.thread = null; }
           }
         }
-        /* the way she would warn the owner is tried now, while someone is looking: a direct message that can't be
-           sent is said in the reply, instead of being found out when a warning doesn't come */
-        let warnNote = "";
-        if (owner?.send) {
-          try { await owner.send({ content: `🎙️ I'm listening in ${where}. If I stop hearing the table, I'll message you here straight away.` }); }
-          catch (e) {
-            log.warn(`couldn't send ${owner.username ?? "the owner"} a direct message: ${e.message}`);
-            warnNote = `\n⚠️ <@${owner.id}>, I couldn't send you a direct message (Discord: Privacy Settings > allow direct messages from server members). If I stop hearing the table I'll ping you here instead.`;
-          }
-        }
-        /* a reply that can't be edited any more mustn't end a session that works */
-        if (warnNote) await home.send({ content: warnNote.trim(), allowedMentions: { parse: [], users: [owner.id], repliedUser: false } }).catch(e => log.warn(`couldn't post the note about direct messages: ${e.message}`));
+        /* no direct message at the join (Rhea, 2026-11-25: "I don't think Angel bot needs to DM me when she joins a
+           channel anymore, that was more a test of the DMing"): the owner hears from her directly only when she stops
+           hearing, and a warning that can't be sent that way pings them in the session's channel instead */
         if (inThread) await i.editReply(`🎙️ I'm in **${channel.name}**. Everything for this session is in <#${thread.id}>.`).catch(e => log.warn(`couldn't answer /angel join: ${e.message}`));
         else await i.editReply(notice).catch(e => log.warn(`couldn't answer /angel join: ${e.message}`));
       } catch (e) {
