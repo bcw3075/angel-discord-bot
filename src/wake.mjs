@@ -17,8 +17,9 @@ const STOP_HEAD = new RegExp(String.raw`${LEAD}${NAME}(?![a-z'])[\s,.!?-]*(?:ple
 const STOP_TAIL = new RegExp(String.raw`${LEAD}(?:please[\s,]+)?${STOP_WORDS}(?:[\s,]+(?:please|now))?[\s,.!?-]+${NAME}[\s,.!?]*$`, "i");
 /* a stop the transcriber misheard, the whole line and nothing after it (0.2.1; live round after 0.2.0, 2026-11-22):
    "Angel, stop" heard as "Angel's top", "Angel Angel's top" or "Top, Angel." Only as the whole line, since "Angel's top
-   pick" or "the top, Angel" are something else */
-const STOP_MISHEARD = new RegExp(String.raw`${LEAD}(?:(?:${NAME}[\s,.!?-]+)?${NAME}'?s[\s,.-]+top|top[\s,.!?-]+${NAME})[\s,.!?]*$`, "i");
+   pick" or "the top, Angel" are something else. Only "angel" itself, not the other spellings: "Angela's top" and
+   "Top angle" are table talk (initiative, a side to attack from); and not a question ("Angel's top?") (review 12) */
+const STOP_MISHEARD = new RegExp(String.raw`${LEAD}(?:(?:angel[\s,.!?-]+){0,2}angel['’]?s[\s,.-]+top|top[\s,.!-]+angel)[\s,.!]*$`, "i");
 const STOP_MAX_CHARS = 120;
 
 export function mentionsAngel(text) {

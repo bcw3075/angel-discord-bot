@@ -248,7 +248,7 @@ function twoTables() {
 }
 
 test("(tb-7) /angel join where she only listens: says so once in text, never speaks, keeps the transcript in that table's folder", async () => {
-  const root = twoTables(), w = world(), { bot, dataDir, answers } = makeBot(root);
+  const root = twoTables(), w = world(), { bot, dataDir, answers, sttTerms } = makeBot(root);
   const i = interaction(w, "join", w.listen);
   await bot.onInteraction(i);
   assert.match(i.edits[0], /At this table I only listen: I won't speak or answer questions/);
@@ -258,6 +258,8 @@ test("(tb-7) /angel join where she only listens: says so once in text, never spe
   const live = bot.sessions.get("111");
   assert.equal(live.table.name, "quiet");
   assert.equal(live.session.listenOnly, true);
+  await live.session.stt(Buffer.from("x"), { names: [] });
+  assert.deepEqual(sttTerms.at(-1), ["Angel", "quiet-term"], "(wk-16) no \"stop\" where she only listens");
   assert.ok(fs.existsSync(path.join(dataDir, "sessions", "quiet")), "the transcript is in that table's own folder");
   assert.ok(!fs.existsSync(path.join(dataDir, "sessions", "main")));
   /* typed to her, in that channel: one short line, no answer */

@@ -58,8 +58,9 @@ test("a stop is her name first and little after it; a question or the story afte
   for (const t of ["Angel, never mind that, how does flanking work?", "Angel, enough damage to drop it?", "Angel stop. What does stunned do?", "the angel, quiet as death, raises its sword"]) assert.equal(isStopRequest(t), false, t);
   for (const t of ["okay Angel, stop", "Angel, that's enough, thank you", "Angel stop please", "Angel, stop!"]) assert.equal(isStopRequest(t), true, t);
   /* (wk-16) a stop the transcriber misheard, as the whole line (0.2.1) */
-  for (const t of ["Angel's top.", "Angel Angel's top", "Angel, Angel's top!", "Top Angel.", "Top, Angel", "okay Angels top"]) assert.equal(isStopRequest(t), true, t);
-  for (const t of ["Angel's top pick was wrong", "Angel's top three, please", "on top, Angel, what's the DC?", "the top of the angel statue", "Top it off, Angel", "Angel's topic"]) assert.equal(isStopRequest(t), false, t);
+  for (const t of ["Angel's top.", "Angel Angel's top", "Angel, Angel's top!", "Top Angel.", "Top, Angel", "okay Angels top", "Angel, Angel, Angel's top", "Angel’s top"]) assert.equal(isStopRequest(t), true, t);
+  for (const t of ["Angel's top pick was wrong", "Angel's top three, please", "on top, Angel, what's the DC?", "the top of the angel statue", "Top it off, Angel", "Angel's topic",
+    "Angela's top.", "Top angle.", "Angle's top", "Top, Angie.", "Angel's top?", "Top, Angel?"]) assert.equal(isStopRequest(t), false, t);
   /* her name last (short round of 2026-11-21) */
   for (const t of ["Never mind, Angel.", "stop, Angel", "Okay, that's enough, Angel!", "never mind now, angel", "Please stop, Angela."]) assert.equal(isStopRequest(t), true, t);
   for (const t of ["Never mind, Angel, how does flanking work?", "I said stop the angel", "Stop the ritual, Angel?", "never mind the angel", "stop"]) assert.equal(isStopRequest(t), false, t);
