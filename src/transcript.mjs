@@ -86,37 +86,45 @@ const wordsOf = text => text.toLowerCase().replace(/[^\p{L}\p{N}\s'-]/gu, " ").s
 const normal = words => words.join(" ").replace(/\ball right\b/g, "alright").replace(/\bgot it\b/g, "gotcha").split(" ");
 
 export function isBackchannel(text) {
-  const words = normal(wordsOf(String(text)));
+  const t = String(text ?? "");
+  if (/\?\s*$/.test(t)) return false; /* "Right?", "Okay?": a question tagged on, joined instead (review 11) */
+  const words = normal(wordsOf(t));
   if (!words.length || words.length > 2) return false;
   return words.every(w => BACKCHANNEL.has(w) || LINKING.has(w)) && words.some(w => BACKCHANNEL.has(w));
 }
 
 /* when a piece ended: its own end when the session recorded it (0.2.1 on), otherwise guessed from its words (about
    0.4 s each, the pace of a real session, at most the 30 s a piece can last) for transcripts written before */
-const endOf = l => l.end ?? l.at + Math.min(30000, wordsOf(l.text).length * 400);
+const endOf = l => l.end ?? l.at + Math.min(30000, wordsOf(String(l.text ?? "")).length * 400);
 
 /* lines: in the order they were said. Returns new lines (the given ones are not changed) plus what was done.
-   - a backchannel line is left out, unless the line before it from someone else asked a question (then "Yeah" is
-     an answer), and never Angel's or a typed line;
+   - a backchannel line is left out, unless it answers a question: someone else's line (or piece) ending in "?" with
+     only answers since, so "Are you both in?" keeps every "Yeah." after it; Angel's and typed lines always stay;
    - a speaker's voice piece is joined onto their previous one when it began within joinGapMs of that one's end,
      nobody else said anything kept in between, and the joined line spans no more than maxJoinMs. */
 export function tidy(lines, { joinGapMs = 3000, maxJoinMs = 90000 } = {}) {
   const out = [];
   let folded = 0, joined = 0;
+  let asker = null; /* who asked the question still being answered */
   for (const l of lines) {
-    if (l.kind === "voice" && isBackchannel(l.text)) {
-      const prev = out[out.length - 1];
-      const answers = prev && prev.speaker !== l.speaker && /\?\s*$/.test(prev.text);
-      if (!answers) { folded++; continue; }
+    const text = String(l.text ?? "");
+    if (l.kind === "voice" && isBackchannel(text)) {
+      if (asker === null || asker === l.speaker) { folded++; continue; }
+      out.push({ ...l, end: endOf(l) }); /* an answer: kept as it is, and the question stays open for the next one */
+      continue;
     }
+    const asks = /\?\s*$/.test(text);
     const prev = out[out.length - 1];
     if (prev && l.kind === "voice" && prev.kind === "voice" && prev.speaker === l.speaker && prev.userId === l.userId &&
         l.at - prev.end <= joinGapMs && endOf(l) - prev.at <= maxJoinMs) {
-      prev.text = `${prev.text} ${l.text}`;
+      /* "Do you attack?" + "Or flee": still a question waiting for its answer */
+      if (asks || asker !== l.speaker) asker = asks ? l.speaker : null;
+      prev.text = `${prev.text} ${text}`;
       prev.end = Math.max(prev.end, endOf(l));
       joined++;
       continue;
     }
+    asker = asks ? l.speaker : null;
     out.push({ ...l, end: endOf(l) });
   }
   return { lines: out.map(({ end, ...rest }) => rest), folded, joined };

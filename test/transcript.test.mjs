@@ -65,7 +65,7 @@ const v = (s, speaker, text, extra = {}) => ({ at: T0 + s * 1000, userId: speake
 
 test("(tr-10) backchannel is one or two words of listener noise; answers and cut-off pieces are not", () => {
   for (const t of ["Yeah.", "Mhmm", "mm-hmm", "Okay. Yeah.", "But... yeah.", "Got it.", "All right.", "uh-huh", "Oh, wow.", "Yep, uh-huh."]) assert.ok(isBackchannel(t), t);
-  for (const t of ["No.", "Yes.", "Nope", "Mm-mm.", "But", "And then", "Okay, I attack.", "Yeah yeah yeah", "Bard", "", "Oh no."]) assert.ok(!isBackchannel(t), t);
+  for (const t of ["No.", "Yes.", "Nope", "Mm-mm.", "But", "And then", "Okay, I attack.", "Yeah yeah yeah", "Bard", "", "Oh no.", "Right?", "Okay?", "Yeah?"]) assert.ok(!isBackchannel(t), t);
 });
 
 test("(tr-10) tidy leaves backchannel out, but keeps a 'yeah' that answers a question, and Angel's or typed lines", () => {
@@ -76,7 +76,16 @@ test("(tr-10) tidy leaves backchannel out, but keeps a 'yeah' that answers a que
   const t = tidy(lines);
   assert.deepEqual(t.lines.map(l => l.text), ["The bridge is out.", "Do you want to cross?", "Yeah.", "Okay", "Okay."]);
   assert.equal(t.folded, 1);
-  assert.deepEqual(lines.map(l => l.text).length, 6, "the given lines are not changed");
+  /* every answer to a question stays, even a joined question's, and a tag question is joined, not left out (review 11) */
+  const more = tidy([
+    v(0, "GM", "Are you both in?"), v(2, "Mira", "Yeah."), v(3, "Dana", "Yeah."), v(10, "Mira", "Mhmm."),
+    v(20, "GM", "Do you attack?", { end: T0 + 21000 }), v(22, "GM", "Or flee", { end: T0 + 23000 }), v(24, "Mira", "Yeah."),
+    v(30, "GM", "We go left.", { end: T0 + 31000 }), v(32, "GM", "Right?", { end: T0 + 32500 }), v(33, "Mira", "Yep."),
+  ]);
+  assert.deepEqual(more.lines.map(l => `${l.speaker}: ${l.text}`), [
+    "GM: Are you both in?", "Mira: Yeah.", "Dana: Yeah.", "Mira: Mhmm.",
+    "GM: Do you attack? Or flee", "Mira: Yeah.", "GM: We go left. Right?", "Mira: Yep.",
+  ]);
 });
 
 test("(tr-11) tidy joins one speaker's pieces a few seconds apart, across left-out backchannel, never across someone else", () => {
@@ -93,6 +102,10 @@ test("(tr-11) tidy joins one speaker's pieces a few seconds apart, across left-o
   assert.equal(t.joined, 2);
   assert.equal(t.lines[0].at, T0, "a joined line keeps the time its first piece began");
   assert.ok(!("end" in t.lines[0]), "the guessed end is not written out");
+  /* the given lines are not changed: what she answers from and transcript.jsonl keep every piece (review 11) */
+  const before = JSON.stringify(lines);
+  tidy(lines);
+  assert.equal(JSON.stringify(lines), before);
 });
 
 test("(tr-11) a long talk cut into 30-second pieces joins up to the span limit, and old lines without an end are guessed from their words", () => {
@@ -129,8 +142,25 @@ test("(tr-12) npm run tidy writes transcript.md again from transcript.jsonl, in 
   fs.writeFileSync(path.join(dir, "transcript.jsonl"), raw);
   fs.writeFileSync(path.join(dir, "transcript.md"), "# Old transcript, then\n\n[x] raw\n");
   assert.equal(tidyFolder(dir).lines, 3);
+  assert.equal(tidyFolder(dir).bad, 0);
   assert.equal(fs.readFileSync(path.join(dir, "transcript.md"), "utf8").split("\n").at(-2), "[19:00:00] A: first half second half");
   assert.ok(fs.readFileSync(path.join(dir, "transcript.md"), "utf8").startsWith("# Old transcript, then"));
+  assert.equal(fs.readFileSync(path.join(dir, "transcript.jsonl"), "utf8"), raw);
+});
+
+test("(tr-12) npm run tidy skips a half-written or odd line (a crashed session), and runs from a folder with a space", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "angel t-")), "my session");
+  fs.mkdirSync(dir);
+  const raw = [v(0, "A", "first"), { speaker: "A", text: "no time" }, { at: T0 + 500, speaker: "A" }].map(l => JSON.stringify(l)).join("\n") + "\n" + '{"at": 17950, "spea';
+  fs.writeFileSync(path.join(dir, "transcript.jsonl"), raw);
+  /* the tool itself copied into a folder with a space, as on a PC whose user name has one */
+  const tool = path.join(path.dirname(dir), "tool dir", "src");
+  fs.mkdirSync(tool, { recursive: true });
+  for (const f of ["tidy.mjs", "transcript.mjs"]) fs.copyFileSync(path.join(import.meta.dirname, "..", "src", f), path.join(tool, f));
+  const said = execFileSync(process.execPath, [path.join(tool, "tidy.mjs"), dir], { encoding: "utf8" });
+  assert.match(said, /written from 1 pieces\. 3 lines of transcript\.jsonl couldn't be read and were skipped\./);
+  assert.match(fs.readFileSync(path.join(dir, "transcript.md"), "utf8"), /\[19:00:00\] A: first\n$/);
   assert.equal(fs.readFileSync(path.join(dir, "transcript.jsonl"), "utf8"), raw);
 });
 
