@@ -344,7 +344,7 @@ export class Session {
       this.costs.stt += this.sttCost(heard.seconds || piece.durationMs / 1000);
       if (!heard.text || this.ended) { if (final !== false && !this.ended) handling = this.releaseHold(userId, "they stopped"); return; }
       const who = this.speakerOf(userId);
-      const line = this.transcript.add({ at: startedAt, userId, speaker: who.name, role: who.role, text: heard.text, kind: "voice" });
+      const line = this.transcript.add({ at: startedAt, end: startedAt + piece.durationMs, userId, speaker: who.name, role: who.role, text: heard.text, kind: "voice" });
       this.hearing.line();
       /* started in order, not waited for in order: what they say while the check on this line runs is the rest of
          the question. `until` is when they stopped talking (speech time): the timing in the log starts there */
@@ -369,7 +369,7 @@ export class Session {
     this.costs.stt += this.sttCost(heard.seconds || piece.durationMs / 1000);
     if (!heard.text || this.ended) return;
     const who = this.speakerOf(userId);
-    this.transcript.add({ at: startedAt, userId, speaker: who.name, role: who.role, text: heard.text, kind: "voice" });
+    this.transcript.add({ at: startedAt, end: startedAt + piece.durationMs, userId, speaker: who.name, role: who.role, text: heard.text, kind: "voice" });
     this.hearing.line();
   }
 

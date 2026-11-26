@@ -107,6 +107,10 @@ be read. The most useful:
 - `saveTranscript`: `false` stops her writing the transcript file (she still remembers the conversation while the
   session runs). Handy if another bot, such as Archivist, already keeps your session record.
 
+When a session ends, `transcript.md` is tidied for reading: short "yeah"s and "mhmm"s are left out and one person's
+sentence cut into pieces is joined back up. `transcript.jsonl` beside it keeps every piece as heard.
+`npm run tidy -- data\sessions\<table>\<session folder>` tidies an older session's `transcript.md` the same way.
+
 ## Updating
 Unzip the new version over the folder, keeping `config.json`, `data\`, `tables\`, `house-rules.md`, `keyterms.txt`
 and `speakers.json` (the zip holds none of them, so nothing of yours is overwritten). Run `npm install`, then restart
