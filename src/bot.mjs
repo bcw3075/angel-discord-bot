@@ -436,7 +436,10 @@ export class AngelBot {
           await home.send(here).catch(e => log.warn(`couldn't post the warning in the channel: ${e.message}`));
         };
         /* everything the session reads is this table's own: key terms, house rules, speakers, transcript folder */
-        const terms = table.legacy || !this.services.keytermsOf ? null : this.services.keytermsOf(table);
+        const own = table.legacy || !this.services.keytermsOf ? null : this.services.keytermsOf(table);
+        /* where she answers, "stop" is a key term too, so "Angel, stop" isn't heard as "Angel's top" (0.2.1); not
+           where she only listens, where it would only pull "top" towards "stop" in table talk */
+        const terms = own && table.answers && !own.some(t => t.toLowerCase() === "stop") ? [...own.slice(0, 1), "stop", ...own.slice(1)].slice(0, 100) : own;
         const sessionsDir = table.legacy ? path.join(this.dataDir, "sessions") : path.join(this.dataDir, "sessions", table.name);
         const session = new Session({
           cfg, voice, post, log,

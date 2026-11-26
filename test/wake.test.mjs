@@ -57,6 +57,9 @@ test("when the gate model can't be reached the fallback still decides", async ()
 test("a stop is her name first and little after it; a question or the story after a stop word is not", () => {
   for (const t of ["Angel, never mind that, how does flanking work?", "Angel, enough damage to drop it?", "Angel stop. What does stunned do?", "the angel, quiet as death, raises its sword"]) assert.equal(isStopRequest(t), false, t);
   for (const t of ["okay Angel, stop", "Angel, that's enough, thank you", "Angel stop please", "Angel, stop!"]) assert.equal(isStopRequest(t), true, t);
+  /* (wk-16) a stop the transcriber misheard, as the whole line (0.2.1) */
+  for (const t of ["Angel's top.", "Angel Angel's top", "Angel, Angel's top!", "Top Angel.", "Top, Angel", "okay Angels top"]) assert.equal(isStopRequest(t), true, t);
+  for (const t of ["Angel's top pick was wrong", "Angel's top three, please", "on top, Angel, what's the DC?", "the top of the angel statue", "Top it off, Angel", "Angel's topic"]) assert.equal(isStopRequest(t), false, t);
   /* her name last (short round of 2026-11-21) */
   for (const t of ["Never mind, Angel.", "stop, Angel", "Okay, that's enough, Angel!", "never mind now, angel", "Please stop, Angela."]) assert.equal(isStopRequest(t), true, t);
   for (const t of ["Never mind, Angel, how does flanking work?", "I said stop the angel", "Stop the ritual, Angel?", "never mind the angel", "stop"]) assert.equal(isStopRequest(t), false, t);
@@ -77,7 +80,9 @@ test("no text, however odd, makes the readers slow (a slow regex would freeze ev
   const n = 4000;
   const odd = [" ".repeat(n), ",".repeat(n), "angel ".repeat(n / 6), "angel,".repeat(n / 6), "hey ".repeat(n / 4), "hey angel ".repeat(n / 10),
     "{".repeat(n), "[".repeat(n), "[a](".repeat(n / 4), "\n".repeat(n), " \n".repeat(n / 2), "-".repeat(n), "+".repeat(n),
-    "angel " + "please ".repeat(n / 7), "Angel," + " ".repeat(n) + "x", "!".repeat(n) + "angel"];
+    "angel " + "please ".repeat(n / 7), "Angel," + " ".repeat(n) + "x", "!".repeat(n) + "angel",
+    /* the misheard stop (0.2.1): its shapes, short enough to reach the pattern and long */
+    "angel angel angel angel angel angel angel angel angel angel angel angel angel angel angel angel's top x", "top " + "angel ".repeat(18) + "x", "angel's top ".repeat(n / 12)];
   const readers = { isStopRequest, mentionsAngel, parseGate: t => parseGate(t, t), parseHold: t => parseHold(t, t), cleanReady, typedQuestion: t => typedQuestion(t, "123"), speakable };
   for (const [name, read] of Object.entries(readers)) {
     for (const [i, text] of odd.entries()) {

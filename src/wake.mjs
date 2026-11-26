@@ -15,6 +15,10 @@ const STOP_HEAD = new RegExp(String.raw`${LEAD}${NAME}(?![a-z'])[\s,.!?-]*(?:ple
 /* the same with her name last and nothing else: "Never mind, Angel." (short round of 2026-11-21: said over her answer,
    it waited 5 s for the model check and she had finished by then) */
 const STOP_TAIL = new RegExp(String.raw`${LEAD}(?:please[\s,]+)?${STOP_WORDS}(?:[\s,]+(?:please|now))?[\s,.!?-]+${NAME}[\s,.!?]*$`, "i");
+/* a stop the transcriber misheard, the whole line and nothing after it (0.2.1; live round after 0.2.0, 2026-11-22):
+   "Angel, stop" heard as "Angel's top", "Angel Angel's top" or "Top, Angel." Only as the whole line, since "Angel's top
+   pick" or "the top, Angel" are something else */
+const STOP_MISHEARD = new RegExp(String.raw`${LEAD}(?:(?:${NAME}[\s,.!?-]+)?${NAME}'?s[\s,.-]+top|top[\s,.!?-]+${NAME})[\s,.!?]*$`, "i");
 const STOP_MAX_CHARS = 120;
 
 export function mentionsAngel(text) {
@@ -25,7 +29,7 @@ export function mentionsAngel(text) {
 export function isStopRequest(text) {
   const t = String(text).trim();
   if (t.length > STOP_MAX_CHARS) return false;
-  if (STOP_TAIL.test(t)) return true;
+  if (STOP_TAIL.test(t) || STOP_MISHEARD.test(t)) return true;
   const m = STOP_HEAD.exec(t);
   if (!m) return false;
   return (t.slice(m[0].length).match(/[a-z0-9']+/gi) ?? []).length <= 3;

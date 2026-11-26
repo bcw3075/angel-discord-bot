@@ -291,8 +291,8 @@ test("(tb-8) the answering table on the same server: its own house rules, names 
   assert.equal(live.session.speakerOf("p1").name, "Kael");
   assert.ok(fs.existsSync(path.join(dataDir, "sessions", "main")));
   await live.session.stt(Buffer.from("x"), { names: [] });
-  assert.deepEqual(sttTerms.at(-1), ["Angel", "main-term"], "the transcriber gets this table's key terms");
-  assert.equal(live.session.keytermCount, 2, "and they are counted");
+  assert.deepEqual(sttTerms.at(-1), ["Angel", "stop", "main-term"], "the transcriber gets this table's key terms, and \"stop\" where she answers (0.2.1)");
+  assert.equal(live.session.keytermCount, 3, "and they are counted");
   await bot.onMessage({ author: { id: "p1", bot: false }, guild: w.guild, channel: w.general, channelId: "c1", content: "Angel, flanking?", reply: async () => ({ edit: async () => {} }) });
   await live.session.answering;
   assert.equal(answers.length, 1);
