@@ -59,6 +59,7 @@ test("a spoken question is checked, answered in the channel and spoken aloud", a
   assert.match(posted[0].edits[0], /^\*\*Mira asked:\*\* What does the grabbed condition do\?\nAnswer to: .*\n-# \[Grabbed\]/);
   assert.deepEqual(voice.spoken.map(String), ["clip:Grabbed, a classic. Checking.", "clip:Answer to: Angel, what does grabbed do?"], "her own quick reaction from the check, then the answer");
   assert.equal(s.transcript.lines.at(-1).kind, "angel", "her answer is in the transcript");
+  assert.equal(s.transcript.lines[0].end - s.transcript.lines[0].at, 1000, "(tr-12) a spoken line keeps when its piece ended");
   const st = s.status();
   assert.equal(st.questions, 1);
   assert.ok(st.costs.claude > 0.02 && st.costs.stt > 0 && st.costs.tts > 0);

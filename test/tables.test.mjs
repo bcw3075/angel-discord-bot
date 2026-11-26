@@ -161,6 +161,8 @@ test("(tb-6) where she only listens: every line is transcribed, and no check, an
   for (let i = 0; i < 40; i++) await sleep(5);
   await s.answering;
   assert.deepEqual(s.transcript.lines.map(l => l.text), ["Angel, what does grabbed do?", "Angel, stop.", "Hey Angel, you there?", "We go left at the river."]);
+  /* (tr-12) each line keeps when its piece ended (a second of sound after it began), for tidying the transcript */
+  assert.deepEqual(s.transcript.lines.map(l => l.end - l.at), [1000, 1000, 1000, 1000]);
   assert.deepEqual(calls, { gate: 0, answer: 0, tts: 0, hold: 0, ready: 0 }, "nothing but listening is paid for");
   assert.equal(voice.spoken.length, 0, "never a word aloud");
   assert.equal(posted.length, 0, "nothing posted either");

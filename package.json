@@ -13,7 +13,8 @@
     "ask": "node src/check.mjs --ask",
     "selftest": "node src/check.mjs --selftest",
     "test": "node --test \"test/*.test.mjs\"",
-    "test:aon": "node test/live/aon-live.mjs"
+    "test:aon": "node test/live/aon-live.mjs",
+    "tidy": "node src/tidy.mjs"
   },
   "engines": {
     "node": ">=22.12.0"
