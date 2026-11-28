@@ -29,11 +29,13 @@ const DROPPED = Symbol("dropped");
 export const LISTEN_ONLY_REPLY = "I'm only listening at this table, so I don't answer questions here. I'm keeping the transcript.";
 
 export class Session {
-  constructor({ cfg, voice, post, stt, tts, gate, answer, speakerOf, hold = null, readyLine = null, transcript = new Transcript(), keytermCount = 1, log, now = Date.now, newDecoder = createDecoder, dailyOver = () => false, listenOnly = false, alert = null, hearing = {}, clock = t => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) }) {
+  constructor({ cfg, voice, post, stt, tts, gate, answer, speakerOf, hold = null, readyLine = null, transcript = new Transcript(), keytermCount = 1, log, now = Date.now, newDecoder = createDecoder, dailyOver = () => false, listenOnly = false, showCosts = true, alert = null, hearing = {}, clock = t => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) }) {
     Object.assign(this, { cfg, voice, post, stt, tts, gate, answer, speakerOf, hold, readyLine, transcript, keytermCount, log, now, newDecoder, dailyOver, alert, clock });
     /* a table where she only listens (0.2.0, d-10): every piece is transcribed into the transcript and nothing else
        happens: no "was that for me?" check, no answer, no lookups, never a word aloud */
     this.listenOnly = listenOnly === true;
+    /* on a server that isn't the owner's, no dollar figure in anything she posts (Rhea, 2026-11-28) */
+    this.showCosts = showCosts !== false;
     this.startedAt = now();
     this.decoders = new Map();
     this.pending = new Map();   /* userId → { text, at, timer }: "Angel?" with the question still to come */
@@ -157,9 +159,10 @@ export class Session {
   ttsCost(text) { return (String(text).length / 1000) * this.cfg.deepgramPrices.ttsPer1000Chars; }
 
   capMessage() {
+    const amount = n => (this.showCosts ? ` ($${n})` : "");
     return this.spent() >= this.cfg.maxSessionDollars
-      ? `I've reached this session's spending cap ($${this.cfg.maxSessionDollars}), so I've stopped listening and answering. \`/angel leave\` and \`/angel join\` start a fresh session.`
-      : `I've reached today's spending cap ($${this.cfg.maxDailyDollars}), so I've stopped listening and answering until tomorrow.`;
+      ? `I've reached this session's spending cap${amount(this.cfg.maxSessionDollars)}, so I've stopped listening and answering. \`/angel leave\` and \`/angel join\` start a fresh session.`
+      : `I've reached today's spending cap${amount(this.cfg.maxDailyDollars)}, so I've stopped listening and answering until tomorrow.`;
   }
 
   /* Past a cap Angel stops paying for anything and says so once; typed questions get a reply saying so. */
@@ -1324,8 +1327,11 @@ export class Session {
   }
 }
 
-export function summaryText(s) {
+/* `cost: false` leaves the money out: the line posted on a server that isn't the owner's, whose cost goes to the owner
+   by direct message instead (Rhea, 2026-11-28) */
+export function summaryText(s, { cost = true } = {}) {
   const money = n => `$${n.toFixed(2)}`;
+  if (!cost) return `Session over: ${s.minutes} min, ${s.lines} transcript lines${s.listenOnly ? "" : `, ${s.questions} question${s.questions === 1 ? "" : "s"}`}.`;
   if (s.listenOnly) return `Session over: ${s.minutes} min, ${s.lines} transcript lines. Cost about ${money(s.dollars)} (listening).`;
   return `Session over: ${s.minutes} min, ${s.lines} transcript lines, ${s.questions} question${s.questions === 1 ? "" : "s"}. ` +
     `Cost about ${money(s.dollars)} (Claude ${money(s.costs.claude)}, listening ${money(s.costs.stt)}, voice ${money(s.costs.tts)}).`;

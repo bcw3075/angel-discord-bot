@@ -51,8 +51,16 @@ export function readTable(dir, problems = []) {
     answers = false;
   }
   const keptBy = String(raw.transcriptKeptBy ?? "").trim().slice(0, 40);
+  /* where a session's cost goes (Rhea, 2026-11-28): "channel" posts it with the summary, "owner" sends it to the bot's
+     owner by direct message; left out, it is posted only on a server the bot's owner owns */
+  let costs = null;
+  if (raw.costs !== undefined) {
+    const c = String(raw.costs ?? "").trim().toLowerCase();
+    if (c === "channel" || c === "owner") costs = c;
+    else { problems.push(`tables/${name}/${TABLE_FILE}: "costs" should be "channel" or "owner", not ${JSON.stringify(raw.costs)}, so the cost goes to the owner by direct message`); costs = "owner"; }
+  }
   return {
-    name, dir, server, channels, game, answers, keptBy,
+    name, dir, server, channels, game, answers, keptBy, costs,
     files: Object.fromEntries(Object.entries(FILE_NAMES).map(([k, f]) => [k, path.join(dir, f)])),
   };
 }

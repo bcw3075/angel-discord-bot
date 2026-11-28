@@ -97,6 +97,8 @@ export class AngelBot {
     this.log.info(`Logged in as ${client.user.tag} in ${guilds.length} server${guilds.length === 1 ? "" : "s"}: ${guilds.map(g => g.name).join(", ") || "none yet"}`);
     /* a server named by name becomes its id now, when exactly one server she is in has that name */
     pinServers(this.tables(), guilds, this.log);
+    /* who owns the bot, asked now so the first /angel join or status doesn't wait for it (review 13) */
+    this.botOwner().catch(() => {});
     const tables = this.tables();
     if (!tables.legacy) {
       for (const t of tables.list) {
@@ -148,6 +150,42 @@ export class AngelBot {
     await this.directs.onDirect({ userId: m.author.id, username: m.author.username, text: m.content, reply: text => m.channel.send({ content: text, allowedMentions: { parse: [] } }) });
   }
 
+  /* The bot's owner (a team's owner, or the one owner), asked of Discord once and kept; null when it can't be told.
+     A team's owner is its ownerId: its `owner` member can be missing (review 13). */
+  async botOwner() {
+    if (this.ownerCache) return this.ownerCache;
+    const c = this.client ?? this.readyClient;
+    try {
+      const app = await c?.application?.fetch?.();
+      const o = app?.owner;
+      const team = !!o && typeof o.send !== "function" && ("owner" in o || "ownerId" in o || "members" in o);
+      const id = team ? o.ownerId ?? o.owner?.user?.id : o?.id;
+      if (id) this.ownerCache = { id: String(id), user: team ? o.owner?.user ?? null : o };
+    } catch (e) { this.log.warn(`couldn't find the bot's owner: ${e.message}`); }
+    return this.ownerCache ?? null;
+  }
+
+  async botOwnerId() { return (await this.botOwner())?.id ?? null; }
+
+  async isBotOwner(userId) {
+    const id = await this.botOwnerId();
+    return !!id && !!userId && String(userId) === id;
+  }
+
+  /* Whether money is shown to the table there: a table's "costs" setting ("channel" or "owner") wins; without one,
+     only on a server the bot's owner owns, or the one legacy table when config.json's guildId names its server.
+     Not knowing whose server it is counts as someone else's, so a cost is never posted by mistake; a lookup taking
+     over 1.5 s counts as not knowing (a slash command has 3 s to answer; review 13). */
+  async costsPublic(guild, table) {
+    if (table?.costs === "channel") return true;
+    if (table?.costs === "owner") return false;
+    if (table?.legacy && table.server) return true;
+    if (!guild?.ownerId) return false;
+    let timer;
+    const slow = new Promise(r => { timer = setTimeout(() => r(false), 1500); });
+    try { return await Promise.race([this.isBotOwner(guild.ownerId), slow]); } finally { clearTimeout(timer); }
+  }
+
   /* one approved message: a direct message to the bot's owner or a user, or a post in a text channel. No pings. */
   async sendOut({ to, text }) {
     const c = this.client ?? this.readyClient;
@@ -155,8 +193,8 @@ export class AngelBot {
     const content = { content: text, allowedMentions: { parse: [] } };
     let user;
     if (to === "owner") {
-      const app = await c.application.fetch();
-      user = app.owner?.owner?.user ?? app.owner; /* a team's owner, or the one owner */
+      const o = await this.botOwner();
+      user = o?.user?.send ? o.user : o?.id ? await c.users.fetch(o.id).catch(() => null) : null;
       if (!user?.send) throw new Error("couldn't find the bot's owner");
     } else if (to.user) {
       user = await c.users.fetch(to.user);
@@ -344,6 +382,9 @@ export class AngelBot {
     if (sub === "status") {
       if (!live) return i.reply({ content: "I'm not listening anywhere right now. `/angel join` from a voice channel to start.", ...EPHEMERAL });
       const s = live.session.status();
+      /* where the cost isn't posted, only the bot's owner sees it here too */
+      const money = (await this.costsPublic(i.guild, live.table)) || (await this.isBotOwner(i.user?.id));
+      if (!money) return i.reply({ content: `Listening in <#${live.voiceChannelId}> for ${s.minutes} min: ${s.lines} lines${s.listenOnly ? "" : `, ${s.questions} questions`}.`, ...EPHEMERAL });
       return i.reply({ content: `Listening in <#${live.voiceChannelId}> for ${s.minutes} min: ${s.lines} lines, ${s.questions} questions, about $${s.dollars.toFixed(2)} so far (cap $${this.cfg.maxSessionDollars} a session, $${this.cfg.maxDailyDollars} a day; $${this.spentToday().toFixed(2)} today)${s.capped ? ", cap reached" : ""}.`, ...EPHEMERAL });
     }
   }
@@ -441,8 +482,9 @@ export class AngelBot {
            where she only listens, where it would only pull "top" towards "stop" in table talk */
         const terms = own && table.answers && !own.some(t => t.toLowerCase() === "stop") ? [...own.slice(0, 1), "stop", ...own.slice(1)].slice(0, 100) : own;
         const sessionsDir = table.legacy ? path.join(this.dataDir, "sessions") : path.join(this.dataDir, "sessions", table.name);
+        const showCosts = await this.costsPublic(channel.guild, table);
         const session = new Session({
-          cfg, voice, post, log,
+          cfg, voice, post, log, showCosts,
           stt: terms ? (wav, o = {}) => this.services.stt(wav, { ...o, terms }) : this.services.stt,
           tts: this.services.tts, gate: this.services.gate,
           hold: this.services.hold, readyLine: this.services.readyLine,
@@ -475,7 +517,7 @@ export class AngelBot {
           this.end(i.guildId, why === "deaf" ? "kept going deaf" : "voice connection lost");
         });
         voice.on("rejoined", e => { session.rejoined(e).catch(err => log.warn(`after rejoining: ${err.message}`)); });
-        this.sessions.set(i.guildId, { session, table, ownerId: owner?.id ?? null, voiceChannelId: channel.id, textChannel, home, thread, emptyTimer: null });
+        this.sessions.set(i.guildId, { session, table, guild: i.guild ?? null, ownerId: owner?.id ?? null, voiceChannelId: channel.id, textChannel, home, thread, emptyTimer: null });
         await session.start();
         const keptOn = table.keptBy ? `on ${table.keptBy}'s computer` : "on the GM's computer";
         /* where she only listens she says so once, in writing, and never speaks (d-10) */
@@ -527,9 +569,24 @@ export class AngelBot {
     /* a check or an answer still running when it ended can add a few cents afterwards: book those too */
     live.session.answering.finally(() => this.addSpend(live.session.spent() - s.dollars));
     this.log.info(`session ended (${why}): ${JSON.stringify(s)}`);
-    try { await (live.home ?? live.textChannel).send(summaryText(s)); } catch { /* channel gone */ }
+    /* the cost is posted only on the owner's own server (or where table.json says "costs": "channel"); anywhere else
+       the table sees the summary without it and the owner gets the cost by direct message (Rhea, 2026-11-28: "When
+       Angel is running on another server, and not mine, please don't post the cost at the end, instead please send
+       that to me in a DM"). A direct message that can't be sent leaves the cost in the log line above, never the channel. */
+    const guild = live.guild ?? live.textChannel?.guild ?? null;
+    /* decided at the join, so the summary never waits on Discord (review 13) */
+    const inPublic = live.session.showCosts !== false;
+    try { await (live.home ?? live.textChannel).send(summaryText(s, { cost: inPublic })); } catch { /* channel gone */ }
     /* the session's thread is closed once its summary is in, so it's plain the session is over */
     if (live.thread?.setArchived) await live.thread.setArchived(true).catch(() => {});
+    /* the direct message isn't waited for, so a slow one never holds up the next session's summary at shutdown
+       (review 13); `costNote` is there for the tests */
+    if (!inPublic) {
+      const where = [guild?.name, live.table?.name ? `table ${live.table.name}` : ""].filter(Boolean).join(", ");
+      this.costNote = this.sendOut({ to: "owner", text: `${where ? `${where}: ` : ""}${summaryText(s)}` })
+        .then(() => this.log.info("the session's cost was sent to the owner by direct message"))
+        .catch(e => this.log.warn(`couldn't send the owner the session's cost: ${e.message}`));
+    }
   }
 
   async endAll(why) {
@@ -582,7 +639,8 @@ export class AngelBot {
 
   async answerOne({ question, asker, reply, guild, table = null }) {
     if (this.dailyOver()) {
-      await reply.send(`I've reached today's spending cap ($${this.cfg.maxDailyDollars}), so I can't look that up until tomorrow.`).catch(() => {});
+      const amount = (await this.costsPublic(guild, table)) ? ` ($${this.cfg.maxDailyDollars})` : "";
+      await reply.send(`I've reached today's spending cap${amount}, so I can't look that up until tomorrow.`).catch(() => {});
       return;
     }
     await this.knowOwner(guild);
