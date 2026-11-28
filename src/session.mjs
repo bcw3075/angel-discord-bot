@@ -1324,8 +1324,11 @@ export class Session {
   }
 }
 
-export function summaryText(s) {
+/* `cost: false` leaves the money out: the line posted on a server that isn't the owner's, whose cost goes to the owner
+   by direct message instead (Rhea, 2026-11-28) */
+export function summaryText(s, { cost = true } = {}) {
   const money = n => `$${n.toFixed(2)}`;
+  if (!cost) return `Session over: ${s.minutes} min, ${s.lines} transcript lines${s.listenOnly ? "" : `, ${s.questions} question${s.questions === 1 ? "" : "s"}`}.`;
   if (s.listenOnly) return `Session over: ${s.minutes} min, ${s.lines} transcript lines. Cost about ${money(s.dollars)} (listening).`;
   return `Session over: ${s.minutes} min, ${s.lines} transcript lines, ${s.questions} question${s.questions === 1 ? "" : "s"}. ` +
     `Cost about ${money(s.dollars)} (Claude ${money(s.costs.claude)}, listening ${money(s.costs.stt)}, voice ${money(s.costs.tts)}).`;

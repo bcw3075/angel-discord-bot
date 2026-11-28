@@ -226,7 +226,7 @@ function interaction(w, sub, channel, { user = "p1", strings = {} } = {}) {
   return i;
 }
 
-function makeBot(tablesDir) {
+function makeBot(tablesDir, { owner = "gm", dmFails = false } = {}) {
   const dataDir = tmp(), answers = [], sttTerms = [];
   const services = {
     keytermCount: 1,
@@ -236,8 +236,11 @@ function makeBot(tablesDir) {
     answer: async q => { answers.push(q); return { say: `Answer: ${q.question}`, sources: [], dollars: 0.01 }; },
   };
   const bot = new AngelBot({ cfg: { ...DEFAULTS, ackPhrase: "", guildId: "999" }, log: quiet, services, dataDir, speakersFile: path.join(dataDir, "speakers.json"), tablesDir, VoiceLinkClass: FakeVoiceLink });
-  bot.client = { user: { id: "angel1" }, destroy() {} };
-  return { bot, answers, dataDir, sttTerms };
+  /* the bot's owner: by default the made-up servers' owner, so their costs are posted as before */
+  const dms = [];
+  const ownerUser = { id: owner, username: "owner", send: async m => { if (dmFails) throw new Error("Cannot send messages to this user"); dms.push(m.content ?? m); return { id: "dm1" }; } };
+  bot.client = { user: { id: "angel1" }, destroy() {}, application: { fetch: async () => { if (owner === null) throw new Error("offline"); return { owner: ownerUser }; } } };
+  return { bot, answers, dataDir, sttTerms, dms };
 }
 
 function twoTables() {
@@ -458,4 +461,83 @@ test("(tb-17) review 2: a channel in a category is still itself; an unknown chan
   makeTable(dir, "b-main", { server: "111", game: "pf2e", answers: true });
   fs.writeFileSync(path.join(pc, "speakers.json"), "{}");
   assert.equal(moveOldFiles({ tables: loadTables({ dir }), root: pc, guildId: "111", log: quiet }).target, "b-main");
+});
+
+test("(tb-19) the session's cost: posted on the bot owner's own server; on someone else's the table sees no cost and the owner gets it by direct message (Rhea, 2026-11-28)", async () => {
+  /* her own server (the server's owner is the bot's owner): as before, the cost in the summary, no direct message */
+  let root = twoTables(), w = world(), made = makeBot(root);
+  await made.bot.onInteraction(interaction(w, "join", w.general));
+  await made.bot.end("111", "test");
+  assert.match(w.sent.at(-1).content, /^Session over: .*Cost about \$/);
+  assert.equal(made.dms.length, 0, "nothing sent to the owner on her own server");
+
+  /* someone else's server: the summary without any money, and the whole line to the owner, naming where */
+  root = twoTables(); w = world(); made = makeBot(root, { owner: "rhea" });
+  await made.bot.onInteraction(interaction(w, "join", w.listen));
+  await made.bot.end("111", "test");
+  assert.equal(w.sent.at(-1).content, "Session over: 0 min, 0 transcript lines.");
+  assert.ok(!w.sent.some(m => /\$/.test(m.content)), "no cost anywhere in the channel");
+  assert.equal(made.dms.length, 1);
+  assert.match(made.dms[0], /^Our Server, table quiet: Session over: 0 min, 0 transcript lines\. Cost about \$0\.00 \(listening\)\.$/);
+
+  /* an answering table there: the questions are still counted for the table, the money only in the direct message */
+  root = twoTables(); w = world(); made = makeBot(root, { owner: "rhea" });
+  await made.bot.onInteraction(interaction(w, "join", w.general));
+  await made.bot.end("111", "test");
+  assert.equal(w.sent.at(-1).content, "Session over: 0 min, 0 transcript lines, 0 questions.");
+  assert.match(made.dms[0], /table main: Session over: .*Cost about \$0\.\d\d \(Claude/);
+});
+
+test("(tb-20) the costs setting wins either way; not knowing the bot's owner, or a direct message that fails, never puts the cost in the channel", async () => {
+  /* "costs": "owner" on her own server: sent to her, not posted */
+  let root = tmp(); makeTable(root, "mine", { server: "111", game: "pf2e", answers: true, costs: "owner" });
+  let w = world(), made = makeBot(root);
+  await made.bot.onInteraction(interaction(w, "join", w.general));
+  await made.bot.end("111", "test");
+  assert.doesNotMatch(w.sent.at(-1).content, /\$/);
+  assert.equal(made.dms.length, 1);
+  /* "costs": "channel" on someone else's: posted, as asked */
+  root = tmp(); makeTable(root, "theirs", { server: "111", game: "Another Game", costs: "Channel" });
+  w = world(); made = makeBot(root, { owner: "rhea" });
+  await made.bot.onInteraction(interaction(w, "join", w.general));
+  await made.bot.end("111", "test");
+  assert.match(w.sent.at(-1).content, /Cost about \$/);
+  assert.equal(made.dms.length, 0);
+  /* the owner can't be looked up: treated as someone else's server, and the direct message fails too: nothing posted */
+  root = twoTables(); w = world();
+  const warned = [];
+  made = makeBot(root, { owner: null });
+  made.bot.log = { ...quiet, warn: t => warned.push(t) };
+  await made.bot.onInteraction(interaction(w, "join", w.listen));
+  await made.bot.end("111", "test");
+  assert.equal(w.sent.at(-1).content, "Session over: 0 min, 0 transcript lines.");
+  assert.ok(warned.some(t => /couldn't send the owner the session's cost/.test(t)), warned.join("\n"));
+  /* the owner known but the direct message refused: the same */
+  root = twoTables(); w = world(); made = makeBot(root, { owner: "rhea", dmFails: true });
+  await made.bot.onInteraction(interaction(w, "join", w.listen));
+  await made.bot.end("111", "test");
+  assert.ok(!w.sent.some(m => /\$/.test(m.content)));
+  /* a costs value she can't read: the safe way, the owner, and it says so */
+  const problems = [];
+  root = tmp(); makeTable(root, "odd", { server: "111", game: "pf2e", costs: "everyone" });
+  assert.equal(readTable(path.join(root, "odd"), problems).costs, "owner");
+  assert.match(problems[0], /"costs" should be "channel" or "owner"/);
+  assert.equal(readTable(path.join(twoTables(), "main"), []).costs, null, "left out: decided by whose server it is");
+});
+
+test("(tb-21) /angel status on someone else's server shows the money only to the bot's owner", async () => {
+  const root = twoTables(), w = world(), { bot } = makeBot(root, { owner: "rhea" });
+  await bot.onInteraction(interaction(w, "join", w.general));
+  const theirs = interaction(w, "status", w.general, { user: "p1" });
+  await bot.onInteraction(theirs);
+  assert.match(theirs.replies[0].content, /^Listening in <#vc1> for 0 min: 0 lines, 0 questions\.$/);
+  const hers = interaction(w, "status", w.general, { user: "rhea" });
+  await bot.onInteraction(hers);
+  assert.match(hers.replies[0].content, /about \$0\.\d\d so far/);
+  /* on her own server anyone sees it, as before */
+  const w2 = world(), mine = makeBot(twoTables());
+  await mine.bot.onInteraction(interaction(w2, "join", w2.general));
+  const st = interaction(w2, "status", w2.general, { user: "p1" });
+  await mine.bot.onInteraction(st);
+  assert.match(st.replies[0].content, /about \$/);
 });

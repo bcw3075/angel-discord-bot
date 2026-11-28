@@ -16,6 +16,9 @@ Nothing in one folder ever reaches another table. Copy `example-table` and chang
   and never speaks). Left out or unreadable means `false`.
 - `transcriptKeptBy` (optional): whose computer the transcript is kept on, as the join notice says it
   (`"Sam"` gives "on Sam's computer"). Left out: "the GM's computer".
+- `costs` (optional): where the session's cost goes when it ends. `"channel"` posts it with the summary;
+  `"owner"` sends it to the bot's owner by direct message and leaves it out of what the table sees. Left out: posted
+  on a server the bot's owner owns, sent by direct message anywhere else.
 
 Beside it, all optional: `house-rules.md`, `keyterms.txt` and `speakers.json`, as described in the main README.
 Each session's transcript goes in `data\sessions\<folder name>\`.
