@@ -467,14 +467,14 @@ test("(tb-19) the session's cost: posted on the bot owner's own server; on someo
   /* her own server (the server's owner is the bot's owner): as before, the cost in the summary, no direct message */
   let root = twoTables(), w = world(), made = makeBot(root);
   await made.bot.onInteraction(interaction(w, "join", w.general));
-  await made.bot.end("111", "test");
+  await made.bot.end("111", "test"); await made.bot.costNote;
   assert.match(w.sent.at(-1).content, /^Session over: .*Cost about \$/);
   assert.equal(made.dms.length, 0, "nothing sent to the owner on her own server");
 
   /* someone else's server: the summary without any money, and the whole line to the owner, naming where */
   root = twoTables(); w = world(); made = makeBot(root, { owner: "rhea" });
   await made.bot.onInteraction(interaction(w, "join", w.listen));
-  await made.bot.end("111", "test");
+  await made.bot.end("111", "test"); await made.bot.costNote;
   assert.equal(w.sent.at(-1).content, "Session over: 0 min, 0 transcript lines.");
   assert.ok(!w.sent.some(m => /\$/.test(m.content)), "no cost anywhere in the channel");
   assert.equal(made.dms.length, 1);
@@ -483,7 +483,7 @@ test("(tb-19) the session's cost: posted on the bot owner's own server; on someo
   /* an answering table there: the questions are still counted for the table, the money only in the direct message */
   root = twoTables(); w = world(); made = makeBot(root, { owner: "rhea" });
   await made.bot.onInteraction(interaction(w, "join", w.general));
-  await made.bot.end("111", "test");
+  await made.bot.end("111", "test"); await made.bot.costNote;
   assert.equal(w.sent.at(-1).content, "Session over: 0 min, 0 transcript lines, 0 questions.");
   assert.match(made.dms[0], /table main: Session over: .*Cost about \$0\.\d\d \(Claude/);
 });
@@ -493,14 +493,14 @@ test("(tb-20) the costs setting wins either way; not knowing the bot's owner, or
   let root = tmp(); makeTable(root, "mine", { server: "111", game: "pf2e", answers: true, costs: "owner" });
   let w = world(), made = makeBot(root);
   await made.bot.onInteraction(interaction(w, "join", w.general));
-  await made.bot.end("111", "test");
+  await made.bot.end("111", "test"); await made.bot.costNote;
   assert.doesNotMatch(w.sent.at(-1).content, /\$/);
   assert.equal(made.dms.length, 1);
   /* "costs": "channel" on someone else's: posted, as asked */
   root = tmp(); makeTable(root, "theirs", { server: "111", game: "Another Game", costs: "Channel" });
   w = world(); made = makeBot(root, { owner: "rhea" });
   await made.bot.onInteraction(interaction(w, "join", w.general));
-  await made.bot.end("111", "test");
+  await made.bot.end("111", "test"); await made.bot.costNote;
   assert.match(w.sent.at(-1).content, /Cost about \$/);
   assert.equal(made.dms.length, 0);
   /* the owner can't be looked up: treated as someone else's server, and the direct message fails too: nothing posted */
@@ -509,13 +509,13 @@ test("(tb-20) the costs setting wins either way; not knowing the bot's owner, or
   made = makeBot(root, { owner: null });
   made.bot.log = { ...quiet, warn: t => warned.push(t) };
   await made.bot.onInteraction(interaction(w, "join", w.listen));
-  await made.bot.end("111", "test");
+  await made.bot.end("111", "test"); await made.bot.costNote;
   assert.equal(w.sent.at(-1).content, "Session over: 0 min, 0 transcript lines.");
   assert.ok(warned.some(t => /couldn't send the owner the session's cost/.test(t)), warned.join("\n"));
   /* the owner known but the direct message refused: the same */
   root = twoTables(); w = world(); made = makeBot(root, { owner: "rhea", dmFails: true });
   await made.bot.onInteraction(interaction(w, "join", w.listen));
-  await made.bot.end("111", "test");
+  await made.bot.end("111", "test"); await made.bot.costNote;
   assert.ok(!w.sent.some(m => /\$/.test(m.content)));
   /* a costs value she can't read: the safe way, the owner, and it says so */
   const problems = [];
@@ -540,4 +540,47 @@ test("(tb-21) /angel status on someone else's server shows the money only to the
   const st = interaction(w2, "status", w2.general, { user: "p1" });
   await mine.bot.onInteraction(st);
   assert.match(st.replies[0].content, /about \$/);
+});
+
+test("(tb-23) review 13: the legacy table posts money only where guildId names its server; a team's owner by its ownerId; the cap line has no figure elsewhere; a slow or failed owner lookup hides the money", async () => {
+  const { bot } = makeBot(tmp(), { owner: "rhea" });
+  const theirs = { id: "222", ownerId: "gm" };
+  /* the legacy table with guildId set is the owner's own; with none it serves every server, so it is decided by owner */
+  assert.equal(await bot.costsPublic(theirs, { legacy: true, server: "222" }), true);
+  assert.equal(await bot.costsPublic(theirs, { legacy: true, server: "" }), false);
+  assert.equal(await bot.costsPublic({ id: "333", ownerId: "rhea" }, { legacy: true, server: "" }), true);
+  /* a team-owned app whose owner member is missing: the team's ownerId, never the team's own id */
+  const team = makeBot(tmp()).bot;
+  team.client.application = { fetch: async () => ({ owner: { id: "team1", ownerId: "rhea", members: new Map(), owner: null } }) };
+  assert.equal(await team.botOwnerId(), "rhea");
+  team.client.users = { fetch: async id => ({ id, username: "rhea", send: async () => ({}) }) };
+  assert.match((await team.sendOut({ to: "owner", text: "hi" })).where, /direct message to rhea/);
+  /* the owner looked up once and kept */
+  let asked = 0;
+  const once = makeBot(tmp()).bot;
+  once.client.application = { fetch: async () => { asked++; return { owner: { id: "gm", send: async () => ({}) } }; } };
+  await once.costsPublic(theirs, {}); await once.costsPublic(theirs, {}); await once.sendOut({ to: "owner", text: "x" });
+  assert.equal(asked, 1);
+  /* a lookup that hangs counts as someone else's server within about 1.5 s */
+  const slow = makeBot(tmp()).bot;
+  slow.client.application = { fetch: () => new Promise(() => {}) };
+  const t0 = Date.now();
+  assert.equal(await slow.costsPublic(theirs, {}), false);
+  assert.ok(Date.now() - t0 < 2500);
+  /* the cap line: the figure only where money is shown */
+  const capped = (showCosts, spent) => {
+    const s = new Session({ cfg: { ...DEFAULTS, maxSessionDollars: 5 }, voice: new FakeVoiceLink(), post: { send: async () => ({}) }, log: quiet, stt: async () => ({ text: "" }), tts: async () => [], gate: async () => ({}), answer: async () => ({}), speakerOf: () => ({ name: "Sam" }), showCosts });
+    s.costs.claude = spent;
+    return s.capMessage();
+  };
+  assert.match(capped(true, 6), /session's spending cap \(\$5\)/);
+  assert.doesNotMatch(capped(false, 6), /\$/);
+  assert.doesNotMatch(capped(false, 0), /\$/, "the daily one too");
+  /* /angel status there when the owner can't be found: answered, without money */
+  const root = twoTables(), w = world(), lost = makeBot(root, { owner: null });
+  await lost.bot.onInteraction(interaction(w, "join", w.general));
+  assert.equal(lost.bot.sessions.get("111").session.showCosts, false, "a session on a server not known to be hers shows no money");
+  const st = interaction(w, "status", w.general, { user: "p1" });
+  await lost.bot.onInteraction(st);
+  assert.doesNotMatch(st.replies[0].content, /\$/);
 });

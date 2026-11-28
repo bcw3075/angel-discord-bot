@@ -65,7 +65,8 @@ function makeBot(extra = {}) {
     answer: async q => { answers.push(q); return { say: `Answer: ${q.question}`, sources: [], dollars: 0.01 }; },
   };
   const bot = new AngelBot({ cfg: { ...DEFAULTS, ackPhrase: "", ...extra }, log: quiet, services, dataDir: dir, speakersFile: path.join(dir, "speakers.json"), VoiceLinkClass: FakeVoiceLink });
-  bot.client = { user: { id: "angel1" }, destroy() {} };
+  /* the bot is owned by the made-up server's owner, so its costs are posted as before (2026-11-28) */
+  bot.client = { user: { id: "angel1" }, destroy() {}, application: { fetch: async () => ({ owner: { id: "gm", send: async () => ({}) } }) } };
   return { bot, answers, dir };
 }
 
